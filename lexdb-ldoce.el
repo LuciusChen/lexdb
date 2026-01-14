@@ -219,6 +219,16 @@ Only returns relations where sense_id IS NULL."
                    (push (cons 'ldoce/audio-uk audio) metadata)))
             ('us (unless (assq 'ldoce/audio-us metadata)
                    (push (cons 'ldoce/audio-us audio) metadata))))))
+      ;; Distribute subsenses to individual sense metadata
+      (let ((subsenses-data (alist-get 'ldoce/subsenses metadata)))
+        (when subsenses-data
+          (dolist (sense senses)
+            (let* ((sense-id (lexdb-sense-id sense))
+                   (sense-subsenses (alist-get (intern (number-to-string sense-id)) subsenses-data)))
+              (when sense-subsenses
+                (setf (lexdb-sense-metadata sense)
+                      (cons (cons 'ldoce/subsenses sense-subsenses)
+                            (lexdb-sense-metadata sense))))))))
       (lexdb-entry-create
        :id id :headword word
        :headword-display (when (lexdb-ldoce--non-empty-string-p hyph) hyph)
@@ -228,11 +238,19 @@ Only returns relations where sense_id IS NULL."
 ;;;; Adapter Functions
 ;;;; ============================================================
 
+(defun lexdb-ldoce--normalize-apostrophe (str)
+  "Normalize various apostrophe characters in STR to standard ASCII apostrophe."
+  (when str
+    ;; Replace curly/smart apostrophes with straight apostrophe
+    (replace-regexp-in-string "[''ʼ′`]" "'" str)))
+
 (defun lexdb-ldoce--lookup (word)
   "Look up WORD in LDOCE database.
 First tries exact match, then tries fuzzy match (LIKE) as fallback."
   (let* ((db (lexdb-ldoce--ensure-db))
-         (word-lower (downcase word))
+         ;; Normalize apostrophes before searching
+         (word-normalized (lexdb-ldoce--normalize-apostrophe word))
+         (word-lower (downcase word-normalized))
          ;; First try exact match
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display

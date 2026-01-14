@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS senses (
     sense_number TEXT,                  -- Sense number (1, 2, 2a, etc.)
     signpost TEXT,                      -- Guide word (e.g., "MOVE FROM A FIXED POINT")
     definition TEXT NOT NULL,
+    definition_zh TEXT,                 -- Chinese definition (for bilingual dictionaries)
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
 );
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS examples (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sense_id INTEGER NOT NULL,
     text TEXT NOT NULL,
+    text_zh TEXT,                       -- Chinese translation (for bilingual dictionaries)
     audio_path TEXT,
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
@@ -206,6 +208,32 @@ def clean_text(text):
     if not text:
         return ""
     return re.sub(r'\s+', ' ', text).strip()
+
+
+def extract_highlighted_text(element):
+    """Extract text with highlight markers for nodeword and colloinexa.
+
+    Returns text with special markers:
+    - <<hw>>word<</hw>> for nodeword (highlighted word in example)
+    - <<co>>phrase<</co>> for colloinexa (collocation highlight)
+    """
+    if not element:
+        return ""
+
+    # Make a copy to avoid modifying original
+    elem_copy = BeautifulSoup(str(element), 'html.parser')
+
+    # Replace nodeword with markers
+    for nodeword in elem_copy.find_all(class_='nodeword'):
+        text = nodeword.get_text()
+        nodeword.replace_with(f'<<hw>>{text}<</hw>>')
+
+    # Replace colloinexa with markers
+    for collo in elem_copy.find_all(class_='colloinexa'):
+        text = collo.get_text()
+        collo.replace_with(f'<<co>>{text}<</co>>')
+
+    return clean_text(elem_copy.get_text())
 
 
 def parse_hyphenation(element):
@@ -480,7 +508,12 @@ class LDOCEParser:
                 entry['attributes']['register'] = reg_text
 
         # === Senses/Definitions ===
+        # Only get senses that are NOT inside phrasal verb entries
         for idx, sense in enumerate(soup.find_all(class_='sense')):
+            # Skip senses inside phrasal verb entries
+            if sense.find_parent(class_='phrvbentry'):
+                continue
+
             sense_data = {
                 'number': '',
                 'signpost': '',         # Guide word (e.g., "MOVE FROM A FIXED POINT")
@@ -489,11 +522,22 @@ class LDOCEParser:
                 'labels': [],       # Sense-level labels
                 'cross_refs': [],
                 'gram_examples': [],  # Grammar pattern examples
+                'subsenses': [],    # Sub-senses (a, b, c)
             }
 
-            sensenum = sense.find(class_='sensenum')
+            # Get the direct sensenum (not from subsense)
+            sensenum = sense.find(class_='sensenum', recursive=False)
+            if not sensenum:
+                # Try finding first sensenum that's not inside a subsense
+                for sn in sense.find_all(class_='sensenum'):
+                    if not sn.find_parent(class_='subsense'):
+                        sensenum = sn
+                        break
             if sensenum:
-                sense_data['number'] = clean_text(sensenum.get_text())
+                num_text = clean_text(sensenum.get_text())
+                # Only use if it's a main sense number (digit), not a/b/c
+                if num_text and (num_text.isdigit() or not num_text.rstrip(')').isalpha()):
+                    sense_data['number'] = num_text
 
             # Signpost (guide word in uppercase)
             signpost = sense.find(class_='signpost')
@@ -508,19 +552,69 @@ class LDOCEParser:
                     'value': clean_text(gram.get_text())
                 })
 
-            # Definition
-            defi = sense.find(class_='def')
-            if defi:
-                sense_data['definition'] = clean_text(defi.get_text())
+            # Check for subsenses first
+            subsenses = sense.find_all(class_='subsense')
+            if subsenses:
+                # Has subsenses - parse each one
+                # First get any lexunit that applies to all subsenses
+                lexunit = sense.find(class_='lexunit', recursive=False)
+                lexunit_text = clean_text(lexunit.get_text()) if lexunit else ''
+                if lexunit_text:
+                    sense_data['definition'] = lexunit_text
 
-            # Lexunit prefix
-            lexunit = sense.find(class_='lexunit')
-            if lexunit:
-                prefix = clean_text(lexunit.get_text())
-                if prefix and sense_data['definition']:
-                    sense_data['definition'] = prefix + ': ' + sense_data['definition']
-                elif prefix:
-                    sense_data['definition'] = prefix
+                for subsense in subsenses:
+                    sub_data = {
+                        'number': '',
+                        'definition': '',
+                        'labels': [],
+                        'examples': []
+                    }
+
+                    # Subsense number (a, b, c)
+                    sub_num = subsense.find(class_='sensenum')
+                    if sub_num:
+                        sub_data['number'] = clean_text(sub_num.get_text())
+
+                    # Subsense definition
+                    sub_def = subsense.find(class_='def')
+                    if sub_def:
+                        sub_data['definition'] = clean_text(sub_def.get_text())
+
+                    # Subsense labels
+                    for reg in subsense.find_all(class_='registerlab'):
+                        reg_text = clean_text(reg.get_text())
+                        if reg_text:
+                            sub_data['labels'].append({'type': 'register', 'value': reg_text})
+
+                    # Subsense examples
+                    for ex in subsense.find_all(class_='example'):
+                        ex_text = clean_text(ex.get_text())
+                        if ex_text:
+                            audio_link = ex.find('a', href=lambda h: h and h.startswith('sound://'))
+                            audio_path = ''
+                            if audio_link:
+                                audio_path = audio_link.get('href', '').replace('sound://', '')
+                            sub_data['examples'].append({
+                                'text': ex_text,
+                                'audio_path': audio_path
+                            })
+
+                    if sub_data['definition']:
+                        sense_data['subsenses'].append(sub_data)
+            else:
+                # No subsenses - regular definition parsing
+                defi = sense.find(class_='def')
+                if defi:
+                    sense_data['definition'] = clean_text(defi.get_text())
+
+                # Lexunit prefix
+                lexunit = sense.find(class_='lexunit')
+                if lexunit:
+                    prefix = clean_text(lexunit.get_text())
+                    if prefix and sense_data['definition']:
+                        sense_data['definition'] = prefix + ': ' + sense_data['definition']
+                    elif prefix:
+                        sense_data['definition'] = prefix
 
             # Grammar examples (GramExa with PROPFORM/PROPFORMPREP)
             for gramexa in sense.find_all(class_='gramexa'):
@@ -537,7 +631,7 @@ class LDOCEParser:
                 # Get examples within this GramExa
                 gram_exs = []
                 for ex in gramexa.find_all(class_='example'):
-                    ex_text = clean_text(ex.get_text())
+                    ex_text = extract_highlighted_text(ex)
                     if ex_text:
                         audio_link = ex.find('a', href=lambda h: h and h.startswith('sound://'))
                         audio_path = ''
@@ -560,7 +654,7 @@ class LDOCEParser:
                 # Skip if inside a GramExa
                 if example.find_parent(class_='gramexa'):
                     continue
-                ex_text = clean_text(example.get_text())
+                ex_text = extract_highlighted_text(example)
                 audio_link = example.find('a', href=lambda h: h and h.startswith('sound://'))
                 audio_path = ''
                 if audio_link:
@@ -579,7 +673,7 @@ class LDOCEParser:
                 parent_gramexa = example.find_parent(class_='gramexa')
                 if parent_gramexa:
                     continue
-                ex_text = clean_text(example.get_text())
+                ex_text = extract_highlighted_text(example)
                 # Check if already added
                 if ex_text and not any(e['text'] == ex_text for e in sense_data['examples']):
                     audio_link = example.find('a', href=lambda h: h and h.startswith('sound://'))
@@ -618,17 +712,94 @@ class LDOCEParser:
                 sense_data['sort_order'] = idx
                 entry['senses'].append(sense_data)
 
-        # === Phrases ===
-        for phrase in soup.find_all(class_='phrase'):
-            phrase_text = phrase.find(class_='phrasetext')
-            if phrase_text:
-                text = clean_text(phrase_text.get_text())
-                if text:
-                    entry['relations'].append({
-                        'type': 'phrase',
-                        'target': text,
-                        'link': None
-                    })
+        # === Phrasal Verbs ===
+        phrasal_verbs = []
+        for phrv_entry in soup.find_all(class_='phrvbentry'):
+            phrv_data = {
+                'headword': '',
+                'pos': 'phrasal verb',
+                'senses': []
+            }
+
+            # Phrasal verb headword
+            phrv_hwd = phrv_entry.find(class_='phrvbhwd')
+            if phrv_hwd:
+                phrv_data['headword'] = clean_text(phrv_hwd.get_text())
+
+            # Parse senses within this phrasal verb
+            for sense_idx, sense in enumerate(phrv_entry.find_all(class_='sense')):
+                phrv_sense = {
+                    'number': '',
+                    'lexunit': '',  # Grammar form like "call (somebody) back"
+                    'definition': '',
+                    'labels': [],
+                    'examples': []
+                }
+
+                # Sense number
+                sensenum = sense.find(class_='sensenum')
+                if sensenum:
+                    phrv_sense['number'] = clean_text(sensenum.get_text())
+
+                # Lexical unit (grammar form)
+                lexunit = sense.find(class_='lexunit')
+                if lexunit:
+                    phrv_sense['lexunit'] = clean_text(lexunit.get_text())
+
+                # Definition
+                def_elem = sense.find(class_='def')
+                if def_elem:
+                    phrv_sense['definition'] = clean_text(def_elem.get_text())
+
+                # Labels (register, geo, etc.)
+                for geo in sense.find_all(class_='geo'):
+                    geo_text = clean_text(geo.get_text())
+                    if geo_text:
+                        phrv_sense['labels'].append({'type': 'geo', 'value': geo_text})
+
+                for reg in sense.find_all(class_='registerlab'):
+                    reg_text = clean_text(reg.get_text())
+                    if reg_text:
+                        phrv_sense['labels'].append({'type': 'register', 'value': reg_text})
+
+                # Synonym
+                syn = sense.find(class_='syn')
+                if syn:
+                    synopp = syn.find(class_='synopp')
+                    if synopp:
+                        syn_word = clean_text(syn.get_text().replace(synopp.get_text(), ''))
+                        if syn_word:
+                            phrv_sense['labels'].append({'type': 'syn', 'value': syn_word})
+
+                # Examples
+                for ex in sense.find_all(class_='example'):
+                    ex_text = clean_text(ex.get_text())
+                    if ex_text:
+                        phrv_sense['examples'].append(ex_text)
+
+                # Grammar examples (propformprep patterns)
+                for gramexa in sense.find_all(class_='gramexa'):
+                    propform = gramexa.find(class_='propformprep')
+                    if propform:
+                        pattern = clean_text(propform.get_text())
+                        if pattern:
+                            phrv_sense['lexunit'] = pattern  # Use as lexunit if present
+                    for ex in gramexa.find_all(class_='example'):
+                        ex_text = clean_text(ex.get_text())
+                        if ex_text:
+                            phrv_sense['examples'].append(ex_text)
+
+                if phrv_sense['definition']:
+                    phrv_data['senses'].append(phrv_sense)
+
+            if phrv_data['headword'] and phrv_data['senses']:
+                phrasal_verbs.append(phrv_data)
+
+        if phrasal_verbs:
+            entry['attributes']['phrasal-verbs'] = phrasal_verbs
+
+        # NOTE: Phrases are parsed from popup sections, not directly from entry
+        # (All phrases are inside popup containers in LDOCE)
 
         # === Cross references (only with valid links) ===
         cross_refs_dict = {}  # text -> link
@@ -669,6 +840,7 @@ class LDOCEParser:
             })
 
         # === Collocations ===
+        # Method 1: Try collobox (traditional format)
         collobox = soup.find(class_='collobox')
         if collobox:
             current_category = ''
@@ -708,7 +880,51 @@ class LDOCEParser:
                         entry['collocations'].append(coll_data)
                         coll_order += 1
 
-        # === Synonyms ===
+        # Method 2: Try popup format (at-link with popcollo header)
+        if not entry['collocations']:
+            coll_order = 0
+            for popup in soup.find_all(class_='at-link'):
+                header = popup.find(class_='popcollo')
+                if header:
+                    # Get category from header text
+                    header_text = clean_text(header.get_text())
+                    current_category = ''
+                    if 'FROM THE ENTRY' in header_text:
+                        current_category = 'FROM THE ENTRY'
+                    elif 'FROM OTHER' in header_text:
+                        current_category = 'FROM OTHER ENTRIES'
+
+                    for collocate in popup.find_all(class_='collocate'):
+                        coll_data = {
+                            'category': current_category,
+                            'text': '',
+                            'gloss': '',
+                            'examples': [],
+                            'sort_order': coll_order
+                        }
+
+                        # Try both 'colloc' and 'colloc collo' classes
+                        colloc = collocate.find(class_='colloc')
+                        if colloc:
+                            coll_data['text'] = clean_text(colloc.get_text())
+
+                        collgloss = collocate.find(class_='collgloss')
+                        if collgloss:
+                            coll_data['gloss'] = clean_text(collgloss.get_text())
+
+                        for ex_idx, example in enumerate(collocate.find_all(class_='example')):
+                            ex_text = clean_text(example.get_text())
+                            if ex_text:
+                                coll_data['examples'].append({
+                                    'text': ex_text,
+                                    'sort_order': ex_idx
+                                })
+
+                        if coll_data['text']:
+                            entry['collocations'].append(coll_data)
+                            coll_order += 1
+
+        # === Synonyms (thesobox format) ===
         thesobox = soup.find(class_='thesobox')
         if thesobox:
             for relword in thesobox.find_all(class_='relword'):
@@ -719,12 +935,348 @@ class LDOCEParser:
                         'target': word_text
                     })
 
+        # === Verb Table ===
+        verbtable = soup.find(class_='verbtable')
+        if verbtable:
+            verb_forms = []
+            current_tense = ''
+            for row in verbtable.find_all('tr'):
+                cols = row.find_all('td')
+                if cols:
+                    tense_text = clean_text(cols[0].get_text()) if len(cols) > 0 else ''
+                    if tense_text and cols[0].get('class') and 'col1' in cols[0].get('class', []):
+                        current_tense = tense_text
+                    elif tense_text and not current_tense:
+                        current_tense = tense_text
+
+                    subject = clean_text(cols[1].get_text()) if len(cols) > 1 else ''
+                    form = clean_text(cols[2].get_text()) if len(cols) > 2 else ''
+
+                    if form:
+                        verb_forms.append({
+                            'tense': current_tense,
+                            'subject': subject,
+                            'form': form
+                        })
+            if verb_forms:
+                entry['attributes']['verb_table'] = verb_forms
+
+        # === Parse all popups in one pass ===
+        corpus_examples = []
+        thesaurus = []
+        word_family = []
+        entry_menu = []
+        popup_phrases = []  # Phrases from popup (additional to inline)
+        popup_collocations = []  # Additional collocations from popup
+
+        for popup in soup.find_all(class_='at-link'):
+            # Get all headers in this popup
+            headers = popup.find_all(class_='popheader')
+
+            for header in headers:
+                header_text = clean_text(header.get_text())
+                header_classes = header.get('class', [])
+
+                # Determine popup type from class or header text
+                popup_type = None
+                if 'pope_menu' in header_classes:
+                    popup_type = 'entry_menu'
+                elif 'popexa' in header_classes:
+                    popup_type = 'examples'
+                elif 'popthes' in header_classes:
+                    if 'WORD SETS' in header_text.upper():
+                        popup_type = 'word_sets'
+                    else:
+                        popup_type = 'thesaurus'
+                elif 'popcollo' in header_classes:
+                    popup_type = 'collocations'
+                elif 'popphrase' in header_classes:
+                    popup_type = 'phrases'
+                elif 'popwf' in header_classes:
+                    popup_type = 'word_family'
+                elif 'popetym' in header_classes:
+                    popup_type = 'origin'  # Already handled elsewhere
+                elif 'WORD SETS' in header_text.upper():
+                    popup_type = 'word_sets'
+
+                if not popup_type:
+                    continue
+
+                # Get the container - usually the parent entry span
+                container = header.find_parent(class_='entry') or popup
+
+                # === ENTRY MENU ===
+                if popup_type == 'entry_menu':
+                    menu_items = []
+                    for item in container.find_all(class_='menuitem'):
+                        num = item.find(class_='sensenum')
+                        signpost = item.find(class_='signpost')
+                        lexunit = item.find(class_='lexunit')
+                        menu_items.append({
+                            'number': clean_text(num.get_text()) if num else '',
+                            'label': clean_text(signpost.get_text()) if signpost else (clean_text(lexunit.get_text()) if lexunit else '')
+                        })
+                    if menu_items:
+                        entry_menu.append({
+                            'header': header_text,
+                            'items': menu_items
+                        })
+
+                # === EXAMPLES ===
+                elif popup_type == 'examples':
+                    exas = container.find(class_='exas')
+                    if exas:
+                        examples_list = []
+                        for li in exas.find_all('li'):
+                            ex_text = extract_highlighted_text(li).lstrip('·').strip()
+                            if ex_text:
+                                examples_list.append(ex_text)
+                        if examples_list:
+                            corpus_examples.append({
+                                'header': header_text,
+                                'examples': examples_list
+                            })
+
+                # === THESAURUS ===
+                elif popup_type == 'thesaurus':
+                    section_containers = container.find_all(class_='section')
+                    for sec_container in section_containers:
+                        sec_heading = sec_container.find(class_='secheading')
+                        sec_text = clean_text(sec_heading.get_text()) if sec_heading else ''
+
+                        # Parse each exponent (thesaurus entry)
+                        exponents = []
+                        for exp in sec_container.find_all(class_='exponent'):
+                            exp_data = {}
+
+                            # Get the headword (exp display)
+                            exp_display = exp.find(class_='exp')
+                            if exp_display:
+                                exp_data['word'] = clean_text(exp_display.get_text())
+
+                            # Get definition
+                            content = exp.find(class_='content')
+                            if content:
+                                def_elem = content.find(class_='def')
+                                if def_elem:
+                                    exp_data['definition'] = clean_text(def_elem.get_text())
+
+                                # Get register/geo labels
+                                labels = []
+                                for geo in content.find_all(class_='geo'):
+                                    labels.append(clean_text(geo.get_text()))
+                                for reg in content.find_all(class_='registerlab'):
+                                    labels.append(clean_text(reg.get_text()))
+                                if labels:
+                                    exp_data['labels'] = labels
+
+                                # Get examples
+                                examples = []
+                                for ex in content.find_all(class_='example'):
+                                    ex_text = clean_text(ex.get_text()).lstrip('·').strip()
+                                    if ex_text:
+                                        examples.append(ex_text)
+                                if examples:
+                                    exp_data['examples'] = examples
+
+                            if exp_data.get('word'):
+                                exponents.append(exp_data)
+
+                        if sec_text or exponents:
+                            thesaurus.append({
+                                'header': header_text,
+                                'section': sec_text,
+                                'items': exponents
+                            })
+
+                    # If no sections, try direct exponents
+                    if not thesaurus:
+                        exponents = []
+                        for exp in container.find_all(class_='exponent'):
+                            exp_data = {}
+                            exp_display = exp.find(class_='exp')
+                            if exp_display:
+                                exp_data['word'] = clean_text(exp_display.get_text())
+
+                            content = exp.find(class_='content')
+                            if content:
+                                def_elem = content.find(class_='def')
+                                if def_elem:
+                                    exp_data['definition'] = clean_text(def_elem.get_text())
+
+                                examples = []
+                                for ex in content.find_all(class_='example'):
+                                    ex_text = clean_text(ex.get_text()).lstrip('·').strip()
+                                    if ex_text:
+                                        examples.append(ex_text)
+                                if examples:
+                                    exp_data['examples'] = examples
+
+                            if exp_data.get('word'):
+                                exponents.append(exp_data)
+
+                        if exponents:
+                            thesaurus.append({
+                                'header': header_text,
+                                'section': '',
+                                'items': exponents
+                            })
+
+                # === WORD SETS (part of thesaurus) ===
+                elif popup_type == 'word_sets':
+                    # Word sets have categories with expandable content
+                    for category in container.find_all(class_='category'):
+                        ws_head = category.find(class_='ws-head')
+                        if ws_head:
+                            cat_name = clean_text(ws_head.get_text())
+
+                            # Get words from content
+                            content = category.find(class_='content')
+                            words = []
+                            if content:
+                                for wswd in content.find_all(class_='wswd'):
+                                    word_text = clean_text(wswd.get_text())
+                                    # Parse word and pos
+                                    pos_elem = wswd.find(class_='pos')
+                                    pos = clean_text(pos_elem.get_text()) if pos_elem else ''
+                                    if pos:
+                                        word_text = word_text.replace(pos, '').strip().rstrip(',')
+                                    words.append({
+                                        'word': word_text,
+                                        'pos': pos
+                                    })
+
+                            if cat_name:
+                                thesaurus.append({
+                                    'header': header_text,
+                                    'section': cat_name,
+                                    'items': words
+                                })
+
+                # === COLLOCATIONS (popup) ===
+                elif popup_type == 'collocations':
+                    sections = container.find_all(class_='secheading')
+                    current_section = ''
+
+                    # Get all collocates with their sections
+                    colls_in_popup = []
+                    for sec in sections:
+                        current_section = clean_text(sec.get_text())
+
+                    for collocate in container.find_all(class_='collocate'):
+                        coll_text_elem = collocate.find(class_='colloc')
+                        if coll_text_elem:
+                            coll_text = clean_text(coll_text_elem.get_text())
+                            examples = []
+                            for ex in collocate.find_all(class_='example'):
+                                ex_text = clean_text(ex.get_text())
+                                if ex_text:
+                                    examples.append(ex_text)
+                            if coll_text:
+                                colls_in_popup.append({
+                                    'text': coll_text,
+                                    'examples': examples
+                                })
+
+                    if colls_in_popup:
+                        popup_collocations.append({
+                            'header': header_text,
+                            'items': colls_in_popup
+                        })
+
+                # === PHRASES (popup) ===
+                elif popup_type == 'phrases':
+                    phrases_in_popup = []
+                    for phrase in container.find_all(class_='phrase'):
+                        phrase_text = phrase.find(class_='phrasetext')
+                        if phrase_text:
+                            text = clean_text(phrase_text.get_text()).lstrip('►').strip()
+                        else:
+                            # Try expandable span
+                            exp = phrase.find(class_='expandable')
+                            if exp:
+                                ptext = exp.find(class_='phrasetext')
+                                text = clean_text(ptext.get_text()).lstrip('►').strip() if ptext else ''
+                            else:
+                                text = clean_text(phrase.get_text()).lstrip('►').strip()
+
+                        if text:
+                            # Get examples from content div (expandable items)
+                            examples = []
+                            content_div = phrase.find(class_='content')
+                            if content_div:
+                                # Examples in exas list
+                                exas = content_div.find(class_='exas')
+                                if exas:
+                                    for li in exas.find_all('li'):
+                                        ex_text = extract_highlighted_text(li).lstrip('·').strip()
+                                        if ex_text:
+                                            examples.append(ex_text)
+                                # Also check direct examples
+                                for ex in content_div.find_all(class_='example'):
+                                    ex_text = extract_highlighted_text(ex).lstrip('·').strip()
+                                    if ex_text and ex_text not in examples:
+                                        examples.append(ex_text)
+
+                            phrases_in_popup.append({
+                                'text': text,
+                                'examples': examples
+                            })
+                    if phrases_in_popup:
+                        popup_phrases.append({
+                            'header': header_text,
+                            'items': phrases_in_popup
+                        })
+
+                # === WORD FAMILY ===
+                elif popup_type == 'word_family':
+                    # Word family is grouped by POS
+                    wf_groups = []
+                    wf_container = container.find(class_='wf')
+                    if wf_container:
+                        for group in wf_container.find_all(class_='group'):
+                            pos_elem = group.find(class_='pos')
+                            pos_text = clean_text(pos_elem.get_text()) if pos_elem else ''
+
+                            words = []
+                            for w in group.find_all(class_='w'):
+                                wfwd = w.find(class_='wfwd')
+                                if wfwd:
+                                    word_text = clean_text(wfwd.get_text())
+                                    if word_text:
+                                        words.append(word_text)
+
+                            if pos_text or words:
+                                wf_groups.append({
+                                    'pos': pos_text,
+                                    'words': words
+                                })
+
+                    if wf_groups and not word_family:  # Only first occurrence
+                        word_family = [{
+                            'header': header_text,
+                            'groups': wf_groups
+                        }]
+
+        # Store all parsed popup data
+        if corpus_examples:
+            entry['attributes']['corpus_examples'] = corpus_examples
+        if thesaurus:
+            entry['attributes']['thesaurus'] = thesaurus
+        if word_family:
+            entry['attributes']['word_family'] = word_family
+        if entry_menu:
+            entry['attributes']['entry_menu'] = entry_menu
+        if popup_phrases:
+            entry['attributes']['popup_phrases'] = popup_phrases
+        if popup_collocations:
+            entry['attributes']['popup_collocations'] = popup_collocations
+
         # Use word_key if headword not parsed
         if not entry['headword']:
             entry['headword'] = word_key
 
         return entry
-
 
 # ============================================================
 # Database Writer
@@ -814,18 +1366,24 @@ class LexDBWriter:
                 ))
 
         # Insert senses
+        subsenses_data = {}  # sense_number -> subsenses for storage
         for sense in entry_data.get('senses', []):
             self.cursor.execute("""
-                INSERT INTO senses (entry_id, sense_number, signpost, definition, sort_order)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO senses (entry_id, sense_number, signpost, definition, definition_zh, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 entry_id,
                 sense.get('number') or None,
                 sense.get('signpost') or None,
-                sense['definition'],
+                sense.get('definition', ''),
+                sense.get('chinese_def') or None,
                 sense.get('sort_order', 0)
             ))
             sense_id = self.cursor.lastrowid
+
+            # Store subsenses for later
+            if sense.get('subsenses'):
+                subsenses_data[str(sense_id)] = sense['subsenses']
 
             # Sense-level labels
             for idx, label in enumerate(sense.get('labels', [])):
@@ -843,11 +1401,12 @@ class LexDBWriter:
             # Examples
             for example in sense.get('examples', []):
                 self.cursor.execute("""
-                    INSERT INTO examples (sense_id, text, audio_path, sort_order)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO examples (sense_id, text, text_zh, audio_path, sort_order)
+                    VALUES (?, ?, ?, ?, ?)
                 """, (
                     sense_id,
                     example['text'],
+                    example.get('chinese') or None,
                     example.get('audio_path') or None,
                     example.get('sort_order', 0)
                 ))
@@ -936,6 +1495,10 @@ class LexDBWriter:
                 ))
 
         # Insert extension attributes (EAV)
+        # First add subsenses if any
+        if subsenses_data:
+            entry_data.setdefault('attributes', {})['subsenses'] = subsenses_data
+
         for key, value in entry_data.get('attributes', {}).items():
             if value:
                 # Determine type
@@ -986,13 +1549,29 @@ class LexDBWriter:
 # Main Conversion Function
 # ============================================================
 
-def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False):
-    """Convert MDX file to LexDB database."""
+def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=None):
+    """Convert MDX file to LexDB database.
+
+    dict_type: 'ldoce', 'oaldpe', or None for auto-detect
+    """
 
     mdx_path = Path(mdx_file)
     if not mdx_path.exists():
         print(f"Error: File not found: {mdx_file}")
         sys.exit(1)
+
+    # Auto-detect dictionary type from filename (currently only LDOCE supported)
+    if dict_type is None:
+        filename_lower = mdx_path.stem.lower()
+        if 'ldoce' in filename_lower or 'longman' in filename_lower:
+            dict_type = 'ldoce'
+        else:
+            # Default to LDOCE for now
+            print(f"Warning: Could not detect dictionary type from filename '{mdx_path.name}'")
+            print("Assuming LDOCE format. Use --dict-type ldoce to suppress this warning.")
+            dict_type = 'ldoce'
+
+    print(f"Dictionary type: {dict_type}")
 
     # Determine database path
     if db_path is None:
@@ -1028,13 +1607,20 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False):
         else:
             print(f"Warning: MDD file not found: {mdd_file}")
 
-    # Create parser and writer
-    parser = LDOCEParser()
+    # Create parser based on dictionary type
+    if dict_type == 'ldoce':
+        parser = LDOCEParser()
+        dict_version = "6th Edition"
+    else:
+        print(f"Error: Unknown dictionary type: {dict_type}")
+        print("Currently only 'ldoce' is supported.")
+        sys.exit(1)
+
     writer = LexDBWriter(
         db_path=str(db_path),
         dict_id=parser.DICT_ID,
         dict_name=parser.DICT_NAME,
-        dict_version="6th Edition",
+        dict_version=dict_version,
         source_file=str(mdx_path.name)
     )
 
@@ -1145,6 +1731,9 @@ Usage:
   python mdx2lexdb.py <mdx_file> --extract-audio
   python mdx2lexdb.py <mdx_file> -o <output_db_path>
 
+Dictionary types:
+  ldoce     Longman Dictionary of Contemporary English (auto-detected)
+
 Examples:
   python mdx2lexdb.py LDOCE6.mdx
   python mdx2lexdb.py LDOCE6.mdx --extract-audio
@@ -1165,4 +1754,14 @@ Examples:
             print("Error: -o requires an output path")
             sys.exit(1)
 
-    convert_mdx_to_lexdb(mdx_file, db_path=db_path, extract_audio=extract_audio)
+    # Parse dictionary type
+    dict_type = None
+    if '--dict-type' in sys.argv:
+        try:
+            idx = sys.argv.index('--dict-type')
+            dict_type = sys.argv[idx + 1]
+        except (ValueError, IndexError):
+            print("Error: --dict-type requires a type (currently only 'ldoce' supported)")
+            sys.exit(1)
+
+    convert_mdx_to_lexdb(mdx_file, db_path=db_path, extract_audio=extract_audio, dict_type=dict_type)
