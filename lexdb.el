@@ -1,0 +1,660 @@
+;;; lexdb.el --- Multi-dictionary interface for Emacs -*- lexical-binding: t -*-
+
+;; Copyright (C) 2025
+
+;; Author: Your Name
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "29.1"))
+;; Keywords: dictionary, multilingual, reference
+;; URL: https://github.com/example/lexdb
+
+;;; Commentary:
+
+;; A unified multi-dictionary interface for Emacs.
+;;
+;; Features:
+;; - Support for multiple dictionary sources via adapters
+;; - Capability-based rendering (only shows what each dictionary provides)
+;; - Extensible architecture for adding new dictionaries
+;;
+;; Quick start:
+;;   (require 'lexdb)
+;;   (require 'lexdb-ldoce)  ; LDOCE adapter
+;;
+;;   ;; Configure LDOCE
+;;   (setq lexdb-ldoce-db-file "~/path/to/ldoce.db")
+;;   (setq lexdb-ldoce-audio-directory "~/path/to/audio/")
+;;   (lexdb-ldoce-register)
+;;
+;;   ;; Set as default and use
+;;   (setq lexdb-default-adapter 'ldoce)
+;;   (global-set-key (kbd "C-c d") #'lexdb-search)
+
+;;; Code:
+
+(require 'cl-lib)
+
+;;;; ============================================================
+;;;; Customization
+;;;; ============================================================
+
+(defgroup lexdb nil
+  "Multi-dictionary interface."
+  :prefix "lexdb-"
+  :group 'applications)
+
+(defcustom lexdb-default-adapter nil
+  "Default dictionary adapter ID.
+Set this to the ID of your preferred dictionary (e.g., \\='ldoce)."
+  :type '(choice (const nil) symbol)
+  :group 'lexdb)
+
+(defcustom lexdb-audio-player "afplay"
+  "Command to play audio files."
+  :type 'string
+  :group 'lexdb)
+
+;;;; ============================================================
+;;;; Capability System
+;;;; ============================================================
+
+(defconst lexdb-capability-groups
+  '((core
+     (lookup      . "Basic word lookup")
+     (definition  . "Word definitions"))
+
+    (phonetic
+     (pronunciation . "Phonetic transcription")
+     (audio-uk      . "UK pronunciation audio")
+     (audio-us      . "US pronunciation audio")
+     (audio-example . "Example sentence audio"))
+
+    (lexical
+     (pos         . "Part of speech")
+     (grammar     . "Grammar annotations")
+     (register    . "Register/style labels")
+     (hyphenation . "Syllable division"))
+
+    (frequency
+     (frequency-rank . "Frequency ranking")
+     (frequency-band . "Frequency band (e.g., S1 W2)")
+     (cefr           . "CEFR level")
+     (academic       . "Academic word marker"))
+
+    (relations
+     (examples     . "Example sentences")
+     (collocations . "Word collocations")
+     (phrases      . "Phrases and idioms")
+     (synonyms     . "Synonyms")
+     (antonyms     . "Antonyms")
+     (cross-refs   . "Cross references"))
+
+    (etymology
+     (origin      . "Word origin/etymology")
+     (word-family . "Word family members"))
+
+    (search
+     (lemmatization . "Lemma/base form lookup")
+     (fuzzy-search  . "Fuzzy matching")
+     (wildcard      . "Wildcard search")))
+  "Dictionary capabilities organized by group.
+Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
+
+(defun lexdb-capability-list ()
+  "Return flat list of all capability symbols."
+  (let (caps)
+    (dolist (group lexdb-capability-groups)
+      (dolist (cap (cdr group))
+        (push (car cap) caps)))
+    (nreverse caps)))
+
+(defun lexdb-capability-group (cap)
+  "Return the group name for capability CAP."
+  (catch 'found
+    (dolist (group lexdb-capability-groups)
+      (when (assq cap (cdr group))
+        (throw 'found (car group))))))
+
+(defun lexdb-capability-description (cap)
+  "Return description string for capability CAP."
+  (catch 'found
+    (dolist (group lexdb-capability-groups)
+      (when-let ((pair (assq cap (cdr group))))
+        (throw 'found (cdr pair))))))
+
+;;;; ============================================================
+;;;; Core Data Structures
+;;;; ============================================================
+
+(cl-defstruct (lexdb-entry (:constructor lexdb-entry-create))
+  "Universal dictionary entry structure.
+All dictionaries must map their data to this structure."
+  (id nil
+      :type integer
+      :documentation "Unique identifier within the dictionary")
+  (headword nil
+            :type string
+            :documentation "The word being defined (required)")
+  (headword-display nil
+                    :type (or string null)
+                    :documentation "Display form (e.g., with syllable dots: ap·ple)")
+  (senses nil
+          :type list
+          :documentation "List of lexdb-sense structs")
+  (pronunciations nil
+                  :type list
+                  :documentation "List of lexdb-pronunciation structs")
+  (relations nil
+             :type list
+             :documentation "List of lexdb-relation structs (phrases, synonyms, etc.)")
+  (metadata nil
+            :type alist
+            :documentation "Dictionary-specific data as namespaced alist.
+Keys should use namespace/key format (e.g., ldoce/frequency, oxford/cefr-level)."))
+
+(cl-defstruct (lexdb-sense (:constructor lexdb-sense-create))
+  "A single sense/meaning of a word."
+  (id nil :type integer)
+  (number nil
+          :type (or string null)
+          :documentation "Sense number (e.g., \"1\", \"2a\")")
+  (signpost nil
+            :type (or string null)
+            :documentation "Guide word (e.g., \"MOVE FROM A FIXED POINT\")")
+  (definition nil
+              :type string
+              :documentation "The definition text (required)")
+  (examples nil
+            :type list
+            :documentation "List of lexdb-example structs")
+  (grammar-patterns nil
+                    :type list
+                    :documentation "List of lexdb-grammar-pattern structs")
+  (labels nil
+          :type list
+          :documentation "List of lexdb-label structs (grammar, register, etc.)")
+  (relations nil
+             :type list
+             :documentation "List of sense-level lexdb-relation structs")
+  (metadata nil :type alist))
+
+(cl-defstruct (lexdb-grammar-pattern (:constructor lexdb-grammar-pattern-create))
+  "A grammar pattern with examples (e.g., 'be required to do something')."
+  (pattern nil :type string :documentation "The pattern text (required)")
+  (examples nil :type list :documentation "List of lexdb-example structs"))
+
+(cl-defstruct (lexdb-example (:constructor lexdb-example-create))
+  "An example sentence."
+  (text nil :type string :documentation "Example text (required)")
+  (source nil :type (or string null) :documentation "Source attribution")
+  (audio nil :type (or string null) :documentation "Audio file path")
+  (metadata nil :type alist))
+
+(cl-defstruct (lexdb-label (:constructor lexdb-label-create))
+  "A label/tag attached to entry or sense."
+  (type nil
+        :type symbol
+        :documentation "Label type: pos, grammar, register, domain, region, etc.")
+  (value nil
+         :type string
+         :documentation "Label value (required)")
+  (display nil
+           :type (or string null)
+           :documentation "Custom display text"))
+
+(cl-defstruct (lexdb-pronunciation (:constructor lexdb-pronunciation-create))
+  "Pronunciation information."
+  (ipa nil :type (or string null) :documentation "IPA transcription")
+  (variant nil
+           :type (or symbol null)
+           :documentation "Variant: uk, us, au, etc.")
+  (audio nil :type (or string null) :documentation "Audio file path")
+  (metadata nil :type alist))
+
+(cl-defstruct (lexdb-relation (:constructor lexdb-relation-create))
+  "A relationship to another word or phrase."
+  (type nil
+        :type symbol
+        :documentation "Relation type: synonym, antonym, phrase, cross-ref, etc.")
+  (target nil
+          :type string
+          :documentation "Target word or phrase (required)")
+  (target-link nil
+               :type (or string null)
+               :documentation "Link target word (for navigation)")
+  (target-entry-id nil
+                   :type (or integer null)
+                   :documentation "ID of target entry if resolvable")
+  (sense-id nil
+            :type (or integer null)
+            :documentation "Associated sense ID")
+  (metadata nil :type alist))
+
+(cl-defstruct (lexdb-collocation (:constructor lexdb-collocation-create))
+  "A collocation entry."
+  (category nil :type (or string null) :documentation "Category (ADJECTIVES, VERBS, etc.)")
+  (text nil :type string :documentation "Collocation text (required)")
+  (gloss nil :type (or string null) :documentation "Explanation")
+  (examples nil :type list :documentation "List of example strings")
+  (metadata nil :type alist))
+
+;;;; ============================================================
+;;;; Metadata Helpers
+;;;; ============================================================
+
+(defun lexdb-meta-get (metadata namespace key)
+  "Get value from METADATA with NAMESPACE/KEY.
+Example: (lexdb-meta-get meta \"ldoce\" \"frequency\")"
+  (alist-get (intern (format "%s/%s" namespace key)) metadata))
+
+(defun lexdb-meta-put (metadata namespace key value)
+  "Return new METADATA with NAMESPACE/KEY set to VALUE.
+Does not mutate original metadata."
+  (let ((full-key (intern (format "%s/%s" namespace key))))
+    (cons (cons full-key value)
+          (assq-delete-all full-key metadata))))
+
+(defun lexdb-meta-keys (metadata &optional namespace)
+  "List all keys in METADATA, optionally filtered by NAMESPACE."
+  (let ((prefix (when namespace (format "%s/" namespace))))
+    (delq nil
+          (mapcar (lambda (pair)
+                    (let ((key-str (symbol-name (car pair))))
+                      (if prefix
+                          (when (string-prefix-p prefix key-str)
+                            (car pair))
+                        (car pair))))
+                  metadata))))
+
+;;;; ============================================================
+;;;; Adapter Structure
+;;;; ============================================================
+
+(cl-defstruct (lexdb-adapter (:constructor lexdb-adapter-create))
+  "Dictionary adapter - bridges specific dictionary to universal interface."
+  ;; Identity
+  (id nil :type symbol :documentation "Unique identifier (e.g., ldoce, oxford)")
+  (name nil :type string :documentation "Human-readable name")
+  (version nil :type (or string null))
+
+  ;; Capabilities
+  (capabilities nil
+                :type list
+                :documentation "List of supported capability symbols")
+
+  ;; Resources
+  (db-file nil :type (or string null) :documentation "SQLite database path")
+  (audio-dir nil :type (or string null) :documentation "Audio files directory")
+
+  ;; Required functions
+  (lookup-fn nil
+             :type function
+             :documentation "(word) -> list of lexdb-entry")
+  (close-fn nil
+            :type function
+            :documentation "() -> nil, cleanup resources")
+
+  ;; Optional data functions (based on capabilities)
+  (pronunciations-fn nil
+                     :type (or function null)
+                     :documentation "(entry-id) -> list of lexdb-pronunciation")
+  (collocations-fn nil
+                   :type (or function null)
+                   :documentation "(entry-id) -> list of lexdb-collocation")
+  (relations-fn nil
+                :type (or function null)
+                :documentation "(entry-id type) -> list of lexdb-relation")
+  (lemma-fn nil
+            :type (or function null)
+            :documentation "(word) -> lemma string")
+
+  ;; Batch prefetch for performance (optional)
+  (prefetch-fn nil
+               :type (or function null)
+               :documentation "(entry-ids) -> nil, prefetch data into cache")
+
+  ;; Optional UI hooks (for dictionary-specific rendering)
+  (render-frequency-fn nil
+                       :type (or function null)
+                       :documentation "(freq-value) -> propertized string")
+  (render-entry-header-fn nil
+                          :type (or function null)
+                          :documentation "(entry buffer) -> nil, custom header rendering")
+  (render-sense-prefix-fn nil
+                          :type (or function null)
+                          :documentation "(sense buffer) -> nil, custom sense prefix"))
+
+;;;; ============================================================
+;;;; Adapter Registry
+;;;; ============================================================
+
+(defvar lexdb-adapters (make-hash-table :test 'eq)
+  "Hash table of registered adapters. Key is adapter ID symbol.")
+
+(defvar lexdb-current-adapter nil
+  "Currently active adapter ID.")
+
+(defun lexdb-register-adapter (adapter)
+  "Register ADAPTER in the global registry."
+  (unless (lexdb-adapter-p adapter)
+    (error "Invalid adapter: %S" adapter))
+  (unless (lexdb-adapter-id adapter)
+    (error "Adapter must have an ID"))
+  (unless (lexdb-adapter-lookup-fn adapter)
+    (error "Adapter must have a lookup-fn"))
+  (puthash (lexdb-adapter-id adapter) adapter lexdb-adapters)
+  (message "Registered dictionary adapter: %s" (lexdb-adapter-name adapter)))
+
+(defun lexdb-unregister-adapter (id)
+  "Unregister adapter with ID."
+  (when-let ((adapter (gethash id lexdb-adapters)))
+    (when (lexdb-adapter-close-fn adapter)
+      (funcall (lexdb-adapter-close-fn adapter)))
+    (remhash id lexdb-adapters)))
+
+(defun lexdb-get-adapter (id)
+  "Get adapter by ID."
+  (gethash id lexdb-adapters))
+
+(defun lexdb-list-adapters ()
+  "Return alist of (ID . adapter) for all registered adapters."
+  (let (result)
+    (maphash (lambda (k v) (push (cons k v) result)) lexdb-adapters)
+    (nreverse result)))
+
+(defun lexdb-adapter-has-capability-p (adapter cap)
+  "Check if ADAPTER supports capability CAP."
+  (memq cap (lexdb-adapter-capabilities adapter)))
+
+(defun lexdb-adapter-capabilities-in-group (adapter group)
+  "Return list of ADAPTER's capabilities in GROUP."
+  (let ((group-caps (cdr (assq group lexdb-capability-groups))))
+    (seq-filter (lambda (cap)
+                  (and (assq cap group-caps)
+                       (lexdb-adapter-has-capability-p adapter cap)))
+                (mapcar #'car group-caps))))
+
+;;;; ============================================================
+;;;; Query API
+;;;; ============================================================
+
+(defun lexdb-lookup (word &optional adapter-id)
+  "Look up WORD using specified or current adapter.
+Returns list of lexdb-entry structs."
+  (let* ((id (or adapter-id lexdb-current-adapter))
+         (adapter (lexdb-get-adapter id)))
+    (unless adapter
+      (error "No adapter found: %s" id))
+    (funcall (lexdb-adapter-lookup-fn adapter) word)))
+
+(defun lexdb-get-pronunciations (entry-id &optional adapter-id)
+  "Get pronunciations for ENTRY-ID."
+  (let* ((id (or adapter-id lexdb-current-adapter))
+         (adapter (lexdb-get-adapter id)))
+    (when (and adapter
+               (lexdb-adapter-has-capability-p adapter 'pronunciation)
+               (lexdb-adapter-pronunciations-fn adapter))
+      (funcall (lexdb-adapter-pronunciations-fn adapter) entry-id))))
+
+(defun lexdb-get-collocations (entry-id &optional adapter-id)
+  "Get collocations for ENTRY-ID."
+  (let* ((id (or adapter-id lexdb-current-adapter))
+         (adapter (lexdb-get-adapter id)))
+    (when (and adapter
+               (lexdb-adapter-has-capability-p adapter 'collocations)
+               (lexdb-adapter-collocations-fn adapter))
+      (funcall (lexdb-adapter-collocations-fn adapter) entry-id))))
+
+(defun lexdb-get-relations (entry-id type &optional adapter-id)
+  "Get relations of TYPE for ENTRY-ID."
+  (let* ((id (or adapter-id lexdb-current-adapter))
+         (adapter (lexdb-get-adapter id)))
+    (when (and adapter (lexdb-adapter-relations-fn adapter))
+      (funcall (lexdb-adapter-relations-fn adapter) entry-id type))))
+
+(defun lexdb-find-lemma (word &optional adapter-id)
+  "Find lemma/base form of WORD."
+  (let* ((id (or adapter-id lexdb-current-adapter))
+         (adapter (lexdb-get-adapter id)))
+    (when (and adapter
+               (lexdb-adapter-has-capability-p adapter 'lemmatization)
+               (lexdb-adapter-lemma-fn adapter))
+      (funcall (lexdb-adapter-lemma-fn adapter) word))))
+
+(defun lexdb-prefetch (entry-ids &optional adapter-id)
+  "Prefetch data for ENTRY-IDS to avoid N+1 queries."
+  (let* ((id (or adapter-id lexdb-current-adapter))
+         (adapter (lexdb-get-adapter id)))
+    (when (and adapter (lexdb-adapter-prefetch-fn adapter))
+      (funcall (lexdb-adapter-prefetch-fn adapter) entry-ids))))
+
+;;;; ============================================================
+;;;; Utility Functions
+;;;; ============================================================
+
+(defun lexdb-entry-get-label (entry type)
+  "Get first label of TYPE from ENTRY's senses."
+  (catch 'found
+    (dolist (sense (lexdb-entry-senses entry))
+      (dolist (label (lexdb-sense-labels sense))
+        (when (eq (lexdb-label-type label) type)
+          (throw 'found label))))))
+
+(defun lexdb-entry-pos (entry)
+  "Get part of speech from ENTRY metadata or labels."
+  (or (lexdb-meta-get (lexdb-entry-metadata entry)
+                      (symbol-name lexdb-current-adapter) "pos")
+      (when-let ((label (lexdb-entry-get-label entry 'pos)))
+        (lexdb-label-value label))))
+
+(defun lexdb-sense-grammar (sense)
+  "Get grammar annotation from SENSE."
+  (when-let ((label (seq-find (lambda (l) (eq (lexdb-label-type l) 'grammar))
+                              (lexdb-sense-labels sense))))
+    (lexdb-label-value label)))
+
+;;;; ============================================================
+;;;; State Management
+;;;; ============================================================
+
+(defvar lexdb--last-word nil
+  "Last searched word.")
+
+(defun lexdb--ensure-adapter ()
+  "Ensure an adapter is selected, return its ID."
+  (let ((id (or lexdb-current-adapter lexdb-default-adapter)))
+    (unless id
+      (let ((adapters (lexdb-list-adapters)))
+        (if adapters
+            (setq id (caar adapters))
+          (error "No dictionary adapters registered. Load an adapter first"))))
+    (unless (lexdb-get-adapter id)
+      (error "Dictionary adapter not found: %s" id))
+    (setq lexdb-current-adapter id)
+    id))
+
+;;;; ============================================================
+;;;; Interactive Commands
+;;;; ============================================================
+
+(declare-function lexdb-ui-display "lexdb-ui")
+
+;;;###autoload
+(defun lexdb-search (word)
+  "Search for WORD in the current dictionary.
+Uses `lexdb-current-adapter' or `lexdb-default-adapter'."
+  (interactive
+   (let ((default (thing-at-point 'word t)))
+     (list (read-string
+            (format "Lexdb%s: "
+                    (if lexdb-current-adapter
+                        (format " [%s]" lexdb-current-adapter)
+                      ""))
+            default))))
+  (when (or (null word) (not (stringp word)) (string-empty-p word))
+    (user-error "No word specified"))
+  (setq lexdb--last-word word)
+  (require 'lexdb-ui)
+  (let* ((adapter-id (lexdb--ensure-adapter))
+         (adapter (lexdb-get-adapter adapter-id))
+         (entries (lexdb-lookup word adapter-id)))
+    ;; Try lemmatization if no results
+    (unless entries
+      (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
+        (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+          (unless (equal lemma (downcase word))
+            (setq entries (lexdb-lookup lemma adapter-id))
+            (when entries
+              (setq word lemma))))))
+    (lexdb-ui-display word entries adapter)))
+
+;;;###autoload
+(defun lexdb-search-at-point ()
+  "Search for the word at point in the current dictionary."
+  (interactive)
+  (let ((word (thing-at-point 'word t)))
+    (if word
+        (lexdb-search word)
+      (call-interactively #'lexdb-search))))
+
+;;;###autoload
+(defun lexdb-search-again ()
+  "Repeat the last dictionary search."
+  (interactive)
+  (if lexdb--last-word
+      (lexdb-search lexdb--last-word)
+    (call-interactively #'lexdb-search)))
+
+;;;###autoload
+(defun lexdb-switch-adapter (adapter-id)
+  "Switch to dictionary ADAPTER-ID."
+  (interactive
+   (let ((adapters (lexdb-list-adapters)))
+     (unless adapters
+       (user-error "No dictionary adapters registered"))
+     (list (intern
+            (completing-read
+             "Switch to dictionary: "
+             (mapcar (lambda (p)
+                       (format "%s" (car p)))
+                     adapters)
+             nil t)))))
+  (if (lexdb-get-adapter adapter-id)
+      (progn
+        (setq lexdb-current-adapter adapter-id)
+        (message "Switched to: %s"
+                 (lexdb-adapter-name (lexdb-get-adapter adapter-id))))
+    (user-error "Unknown adapter: %s" adapter-id)))
+
+;;;###autoload
+(defun lexdb-list-capabilities ()
+  "Display capabilities of the current dictionary."
+  (interactive)
+  (let* ((adapter-id (lexdb--ensure-adapter))
+         (adapter (lexdb-get-adapter adapter-id))
+         (caps (lexdb-adapter-capabilities adapter)))
+    (with-help-window "*Lexdb Capabilities*"
+      (princ (format "Dictionary: %s\n" (lexdb-adapter-name adapter)))
+      (princ (format "Version: %s\n\n" (or (lexdb-adapter-version adapter) "unknown")))
+      (princ "Capabilities:\n\n")
+      (dolist (group lexdb-capability-groups)
+        (let ((group-name (car group))
+              (group-caps (cdr group))
+              (has-any nil))
+          ;; Check if this group has any enabled caps
+          (dolist (cap-pair group-caps)
+            (when (memq (car cap-pair) caps)
+              (setq has-any t)))
+          (when has-any
+            (princ (format "  %s:\n" (upcase (symbol-name group-name))))
+            (dolist (cap-pair group-caps)
+              (let ((cap (car cap-pair))
+                    (desc (cdr cap-pair)))
+                (when (memq cap caps)
+                  (princ (format "    ✓ %s - %s\n" cap desc)))))
+            (princ "\n")))))))
+
+;;;###autoload
+(defun lexdb-list-adapters-command ()
+  "Display all registered dictionary adapters."
+  (interactive)
+  (let ((adapters (lexdb-list-adapters)))
+    (if (null adapters)
+        (message "No dictionary adapters registered")
+      (with-help-window "*Lexdb Adapters*"
+        (princ "Registered Dictionary Adapters:\n\n")
+        (dolist (pair adapters)
+          (let* ((id (car pair))
+                 (adapter (cdr pair))
+                 (current (eq id lexdb-current-adapter)))
+            (princ (format "%s %s\n"
+                           (if current "▶" " ")
+                           (lexdb-adapter-name adapter)))
+            (princ (format "    ID: %s\n" id))
+            (when (lexdb-adapter-version adapter)
+              (princ (format "    Version: %s\n" (lexdb-adapter-version adapter))))
+            (princ (format "    Capabilities: %d\n"
+                           (length (lexdb-adapter-capabilities adapter))))
+            (princ "\n")))))))
+
+;;;; ============================================================
+;;;; Utility Commands
+;;;; ============================================================
+
+(declare-function lexdb-ui--play-audio "lexdb-ui")
+
+;;;###autoload
+(defun lexdb-play-pronunciation (&optional variant)
+  "Play pronunciation of the last searched word.
+VARIANT can be \\='uk or \\='us (default: \\='uk)."
+  (interactive)
+  (unless lexdb--last-word
+    (user-error "No word searched yet"))
+  (require 'lexdb-ui)
+  (let* ((adapter-id (lexdb--ensure-adapter))
+         (adapter (lexdb-get-adapter adapter-id))
+         (entries (lexdb-lookup lexdb--last-word adapter-id))
+         (variant (or variant 'uk)))
+    (if (null entries)
+        (message "No entry found for: %s" lexdb--last-word)
+      (let* ((entry (car entries))
+             (prons (lexdb-entry-pronunciations entry))
+             (pron (seq-find (lambda (p) (eq (lexdb-pronunciation-variant p) variant))
+                             prons)))
+        (if (and pron (lexdb-pronunciation-audio pron))
+            (lexdb-ui--play-audio (lexdb-pronunciation-audio pron)
+                                  (lexdb-adapter-audio-dir adapter))
+          (message "No %s audio for: %s" variant lexdb--last-word))))))
+
+;;;###autoload
+(defun lexdb-play-uk ()
+  "Play UK pronunciation of the last searched word."
+  (interactive)
+  (lexdb-play-pronunciation 'uk))
+
+;;;###autoload
+(defun lexdb-play-us ()
+  "Play US pronunciation of the last searched word."
+  (interactive)
+  (lexdb-play-pronunciation 'us))
+
+;;;; ============================================================
+;;;; External API (for integration with other packages)
+;;;; ============================================================
+
+(defun lexdb-word-exists-p (word &optional adapter-id)
+  "Check if WORD exists in the dictionary."
+  (not (null (lexdb-lookup word adapter-id))))
+
+(defun lexdb-get-entry (word &optional adapter-id)
+  "Get the first entry for WORD, or nil if not found.
+Returns a lexdb-entry struct."
+  (car (lexdb-lookup word adapter-id)))
+
+(defun lexdb-get-definitions (word &optional adapter-id)
+  "Get list of definition strings for WORD."
+  (when-let ((entry (lexdb-get-entry word adapter-id)))
+    (mapcar #'lexdb-sense-definition (lexdb-entry-senses entry))))
+
+(provide 'lexdb)
+;;; lexdb.el ends here
