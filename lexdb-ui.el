@@ -99,9 +99,10 @@
   :group 'lexdb)
 
 (defface lexdb-signpost-face
-  '((((background dark))  :foreground "#E0A040" :weight bold)
-    (((background light)) :foreground "#996600" :weight bold))
-  "Face for signpost/guide words (e.g., MOVE FROM A FIXED POINT)."
+  '((((background dark))  :foreground "#000000" :background "#E0A040" :weight bold)
+    (((background light)) :foreground "#FFFFFF" :background "#996600" :weight bold))
+  "Face for signpost/guide words (e.g., TELEPHONE, DESCRIBE).
+Displayed with inverse colors like the original dictionary."
   :group 'lexdb)
 
 (defface lexdb-definition-face
@@ -117,15 +118,17 @@
   :group 'lexdb)
 
 (defface lexdb-example-highlight-face
-  '((((background dark))  :foreground "#E0A040" :weight bold :slant italic)
-    (((background light)) :foreground "#996600" :weight bold :slant italic))
-  "Face for highlighted words in examples (nodeword)."
+  '((((background dark))  :foreground "#8B7355" :weight bold :slant italic)
+    (((background light)) :foreground "#666655" :weight bold :slant italic))
+  "Face for highlighted words in examples (nodeword).
+Same color as example but bold."
   :group 'lexdb)
 
 (defface lexdb-collocation-highlight-face
-  '((((background dark))  :foreground "#7CB8FF" :weight bold :slant italic)
-    (((background light)) :foreground "#0066CC" :weight bold :slant italic))
-  "Face for highlighted collocations in examples (colloinexa)."
+  '((((background dark))  :foreground "#8B7355" :weight bold :slant italic)
+    (((background light)) :foreground "#666655" :weight bold :slant italic))
+  "Face for highlighted collocations in examples (colloinexa).
+Same color as example but bold."
   :group 'lexdb)
 
 (defface lexdb-chinese-face
@@ -135,9 +138,41 @@
   :group 'lexdb)
 
 (defface lexdb-grammar-pattern-face
-  '((((background dark))  :foreground "#7CB8FF" :weight bold)
-    (((background light)) :foreground "#0066CC" :weight bold))
-  "Face for grammar patterns (e.g., 'be required to do something')."
+  '((((background dark))  :foreground "#B8B8B8" :weight bold)
+    (((background light)) :foreground "#333333" :weight bold))
+  "Face for grammar patterns (e.g., 'take somebody/something to/into etc something').
+Same color as definition but bold."
+  :group 'lexdb)
+
+(defface lexdb-lexunit-face
+  '((((background dark))  :foreground "#B8B8B8" :weight bold)
+    (((background light)) :foreground "#333333" :weight bold))
+  "Face for lexunit phrases (e.g., 'call a doctor/the police').
+Same color as definition but bold."
+  :group 'lexdb)
+
+(defface lexdb-grambox-heading-face
+  '((((background dark))  :foreground "#87CEEB" :weight bold)
+    (((background light)) :foreground "#4682B4" :weight bold))
+  "Face for GRAMMAR box heading."
+  :group 'lexdb)
+
+(defface lexdb-grambox-background-face
+  '((((background dark))  :background "#2a2a2a" :extend t)
+    (((background light)) :background "#f0f0e8" :extend t))
+  "Face for GRAMMAR box background."
+  :group 'lexdb)
+
+(defface lexdb-grambox-expr-face
+  '((((background dark))  :foreground "#98FB98" :weight bold)
+    (((background light)) :foreground "#228B22" :weight bold))
+  "Face for highlighted expression in GRAMMAR box."
+  :group 'lexdb)
+
+(defface lexdb-bad-example-face
+  '((((background dark))  :foreground "#CD5C5C" :strike-through t :slant italic)
+    (((background light)) :foreground "#B22222" :strike-through t :slant italic))
+  "Face for bad examples (what NOT to say) in GRAMMAR box."
   :group 'lexdb)
 
 ;; Relations
@@ -167,9 +202,10 @@
   :group 'lexdb)
 
 (defface lexdb-phrasal-verb-lexunit-face
-  '((((background dark))  :foreground "#87CEEB" :weight bold)
-    (((background light)) :foreground "#4682B4" :weight bold))
-  "Face for phrasal verb lexical unit (e.g., 'call (somebody) back')."
+  '((((background dark))  :foreground "#B8B8B8" :weight bold)
+    (((background light)) :foreground "#333333" :weight bold))
+  "Face for phrasal verb lexical unit (e.g., 'to take away').
+Same color as definition but bold."
   :group 'lexdb)
 
 (defface lexdb-synonym-face
@@ -271,15 +307,61 @@
 ;;;; Audio Playback
 ;;;; ============================================================
 
-(defun lexdb-ui--play-audio (path &optional audio-dir)
-  "Play audio file at PATH, optionally relative to AUDIO-DIR."
+(defcustom lexdb-audio-online-base-url "https://www.ldoceonline.com/media/english/"
+  "Base URL for online audio files from LDOCE."
+  :type 'string
+  :group 'lexdb)
+
+(defcustom lexdb-audio-prefer-online t
+  "If non-nil, prefer online audio over local files.
+When nil, play local files first, fall back to online if not found."
+  :type 'boolean
+  :group 'lexdb)
+
+(defun lexdb-ui--audio-path-to-url (path)
+  "Convert local audio PATH to online URL.
+Handles different audio types:
+- hwd/bre/* -> breProns (British pronunciation)
+- hwd/ame/* -> ameProns (American pronunciation)
+- exa/bre/* or exa/ame/* -> exaProns (example sentences)"
   (when path
-    (let ((full-path (if audio-dir
-                         (expand-file-name path audio-dir)
-                       path)))
-      (if (file-exists-p full-path)
-          (start-process "lexdb-audio" nil lexdb-audio-player full-path)
-        (message "Audio file not found: %s" full-path)))))
+    (let ((filename (file-name-nondirectory path)))
+      (cond
+       ((string-match-p "^hwd/bre/" path)
+        (concat lexdb-audio-online-base-url "breProns/" filename))
+       ((string-match-p "^hwd/ame/" path)
+        (concat lexdb-audio-online-base-url "ameProns/" filename))
+       ((string-match-p "^exa/" path)
+        (concat lexdb-audio-online-base-url "exaProns/" filename))
+       (t nil)))))
+
+(defun lexdb-ui--play-audio (path &optional audio-dir)
+  "Play audio file at PATH, optionally relative to AUDIO-DIR.
+If local file doesn't exist and PATH can be converted to URL, play online."
+  (when path
+    (let* ((full-path (if audio-dir
+                          (expand-file-name path audio-dir)
+                        path))
+           (local-exists (file-exists-p full-path))
+           (online-url (lexdb-ui--audio-path-to-url path)))
+      (cond
+       ;; Prefer online if configured
+       ((and lexdb-audio-prefer-online online-url)
+        (lexdb-ui--play-url online-url))
+       ;; Play local if exists
+       (local-exists
+        (start-process "lexdb-audio" nil lexdb-audio-player full-path))
+       ;; Fall back to online
+       (online-url
+        (lexdb-ui--play-url online-url))
+       ;; No option available
+       (t
+        (message "Audio not available: %s" path))))))
+
+(defun lexdb-ui--play-url (url)
+  "Play audio from URL using mpv or similar player."
+  (message "Playing: %s" url)
+  (start-process "lexdb-audio" nil lexdb-audio-player url))
 
 ;;;; ============================================================
 ;;;; Foldable Sections
@@ -638,19 +720,21 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
         (when (< start (length text))
           (insert (propertize (substring text start) 'face 'lexdb-inflection-face)))))))
 
-(defun lexdb-ui--render-sense (sense adapter)
-  "Render a single SENSE."
+(defun lexdb-ui--render-sense (sense adapter &optional entry)
+  "Render a single SENSE using ADAPTER.
+Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
   (let ((caps (lexdb-adapter-capabilities adapter))
         (audio-dir (lexdb-adapter-audio-dir adapter))
-        (ns (symbol-name (lexdb-adapter-id adapter))))
+        (ns (symbol-name (lexdb-adapter-id adapter)))
+        (sense-num-str (or (lexdb-sense-number sense) "0")))
     ;; Sense number
     (when-let ((num (lexdb-sense-number sense)))
       (when (lexdb-ui--non-empty-string-p num)
         (insert (propertize num 'face 'lexdb-sense-num-face) " ")))
-    ;; Signpost (guide word)
+    ;; Signpost (guide word) - displayed in uppercase with background
     (when-let ((signpost (lexdb-sense-signpost sense)))
       (when (lexdb-ui--non-empty-string-p signpost)
-        (insert (propertize signpost 'face 'lexdb-signpost-face) " ")))
+        (insert (propertize (upcase signpost) 'face 'lexdb-signpost-face) " ")))
     ;; Grammar label
     (when (memq 'grammar caps)
       (when-let ((gram (lexdb-sense-grammar sense)))
@@ -752,13 +836,116 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
                     (when (lexdb-ui--non-empty-string-p ex-zh)
                       (insert " " (propertize ex-zh 'face 'lexdb-chinese-face)))))
                 (insert "\n")))))))
-    ;; Sense-level cross references
+    ;; Lexunits (sub-phrases like "call a doctor/the police")
+    ;; Read from entry-level sense_lexunits indexed by sense number
+    (when entry
+      (let* ((sense-lexunits (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_lexunits"))
+             ;; Use string= for proper string key matching in JSON-parsed alist
+             (lexunits (when sense-lexunits
+                         (cdr (assoc sense-num-str sense-lexunits #'string=))))
+             ;; Get definition to check for duplicates
+             (sense-def (or (lexdb-sense-definition sense) "")))
+        (when lexunits
+          (let ((lu-list (if (vectorp lexunits) (append lexunits nil) lexunits)))
+            (dolist (lu lu-list)
+              (let ((lu-text (cdr (assoc 'text lu)))
+                    (lu-def (cdr (assoc 'definition lu)))
+                    (lu-examples (cdr (assoc 'examples lu))))
+                ;; Skip if lexunit text is already part of the definition
+                ;; (e.g., "somebody's day: definition" where "somebody's day" is also a lexunit)
+                (when (and lu-text
+                           (not (string-prefix-p lu-text sense-def)))
+                  ;; Lexunit text (bold)
+                  (insert "  " (propertize lu-text 'face 'lexdb-lexunit-face))
+                  ;; Definition
+                  (when (and lu-def (not (string-empty-p lu-def)))
+                    (insert " " (propertize lu-def 'face 'lexdb-definition-face)))
+                  (insert "\n")
+                  ;; Examples
+                  (when lu-examples
+                    (let ((ex-list (if (vectorp lu-examples) (append lu-examples nil) lu-examples)))
+                      (dolist (ex ex-list)
+                        (let ((ex-text (cdr (assoc 'text ex)))
+                              (ex-audio (cdr (assoc 'audio_path ex))))
+                          (when (and ex-text (not (string-empty-p ex-text)))
+                            (if (and ex-audio (not (string-empty-p ex-audio)))
+                                (insert (propertize "      🔊 "
+                                                    'face 'lexdb-audio-indicator-face
+                                                    'lexdb-audio-path ex-audio
+                                                    'lexdb-audio-dir audio-dir
+                                                    'help-echo "C-c C-c to play"))
+                              (insert "      "))
+                            (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
+                            (insert "\n")))))))))))))
+
+    ;; Sense-level cross references (e.g., "see THESAURUS at PHONE")
+    ;; Placed after lexunits, before grammar box
     (let ((sense-relations (lexdb-sense-relations sense)))
       (when sense-relations
         (let ((cross-refs (seq-filter (lambda (r) (eq (lexdb-relation-type r) 'cross_ref)) sense-relations)))
           (when cross-refs
-            (insert "  " (propertize "→ " 'face 'lexdb-crossref-face))
-            (lexdb-ui--insert-linked-relations cross-refs 'lexdb-crossref-face)
+            (dolist (ref cross-refs)
+              (let ((target (lexdb-relation-target ref)))
+                (insert "  " (propertize "► " 'face 'lexdb-crossref-face))
+                (insert (propertize "see THESAURUS at " 'face 'lexdb-definition-face))
+                (insert-text-button (upcase target)
+                                    'face 'lexdb-crossref-face
+                                    'action (lambda (_) (lexdb-search target))
+                                    'help-echo (format "Look up: %s" target))
+                (insert "\n")))))))
+
+    ;; Grammar box (GRAMMAR usage notes)
+    ;; Read from entry-level sense_gramboxes indexed by sense number
+    (when entry
+      (let* ((sense-gramboxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_gramboxes"))
+             ;; Use string= for proper string key matching in JSON-parsed alist
+             (grambox (when sense-gramboxes
+                        (cdr (assoc sense-num-str sense-gramboxes #'string=)))))
+        (when grambox
+          (let ((heading (cdr (assoc 'heading grambox)))
+                (notes (cdr (assoc 'notes grambox)))
+                (grambox-start (point)))  ; Mark start for overlay
+            ;; Heading
+            (when (and heading (not (string-empty-p heading)))
+              (insert "\n  " (propertize heading 'face 'lexdb-grambox-heading-face) "\n"))
+            ;; Notes - use separate fields for proper formatting
+            (when notes
+              (let ((notes-list (if (vectorp notes) (append notes nil) notes)))
+                (dolist (note notes-list)
+                  (let ((expr (cdr (assoc 'expr note)))
+                        (example (cdr (assoc 'example note)))
+                        (bad-example (cdr (assoc 'bad_example note)))
+                        (text (cdr (assoc 'text note))))
+                    ;; Extract the main explanation from text (before the example marker)
+                    ;; text format: "• You call someone on the phone: · Call me tomorrow. ✗Don't say: ..."
+                    (let* ((main-text (if (and text (string-match "\\(.*?\\)\\(·\\|✗\\)" text))
+                                          (string-trim (match-string 1 text))
+                                        text)))
+                      (insert "  ")
+                      ;; Main text with expr highlighted
+                      (if (and expr (not (string-empty-p expr)) main-text)
+                          (let ((expr-pos (string-match (regexp-quote expr) main-text)))
+                            (if expr-pos
+                                (progn
+                                  (insert (propertize (substring main-text 0 expr-pos) 'face 'lexdb-definition-face))
+                                  (insert (propertize expr 'face 'lexdb-grambox-expr-face))
+                                  (insert (propertize (substring main-text (+ expr-pos (length expr))) 'face 'lexdb-definition-face)))
+                              (insert (propertize main-text 'face 'lexdb-definition-face))))
+                        (when main-text
+                          (insert (propertize main-text 'face 'lexdb-definition-face))))
+                      (insert "\n")
+                      ;; Good example on new line
+                      (when (and example (not (string-empty-p example)))
+                        (insert "    " (propertize "· " 'face 'lexdb-definition-face)
+                                (propertize example 'face 'lexdb-example-face) "\n"))
+                      ;; Bad example on new line
+                      (when (and bad-example (not (string-empty-p bad-example)))
+                        (insert "    " (propertize "✗ Don't say: " 'face 'lexdb-bad-example-face)
+                                (propertize bad-example 'face 'lexdb-bad-example-face) "\n")))))))
+            ;; Create overlay for background
+            (let ((ov (make-overlay grambox-start (point))))
+              (overlay-put ov 'face 'lexdb-grambox-background-face)
+              (overlay-put ov 'lexdb-grambox t))
             (insert "\n")))))))
 
 (defun lexdb-ui--render-synonyms-and-crossrefs (entry adapter)
@@ -845,25 +1032,72 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
 
 (defun lexdb-ui--build-verb-table-content (verb-table)
   "Build content string for VERB TABLE tab.
-VERB-TABLE is a list or vector of verb form entries."
+VERB-TABLE is a list or vector of verb form entries.
+Displays as proper tables with borders."
   (with-temp-buffer
     (let ((forms (if (vectorp verb-table) (append verb-table nil) verb-table))
-          (current-tense ""))
+          (simple-forms '())
+          (continuous-forms '()))
+      ;; Separate simple and continuous forms
       (dolist (form forms)
-        (let ((tense (cdr (assoc 'tense form)))
-              (subject (cdr (assoc 'subject form)))
-              (verb-form (cdr (assoc 'form form))))
-          ;; Show tense header when it changes
-          (when (and tense (not (string= tense current-tense)))
-            (setq current-tense tense)
-            (when (> (point) 1) (insert "\n"))
-            (insert "  " (propertize tense 'face 'lexdb-label-face) "\n"))
-          ;; Show subject and form
-          (when verb-form
-            (insert "    ")
-            (when subject
-              (insert (propertize subject 'face 'lexdb-grammar-label-face) " "))
-            (insert (propertize verb-form 'face 'lexdb-headword-face) "\n")))))
+        (let ((verb-form (cdr (assoc 'form form))))
+          (if (and verb-form (string-match-p "\\(am\\|is\\|are\\|was\\|were\\|been\\|be\\) " verb-form))
+              (push form continuous-forms)
+            (push form simple-forms))))
+      (setq simple-forms (nreverse simple-forms))
+      (setq continuous-forms (nreverse continuous-forms))
+
+      ;; Calculate column widths
+      (let ((col1-width 16)   ; Tense column
+            (col2-width 26)   ; Subject column
+            (col3-width 20))  ; Form column
+
+        ;; Use cl-labels for recursive/mutually referencing local functions
+        (cl-labels
+            ((pad-string (str width)
+               (let ((s (or str "")))
+                 (if (> (length s) width)
+                     (substring s 0 width)
+                   (concat s (make-string (- width (length s)) ?\s)))))
+             (draw-top ()
+               (insert "  ┌" (make-string col1-width ?─) "┬"
+                       (make-string col2-width ?─) "┬"
+                       (make-string col3-width ?─) "┐\n"))
+             (draw-line ()
+               (insert "  ├" (make-string col1-width ?─) "┼"
+                       (make-string col2-width ?─) "┼"
+                       (make-string col3-width ?─) "┤\n"))
+             (draw-bottom ()
+               (insert "  └" (make-string col1-width ?─) "┴"
+                       (make-string col2-width ?─) "┴"
+                       (make-string col3-width ?─) "┘\n"))
+             (render-table (title forms-list)
+               (when forms-list
+                 ;; Table title
+                 (draw-top)
+                 (insert "  │" (propertize (pad-string title (+ col1-width col2-width col3-width 2))
+                                           'face 'lexdb-label-face) "│\n")
+                 (draw-line)
+                 ;; Table rows
+                 (let ((current-tense ""))
+                   (dolist (form forms-list)
+                     (let ((tense (or (cdr (assoc 'tense form)) ""))
+                           (subject (or (cdr (assoc 'subject form)) ""))
+                           (verb-form (or (cdr (assoc 'form form)) "")))
+                       ;; Only show tense if different from previous
+                       (let ((show-tense (if (string= tense current-tense) "" tense)))
+                         (setq current-tense tense)
+                         (insert "  │"
+                                 (propertize (pad-string show-tense col1-width) 'face 'lexdb-label-face) "│"
+                                 (propertize (pad-string subject col2-width) 'face 'lexdb-grammar-label-face) "│"
+                                 (propertize (pad-string verb-form col3-width) 'face 'lexdb-headword-face) "│\n")))))
+                 (draw-bottom)
+                 (insert "\n"))))
+
+          ;; Render Simple Form table
+          (render-table "SIMPLE FORM" simple-forms)
+          ;; Render Continuous Form table
+          (render-table "CONTINUOUS FORM" continuous-forms))))
     (buffer-string)))
 
 (defun lexdb-ui--build-corpus-examples-content (examples)
@@ -1304,8 +1538,63 @@ Adapter can provide optional hooks for custom rendering."
 
     ;; Senses/definitions
     (dolist (sense (lexdb-entry-senses entry))
-      (lexdb-ui--render-sense sense adapter))
+      (lexdb-ui--render-sense sense adapter entry))
     (insert "\n")
+
+    ;; Entry-level Grammar Box (e.g., "GRAMMAR: Patterns with day")
+    (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+           (entry-gramboxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "entry_gramboxes")))
+      (when (and entry-gramboxes (> (length entry-gramboxes) 0))
+        (let ((grambox-list (if (vectorp entry-gramboxes) (append entry-gramboxes nil) entry-gramboxes)))
+          (dolist (grambox grambox-list)
+            (let ((heading (cdr (assoc 'heading grambox)))
+                  (notes (cdr (assoc 'notes grambox)))
+                  (grambox-start (point)))
+              ;; Heading
+              (when (and heading (not (string-empty-p heading)))
+                (insert "  " (propertize heading 'face 'lexdb-grambox-heading-face) "\n"))
+              ;; Notes
+              (when notes
+                (let ((notes-list (if (vectorp notes) (append notes nil) notes)))
+                  (dolist (note notes-list)
+                    (let ((pattern (cdr (assoc 'pattern note)))
+                          (expr (cdr (assoc 'expr note)))
+                          (example (cdr (assoc 'example note)))
+                          (bad-example (cdr (assoc 'bad_example note)))
+                          (text (cdr (assoc 'text note))))
+                      ;; Pattern header (e.g., "on a day")
+                      (when (and pattern (not (string-empty-p pattern)))
+                        (insert "  " (propertize pattern 'face 'lexdb-lexunit-face) "\n"))
+                      ;; Main text
+                      (when text
+                        (let* ((main-text (if (string-match "\\(.*?\\)\\(·\\|✗\\)" text)
+                                              (string-trim (match-string 1 text))
+                                            text)))
+                          (insert "  ")
+                          (if (and expr (not (string-empty-p expr)) main-text)
+                              (let ((expr-pos (string-match (regexp-quote expr) main-text)))
+                                (if expr-pos
+                                    (progn
+                                      (insert (propertize (substring main-text 0 expr-pos) 'face 'lexdb-definition-face))
+                                      (insert (propertize expr 'face 'lexdb-grambox-expr-face))
+                                      (insert (propertize (substring main-text (+ expr-pos (length expr))) 'face 'lexdb-definition-face)))
+                                  (insert (propertize main-text 'face 'lexdb-definition-face))))
+                            (insert (propertize main-text 'face 'lexdb-definition-face)))
+                          (insert "\n")))
+                      ;; Good example
+                      (when (and example (not (string-empty-p example)))
+                        (insert "    " (propertize "· " 'face 'lexdb-definition-face)
+                                (propertize example 'face 'lexdb-example-face) "\n"))
+                      ;; Bad example
+                      (when (and bad-example (not (string-empty-p bad-example)))
+                        (insert "    " (propertize "✗ Don't say: " 'face 'lexdb-bad-example-face)
+                                (propertize bad-example 'face 'lexdb-bad-example-face) "\n"))))))
+              ;; Create overlay for background
+              (when (> (point) grambox-start)
+                (let ((ov (make-overlay grambox-start (point))))
+                  (overlay-put ov 'face 'lexdb-grambox-background-face)
+                  (overlay-put ov 'lexdb-grambox t)))
+              (insert "\n"))))))
 
     ;; Phrasal verbs (displayed inline after senses)
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
@@ -1366,6 +1655,11 @@ Adapter can provide optional hooks for custom rendering."
     (define-key map "-" #'lexdb-ui-collapse-all)
     ;; Audio
     (define-key map (kbd "C-c C-c") #'lexdb-ui-play-audio-at-point)
+    ;; History navigation
+    (define-key map "l" #'lexdb-history-back)      ; back (like browser)
+    (define-key map "r" #'lexdb-history-forward)   ; forward
+    (define-key map "[" #'lexdb-history-back)      ; alternative
+    (define-key map "]" #'lexdb-history-forward)   ; alternative
     map)
   "Keymap for `lexdb-mode'.")
 

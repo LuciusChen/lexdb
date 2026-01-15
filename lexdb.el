@@ -49,8 +49,9 @@ Set this to the ID of your preferred dictionary (e.g., \\='ldoce)."
   :type '(choice (const nil) symbol)
   :group 'lexdb)
 
-(defcustom lexdb-audio-player "afplay"
-  "Command to play audio files."
+(defcustom lexdb-audio-player "mpv"
+  "Command to play audio files.
+mpv is recommended as it supports both local files and URLs."
   :type 'string
   :group 'lexdb)
 
@@ -460,6 +461,71 @@ Returns list of lexdb-entry structs."
 (defvar lexdb--last-word nil
   "Last searched word.")
 
+(defvar lexdb--history nil
+  "History of searched words. List of (word . position) pairs.")
+
+(defvar lexdb--history-position -1
+  "Current position in history. -1 means at newest.")
+
+(defcustom lexdb-history-max-length 50
+  "Maximum number of words to keep in history."
+  :type 'integer
+  :group 'lexdb)
+
+(defun lexdb--history-push (word)
+  "Push WORD onto history stack."
+  (when (and word (not (string-empty-p word)))
+    ;; If we're in the middle of history, truncate forward history
+    (when (> lexdb--history-position -1)
+      (setq lexdb--history (nthcdr lexdb--history-position lexdb--history)))
+    ;; Don't add if same as last
+    (unless (equal word (car lexdb--history))
+      (push word lexdb--history)
+      ;; Trim to max length
+      (when (> (length lexdb--history) lexdb-history-max-length)
+        (setcdr (nthcdr (1- lexdb-history-max-length) lexdb--history) nil)))
+    ;; Reset position to newest
+    (setq lexdb--history-position -1)))
+
+(defun lexdb-history-back ()
+  "Go back to previous word in history."
+  (interactive)
+  (let ((new-pos (1+ lexdb--history-position)))
+    (if (< new-pos (length lexdb--history))
+        (let ((word (nth new-pos lexdb--history)))
+          (setq lexdb--history-position new-pos)
+          (lexdb--search-without-history word)
+          (message "History: %d/%d - %s"
+                   (1+ new-pos) (length lexdb--history) word))
+      (message "At oldest entry in history"))))
+
+(defun lexdb-history-forward ()
+  "Go forward to next word in history."
+  (interactive)
+  (if (> lexdb--history-position 0)
+      (let ((new-pos (1- lexdb--history-position)))
+        (setq lexdb--history-position new-pos)
+        (let ((word (nth new-pos lexdb--history)))
+          (lexdb--search-without-history word)
+          (message "History: %d/%d - %s"
+                   (1+ new-pos) (length lexdb--history) word)))
+    (if (= lexdb--history-position 0)
+        (message "At newest entry in history")
+      (message "No history"))))
+
+(defun lexdb--search-without-history (word)
+  "Search for WORD without adding to history."
+  (require 'lexdb-ui)
+  (let* ((adapter-id (lexdb--ensure-adapter))
+         (adapter (lexdb-get-adapter adapter-id))
+         (entries (lexdb-lookup word adapter-id)))
+    (unless entries
+      (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
+        (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+          (unless (equal lemma (downcase word))
+            (setq entries (lexdb-lookup lemma adapter-id))))))
+    (lexdb-ui-display word entries adapter)))
+
 (defun lexdb--ensure-adapter ()
   "Ensure an adapter is selected, return its ID."
   (let ((id (or lexdb-current-adapter lexdb-default-adapter)))
@@ -494,6 +560,7 @@ Uses `lexdb-current-adapter' or `lexdb-default-adapter'."
   (when (or (null word) (not (stringp word)) (string-empty-p word))
     (user-error "No word specified"))
   (setq lexdb--last-word word)
+  (lexdb--history-push word)  ; Add to history
   (require 'lexdb-ui)
   (let* ((adapter-id (lexdb--ensure-adapter))
          (adapter (lexdb-get-adapter adapter-id))
