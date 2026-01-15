@@ -118,17 +118,17 @@ Displayed with inverse colors like the original dictionary."
   :group 'lexdb)
 
 (defface lexdb-example-highlight-face
-  '((((background dark))  :foreground "#8B7355" :weight bold :slant italic)
-    (((background light)) :foreground "#666655" :weight bold :slant italic))
+  '((((background dark))  :foreground "#E0A040" :weight bold :slant italic)
+    (((background light)) :foreground "#996600" :weight bold :slant italic))
   "Face for highlighted words in examples (nodeword).
-Same color as example but bold."
+Different color to make highlights more visible."
   :group 'lexdb)
 
 (defface lexdb-collocation-highlight-face
-  '((((background dark))  :foreground "#8B7355" :weight bold :slant italic)
-    (((background light)) :foreground "#666655" :weight bold :slant italic))
+  '((((background dark))  :foreground "#7CB8FF" :weight bold :slant italic)
+    (((background light)) :foreground "#0066CC" :weight bold :slant italic))
   "Face for highlighted collocations in examples (colloinexa).
-Same color as example but bold."
+Different color to make collocations more visible."
   :group 'lexdb)
 
 (defface lexdb-chinese-face
@@ -221,9 +221,15 @@ Same color as definition but bold."
   "Face for COLLOCATIONS header."
   :group 'lexdb)
 
+(defface lexdb-tab-section-header-face
+  '((((background dark))  :foreground "#E0E0E0" :weight bold :background "#3a3a4a" :extend t)
+    (((background light)) :foreground "#333333" :weight bold :background "#d8d8e8" :extend t))
+  "Face for section headers inside tabs."
+  :group 'lexdb)
+
 (defface lexdb-collocation-category-face
-  '((((background dark))  :foreground "#E0E0E0" :weight bold :background "#3a3a4a" :extend t :underline t)
-    (((background light)) :foreground "#333333" :weight bold :background "#d8d8e8" :extend t :underline t))
+  '((((background dark))  :foreground "#E0E0E0" :weight bold :background "#3a3a4a" :extend t)
+    (((background light)) :foreground "#333333" :weight bold :background "#d8d8e8" :extend t))
   "Face for collocation category headers (ADJECTIVES, VERBS, etc.)."
   :group 'lexdb)
 
@@ -268,6 +274,12 @@ Same color as definition but bold."
   '((((background dark))  :background "#1e1c1a" :extend t)
     (((background light)) :background "#f8f5f0" :extend t))
   "Face for collocations section background."
+  :group 'lexdb)
+
+(defface lexdb-tab-content-background-face
+  '((((background dark))  :background "#2a2a2a" :extend t)
+    (((background light)) :background "#f0f0e8" :extend t))
+  "Face for tab content background when expanded."
   :group 'lexdb)
 
 ;; Etymology
@@ -402,18 +414,25 @@ If TAB-ID is already visible, collapse it (toggle behavior)."
     (dolist (ov (overlays-in (point-min) (point-max)))
       (when (and (equal (overlay-get ov 'lexdb-tab-group) tab-group)
                  (equal (overlay-get ov 'lexdb-tab-id) tab-id)
+                 (overlay-get ov 'lexdb-tab-content)
                  (not (overlay-get ov 'invisible)))
         (setq is-visible t)))
     ;; Hide all content overlays in this group
     (dolist (ov (overlays-in (point-min) (point-max)))
-      (when (equal (overlay-get ov 'lexdb-tab-group) tab-group)
-        (overlay-put ov 'invisible t)))
-    ;; If not previously visible, show selected tab content
+      (when (and (equal (overlay-get ov 'lexdb-tab-group) tab-group)
+                 (overlay-get ov 'lexdb-tab-content))
+        (overlay-put ov 'invisible t)
+        (overlay-put ov 'face nil)))
+    ;; If not previously visible, show selected tab content with background
     (unless is-visible
       (dolist (ov (overlays-in (point-min) (point-max)))
         (when (and (equal (overlay-get ov 'lexdb-tab-group) tab-group)
-                   (equal (overlay-get ov 'lexdb-tab-id) tab-id))
-          (overlay-put ov 'invisible nil))))
+                   (equal (overlay-get ov 'lexdb-tab-id) tab-id)
+                   (overlay-get ov 'lexdb-tab-content))
+          (overlay-put ov 'invisible nil)
+          (let ((bg-color (face-background 'lexdb-tab-content-background-face nil t)))
+            (when bg-color
+              (overlay-put ov 'face `(:background ,bg-color :extend t)))))))
     ;; Update tab button faces
     (dolist (ov (overlays-in (point-min) (point-max)))
       (when (and (equal (overlay-get ov 'lexdb-tab-button-group) tab-group)
@@ -458,6 +477,7 @@ TABS is a list of (id label content) tuples."
         (let ((content-ov (make-overlay start (point))))
           (overlay-put content-ov 'lexdb-tab-group tab-group)
           (overlay-put content-ov 'lexdb-tab-id tab-id)
+          (overlay-put content-ov 'lexdb-tab-content t)  ; Mark as tab content
           (overlay-put content-ov 'invisible t)
           (overlay-put content-ov 'evaporate t))))
     (insert "\n")))
@@ -973,28 +993,37 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
       (setq first nil)
       (let* ((target (lexdb-relation-target rel))
              (raw-link (lexdb-relation-target-link rel))
-             ;; Extract word before # (e.g., "plan#hash..." -> "plan")
-             (word (when raw-link
-                     (if (string-match "\\`\\([^#]+\\)" raw-link)
-                         (match-string 1 raw-link)
-                       raw-link)))
-             ;; Extract sense number from _s followed by digits (e.g., "_s5" -> "5")
-             (sense-num (when raw-link
-                          (if (string-match "_s\\([0-9]+\\)" raw-link)
+             ;; Only process if link is non-empty
+             (has-link (and raw-link (not (string-empty-p raw-link))))
+             ;; Extract word before # (e.g., "beck#hash..." -> "beck")
+             (link-word (when has-link
+                          (if (string-match "\\`\\([^#]+\\)" raw-link)
                               (match-string 1 raw-link)
-                            nil))))
-        (if word
-            ;; Clickable link
-            (insert-text-button (if sense-num
-                                    (format "%s(%s)" target sense-num)
-                                  target)
-                                'face face
-                                'action (lambda (_)
-                                          (lexdb-search-and-goto-sense word sense-num))
-                                'help-echo (format "Look up: %s%s" word
-                                                   (if sense-num (format " sense %s" sense-num) "")))
-          ;; Plain text
-          (insert (propertize target 'face face)))))))
+                            raw-link)))
+             ;; Extract sense number from _s followed by digits (e.g., "_s1" -> "1")
+             (sense-num (when has-link
+                          (when (string-match "_s\\([0-9]+\\)" raw-link)
+                            (match-string 1 raw-link)))))
+        (if (and has-link link-word)
+            ;; Try to find where the clickable part starts
+            ;; Look for "at <link-word>" pattern at the end of target
+            (let* ((link-pattern (concat " at " (regexp-quote link-word)))
+                   (split-pos (when (string-match (concat link-pattern "\\([0-9]*\\)\\(([0-9]+)\\)?$") target)
+                                (match-beginning 0)))
+                   (prefix (if split-pos (substring target 0 split-pos) nil))
+                   (clickable-part (if split-pos (substring target split-pos) target)))
+              ;; Insert prefix in definition color (not clickable)
+              (when (and prefix (> (length prefix) 0))
+                (insert (propertize prefix 'face 'lexdb-definition-face)))
+              ;; Insert clickable part as button
+              (insert-text-button clickable-part
+                                  'face face
+                                  'action (lambda (_)
+                                            (lexdb-search-and-goto-sense link-word sense-num))
+                                  'help-echo (format "Look up: %s%s" link-word
+                                                     (if sense-num (format " sense %s" sense-num) ""))))
+          ;; No link - show as plain text
+          (insert (propertize target 'face 'lexdb-definition-face)))))))
 
 (defun lexdb-search-and-goto-sense (word &optional sense-num)
   "Search for WORD and optionally scroll to SENSE-NUM."
@@ -1104,22 +1133,28 @@ Displays as proper tables with borders."
   "Build content string for EXAMPLES tab.
 EXAMPLES is a list or vector of sections with header and examples."
   (with-temp-buffer
-    (let ((sections (if (vectorp examples) (append examples nil) examples)))
+    (let ((sections (if (vectorp examples) (append examples nil) examples))
+          (first-section t))
       (dolist (section sections)
         ;; Check if it's new format (with header) or old format (just strings)
         (if (and (listp section) (assoc 'header section))
             ;; New format with header
             (let ((header (cdr (assoc 'header section)))
                   (exs (cdr (assoc 'examples section))))
+              ;; Add blank line before section (except first)
+              (unless first-section
+                (insert "\n"))
+              (setq first-section nil)
+              ;; Section header
               (when header
-                (insert "  " (propertize header 'face 'lexdb-label-face) "\n"))
+                (insert (propertize (concat "  " header) 'face 'lexdb-tab-section-header-face) "\n"))
+              ;; Examples (no blank line after header)
               (let ((ex-list (if (vectorp exs) (append exs nil) exs)))
                 (dolist (ex ex-list)
                   (when (and ex (not (string-empty-p ex)))
                     (insert "    • ")
                     (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
-                    (insert "\n"))))
-              (insert "\n"))
+                    (insert "\n")))))
           ;; Old format (just string) - backward compatibility
           (when (and section (stringp section) (not (string-empty-p section)))
             (insert "  • ")
@@ -1132,19 +1167,24 @@ EXAMPLES is a list or vector of sections with header and examples."
 THESAURUS is a list of sections with header, section title, and exponent items."
   (with-temp-buffer
     (let ((sections (if (vectorp thesaurus) (append thesaurus nil) thesaurus))
-          (last-header ""))
+          (last-header "")
+          (first-section t))
       (dolist (section sections)
         (let ((header (cdr (assoc 'header section)))
               (sec-title (cdr (assoc 'section section)))
               (items (cdr (assoc 'items section))))
+          ;; Add blank line before section (except first)
+          (unless first-section
+            (insert "\n"))
+          (setq first-section nil)
           ;; Show header if changed (e.g., "Longman Language Activator", "WORD SETS")
           (when (and header (not (string= header last-header)))
             (setq last-header header)
-            (insert "  " (propertize header 'face 'lexdb-label-face) "\n"))
-          ;; Section title (e.g., "what you say to explain the most basic facts", "Computers")
+            (insert (propertize (concat "  " header) 'face 'lexdb-tab-section-header-face) "\n"))
+          ;; Section title (e.g., "what you say to explain the most basic facts")
           (when (and sec-title (not (string-empty-p sec-title)))
-            (insert "  " (propertize (upcase sec-title) 'face 'lexdb-signpost-face) "\n\n"))
-          ;; Items - check if they have definitions (thesaurus) or just word/pos (word sets)
+            (insert (propertize (concat "  " (upcase sec-title)) 'face 'lexdb-tab-section-header-face) "\n"))
+          ;; Items (no blank line after header)
           (let ((item-list (if (vectorp items) (append items nil) items)))
             (dolist (item item-list)
               (when (and (listp item) (assoc 'word item))
@@ -1176,8 +1216,7 @@ THESAURUS is a list of sections with header, section title, and exponent items."
                           (when (and ex (not (string-empty-p ex)))
                             (insert "      · ")
                             (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
-                            (insert "\n"))))
-                      (insert "\n"))
+                            (insert "\n")))))
                      ;; Just word/pos - word sets style (no ▶, compact list)
                      (word
                       (insert "      " (propertize word 'face 'lexdb-crossref-face))
@@ -1249,34 +1288,59 @@ WORD-FAMILY is a list of sections with header and groups (by POS)."
   "Build content string for ENTRY MENU tab.
 ENTRY-MENU is a list of sections with header and menu items."
   (with-temp-buffer
-    (let ((sections (if (vectorp entry-menu) (append entry-menu nil) entry-menu)))
+    (let ((sections (if (vectorp entry-menu) (append entry-menu nil) entry-menu))
+          (first-section t))
       (dolist (section sections)
         (let ((header (cdr (assoc 'header section)))
               (items (cdr (assoc 'items section))))
-          (when (and header (not (string-empty-p header)))
-            (insert "  " (propertize header 'face 'lexdb-label-face) "\n"))
-          (let ((item-list (if (vectorp items) (append items nil) items)))
+          ;; Check if section has any content
+          (let ((item-list (if (vectorp items) (append items nil) items))
+                (has-content nil))
+            ;; Check if there are valid items
             (dolist (item item-list)
               (let ((num (cdr (assoc 'number item)))
                     (label (cdr (assoc 'label item))))
-                (insert "    ")
-                (when num
-                  (insert (propertize num 'face 'lexdb-sense-num-face) " "))
-                (when label
-                  (insert (propertize label 'face 'lexdb-signpost-face)))
-                (insert "\n")))))))
+                (when (or num label)
+                  (setq has-content t))))
+            ;; Only render if has header or content
+            (when (or (and header (not (string-empty-p header))) has-content)
+              ;; Add blank line before section (except first)
+              (unless first-section
+                (insert "\n"))
+              (setq first-section nil)
+              ;; Section header
+              (when (and header (not (string-empty-p header)))
+                (insert (propertize (concat "  " header) 'face 'lexdb-tab-section-header-face) "\n"))
+              ;; Items (no blank line after header)
+              (dolist (item item-list)
+                (let ((num (cdr (assoc 'number item)))
+                      (label (cdr (assoc 'label item))))
+                  (when (or num label)
+                    (insert (propertize "    " 'face 'lexdb-definition-face))
+                    (when num
+                      (insert (propertize (concat num " ") 'face 'lexdb-sense-num-face)))
+                    (when label
+                      (insert (propertize label 'face 'lexdb-definition-face)))
+                    (insert "\n")))))))))
     (buffer-string)))
 
 (defun lexdb-ui--build-word-sets-content (word-sets)
   "Build content string for WORD SETS tab.
 WORD-SETS is a list of sections with header and items."
   (with-temp-buffer
-    (let ((sections (if (vectorp word-sets) (append word-sets nil) word-sets)))
+    (let ((sections (if (vectorp word-sets) (append word-sets nil) word-sets))
+          (first-section t))
       (dolist (section sections)
         (let ((header (cdr (assoc 'header section)))
               (items (cdr (assoc 'items section))))
+          ;; Add blank line before section (except first)
+          (unless first-section
+            (insert "\n"))
+          (setq first-section nil)
+          ;; Section header
           (when (and header (not (string-empty-p header)))
-            (insert "  " (propertize header 'face 'lexdb-label-face) "\n"))
+            (insert (propertize (concat "  " header) 'face 'lexdb-tab-section-header-face) "\n"))
+          ;; Items (no blank line after header)
           (let ((item-list (if (vectorp items) (append items nil) items)))
             (dolist (item item-list)
               (when (and item (not (string-empty-p item)))
@@ -1287,12 +1351,19 @@ WORD-SETS is a list of sections with header and items."
   "Build content string for popup collocations.
 POPUP-COLLS is a list of sections with header and collocation items."
   (with-temp-buffer
-    (let ((sections (if (vectorp popup-colls) (append popup-colls nil) popup-colls)))
+    (let ((sections (if (vectorp popup-colls) (append popup-colls nil) popup-colls))
+          (first-section t))
       (dolist (section sections)
         (let ((header (cdr (assoc 'header section)))
               (items (cdr (assoc 'items section))))
+          ;; Add blank line before section (except first)
+          (unless first-section
+            (insert "\n"))
+          (setq first-section nil)
+          ;; Section header
           (when (and header (not (string-empty-p header)))
-            (insert "  " (propertize header 'face 'lexdb-label-face) "\n\n"))
+            (insert (propertize (concat "  " header) 'face 'lexdb-tab-section-header-face) "\n"))
+          ;; Items (no blank line after header)
           (let ((item-list (if (vectorp items) (append items nil) items)))
             (dolist (item item-list)
               (let ((text (cdr (assoc 'text item)))
@@ -1309,12 +1380,19 @@ POPUP-COLLS is a list of sections with header and collocation items."
   "Build content string for popup phrases.
 POPUP-PHRASES is a list of sections with header and phrase items."
   (with-temp-buffer
-    (let ((sections (if (vectorp popup-phrases) (append popup-phrases nil) popup-phrases)))
+    (let ((sections (if (vectorp popup-phrases) (append popup-phrases nil) popup-phrases))
+          (first-section t))
       (dolist (section sections)
         (let ((header (cdr (assoc 'header section)))
               (items (cdr (assoc 'items section))))
+          ;; Add blank line before section (except first)
+          (unless first-section
+            (insert "\n"))
+          (setq first-section nil)
+          ;; Section header
           (when (and header (not (string-empty-p header)))
-            (insert "  " (propertize header 'face 'lexdb-label-face) "\n\n"))
+            (insert (propertize (concat "  " header) 'face 'lexdb-tab-section-header-face) "\n"))
+          ;; Items (no blank line after header)
           (let ((item-list (if (vectorp items) (append items nil) items)))
             (dolist (item item-list)
               (let ((text (cdr (assoc 'text item)))
@@ -1373,7 +1451,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                   (insert (propertize number 'face 'lexdb-sense-num-face) " "))
                 (when (and lexunit (not (string-empty-p lexunit)))
                   (insert (propertize lexunit 'face 'lexdb-phrasal-verb-lexunit-face) " "))
-                ;; Labels (geo, register, syn)
+                ;; Labels - geo and register BEFORE definition
                 (dolist (label labels)
                   (let ((ltype (cdr (assoc 'type label)))
                         (lvalue (cdr (assoc 'value label))))
@@ -1382,13 +1460,23 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                        ((string= ltype "geo")
                         (insert (propertize lvalue 'face 'lexdb-geo-face) " "))
                        ((string= ltype "register")
-                        (insert (propertize lvalue 'face 'lexdb-register-face) " "))
-                       ((string= ltype "syn")
-                        (insert (propertize "SYN " 'face 'lexdb-label-face)
-                                (propertize lvalue 'face 'lexdb-synonym-face) " "))))))
+                        (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
                 ;; Definition
                 (when definition
                   (insert (propertize definition 'face 'lexdb-definition-face)))
+                ;; SYN label AFTER definition
+                (dolist (label labels)
+                  (let ((ltype (cdr (assoc 'type label)))
+                        (lvalue (cdr (assoc 'value label))))
+                    (when (and lvalue (string= ltype "syn"))
+                      (insert " " (propertize "SYN " 'face 'lexdb-synonym-face)
+                              (propertize lvalue 'face 'lexdb-synonym-face)))))
+                ;; Related word reference AFTER definition (e.g., "→ call-up")
+                (dolist (label labels)
+                  (let ((ltype (cdr (assoc 'type label)))
+                        (lvalue (cdr (assoc 'value label))))
+                    (when (and lvalue (string= ltype "related"))
+                      (insert " " (propertize lvalue 'face 'lexdb-crossref-face)))))
                 (insert "\n")
                 ;; Examples
                 (dolist (ex examples)
@@ -1399,7 +1487,8 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 (defun lexdb-ui--build-collocations-content (collocations)
   "Build content string for COLLOCATIONS tab."
   (with-temp-buffer
-    (let ((current-category nil))
+    (let ((current-category nil)
+          (first-category t))
       (dolist (coll collocations)
         (let ((category (lexdb-collocation-category coll))
               (text (lexdb-collocation-text coll))
@@ -1409,9 +1498,12 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
           (when (and (lexdb-ui--non-empty-string-p category)
                      (not (equal category current-category)))
             (setq current-category category)
-            (when (> (point) 1) (insert "\n"))  ; blank line before new category
-            (insert (propertize (concat "  ▸ " (upcase category))
-                                'face 'lexdb-collocation-category-face))
+            ;; Add blank line before category (except first)
+            (unless first-category
+              (insert "\n"))
+            (setq first-category nil)
+            (insert (propertize (concat "  " (upcase category))
+                                'face 'lexdb-tab-section-header-face))
             (insert "\n"))
           ;; Collocation word
           (when (lexdb-ui--non-empty-string-p text)
@@ -1565,30 +1657,38 @@ Adapter can provide optional hooks for custom rendering."
                       ;; Pattern header (e.g., "on a day")
                       (when (and pattern (not (string-empty-p pattern)))
                         (insert "  " (propertize pattern 'face 'lexdb-lexunit-face) "\n"))
-                      ;; Main text
-                      (when text
-                        (let* ((main-text (if (string-match "\\(.*?\\)\\(·\\|✗\\)" text)
-                                              (string-trim (match-string 1 text))
-                                            text)))
-                          (insert "  ")
-                          (if (and expr (not (string-empty-p expr)) main-text)
-                              (let ((expr-pos (string-match (regexp-quote expr) main-text)))
-                                (if expr-pos
-                                    (progn
-                                      (insert (propertize (substring main-text 0 expr-pos) 'face 'lexdb-definition-face))
-                                      (insert (propertize expr 'face 'lexdb-grambox-expr-face))
-                                      (insert (propertize (substring main-text (+ expr-pos (length expr))) 'face 'lexdb-definition-face)))
-                                  (insert (propertize main-text 'face 'lexdb-definition-face))))
-                            (insert (propertize main-text 'face 'lexdb-definition-face)))
-                          (insert "\n")))
-                      ;; Good example
-                      (when (and example (not (string-empty-p example)))
-                        (insert "    " (propertize "· " 'face 'lexdb-definition-face)
-                                (propertize example 'face 'lexdb-example-face) "\n"))
-                      ;; Bad example
-                      (when (and bad-example (not (string-empty-p bad-example)))
-                        (insert "    " (propertize "✗ Don't say: " 'face 'lexdb-bad-example-face)
-                                (propertize bad-example 'face 'lexdb-bad-example-face) "\n"))))))
+                      ;; Main text - for entry-level grambox, text contains everything
+                      ;; If we have separate example/bad_example, use those; otherwise show full text
+                      (cond
+                       ;; Have separate fields - extract main part and show examples separately
+                       ((or (and example (not (string-empty-p example)))
+                            (and bad-example (not (string-empty-p bad-example))))
+                        (when text
+                          (let* ((main-text (if (string-match "\\(.*?\\)\\( · \\| ✗\\)" text)
+                                                (string-trim (match-string 1 text))
+                                              text)))
+                            (insert "  ")
+                            (if (and expr (not (string-empty-p expr)) main-text)
+                                (let ((expr-pos (string-match (regexp-quote expr) main-text)))
+                                  (if expr-pos
+                                      (progn
+                                        (insert (propertize (substring main-text 0 expr-pos) 'face 'lexdb-definition-face))
+                                        (insert (propertize expr 'face 'lexdb-grambox-expr-face))
+                                        (insert (propertize (substring main-text (+ expr-pos (length expr))) 'face 'lexdb-definition-face)))
+                                    (insert (propertize main-text 'face 'lexdb-definition-face))))
+                              (insert (propertize main-text 'face 'lexdb-definition-face)))
+                            (insert "\n")))
+                        ;; Good example
+                        (when (and example (not (string-empty-p example)))
+                          (insert "    " (propertize "· " 'face 'lexdb-definition-face)
+                                  (propertize example 'face 'lexdb-example-face) "\n"))
+                        ;; Bad example
+                        (when (and bad-example (not (string-empty-p bad-example)))
+                          (insert "    " (propertize "✗ Don't say: " 'face 'lexdb-bad-example-face)
+                                  (propertize bad-example 'face 'lexdb-bad-example-face) "\n")))
+                       ;; No separate fields - show full text as-is
+                       (text
+                        (insert "  " (propertize text 'face 'lexdb-definition-face) "\n")))))))
               ;; Create overlay for background
               (when (> (point) grambox-start)
                 (let ((ov (make-overlay grambox-start (point))))

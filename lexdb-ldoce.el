@@ -177,6 +177,16 @@ Only returns relations where sense_id IS NULL."
                          :target-link (when (lexdb-ldoce--non-empty-string-p link) link)))))
                   rows))))
 
+(defun lexdb-ldoce--decompress-json (compressed-data)
+  "Decompress zlib-compressed JSON data."
+  (let ((decompressed
+         (with-temp-buffer
+           (set-buffer-multibyte nil)
+           (insert compressed-data)
+           (zlib-decompress-region (point-min) (point-max))
+           (buffer-string))))
+    (json-read-from-string (decode-coding-string decompressed 'utf-8))))
+
 (defun lexdb-ldoce--v2-fetch-attributes (entry-id db)
   "Fetch EAV attributes for ENTRY-ID from V2 schema."
   (let ((rows (sqlite-select db
@@ -187,6 +197,7 @@ Only returns relations where sense_id IS NULL."
                 (cons (intern key)
                       (pcase type
                         ("json" (json-read-from-string value))
+                        ("json.gz" (lexdb-ldoce--decompress-json value))
                         ("integer" (string-to-number value))
                         ("boolean" (not (equal value "0")))
                         (_ value)))))

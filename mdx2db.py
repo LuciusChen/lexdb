@@ -338,8 +338,20 @@ class LDOCEParser:
             if hwd:
                 entry['headword'] = clean_text(hwd.get_text())
 
+            # Homograph number (e.g., call1, call2)
+            homnum = entryhead.find(class_='homnum')
+            if homnum:
+                num = clean_text(homnum.get_text())
+                if num:
+                    entry['attributes']['homnum'] = num
+                    # Append to headword for display
+                    entry['headword'] = entry['headword'] + num
+
             # Syllable division
             entry['headword_display'] = parse_hyphenation(entryhead)
+            # If we have homnum, append it to display too
+            if entry['attributes'].get('homnum'):
+                entry['headword_display'] = entry['headword_display'] + entry['attributes']['homnum']
 
             # Part of speech
             pos = None
@@ -556,11 +568,25 @@ class LDOCEParser:
             subsenses = sense.find_all(class_='subsense')
             if subsenses:
                 # Has subsenses - parse each one
-                # First get any lexunit that applies to all subsenses
+                # First get the main definition (def or lexunit)
+                defi = sense.find(class_='def', recursive=False)
+                if not defi:
+                    # Try finding def that's not inside a subsense
+                    for d in sense.find_all(class_='def'):
+                        if not d.find_parent(class_='subsense'):
+                            defi = d
+                            break
+                if defi:
+                    sense_data['definition'] = clean_text(defi.get_text())
+
+                # Also check for lexunit that applies to all subsenses
                 lexunit = sense.find(class_='lexunit', recursive=False)
                 lexunit_text = clean_text(lexunit.get_text()) if lexunit else ''
                 if lexunit_text:
-                    sense_data['definition'] = lexunit_text
+                    if sense_data['definition']:
+                        sense_data['definition'] = lexunit_text + ': ' + sense_data['definition']
+                    else:
+                        sense_data['definition'] = lexunit_text
 
                 for subsense in subsenses:
                     sub_data = {
@@ -586,6 +612,11 @@ class LDOCEParser:
                         if reg_text:
                             sub_data['labels'].append({'type': 'register', 'value': reg_text})
 
+                    # Subsense grammar label
+                    sub_gram = subsense.find(class_='gram')
+                    if sub_gram:
+                        sub_data['labels'].append({'type': 'grammar', 'value': clean_text(sub_gram.get_text())})
+
                     # Subsense examples
                     for ex in subsense.find_all(class_='example'):
                         ex_text = clean_text(ex.get_text())
@@ -601,11 +632,30 @@ class LDOCEParser:
 
                     if sub_data['definition']:
                         sense_data['subsenses'].append(sub_data)
+
+                # If no main definition but has subsenses, use signpost or first subsense def as placeholder
+                if not sense_data['definition'] and sense_data['subsenses']:
+                    # Use signpost if available
+                    if sense_data['signpost']:
+                        sense_data['definition'] = f"[{sense_data['signpost']}]"
+                    else:
+                        # Use first subsense definition as main
+                        sense_data['definition'] = sense_data['subsenses'][0]['definition']
             else:
                 # No subsenses - regular definition parsing
                 defi = sense.find(class_='def')
                 if defi:
                     sense_data['definition'] = clean_text(defi.get_text())
+
+                # Fullform for abbreviations (e.g., "CALL" -> "computer-assisted language learning")
+                fullform = sense.find(class_='fullform')
+                if fullform:
+                    fullform_text = clean_text(fullform.get_text())
+                    if fullform_text:
+                        if sense_data['definition']:
+                            sense_data['definition'] = fullform_text + ' ' + sense_data['definition']
+                        else:
+                            sense_data['definition'] = fullform_text
 
                 # Lexunit prefix
                 lexunit = sense.find(class_='lexunit')
@@ -651,8 +701,12 @@ class LDOCEParser:
             # Regular examples (not inside GramExa)
             ex_idx = 0
             for example in sense.find_all(class_='example', recursive=False):
-                # Skip if inside a GramExa
+                # Skip if inside a GramExa, grambox, or colloexa
                 if example.find_parent(class_='gramexa'):
+                    continue
+                if example.find_parent(class_='grambox'):
+                    continue
+                if example.find_parent(class_='colloexa'):
                     continue
                 ex_text = extract_highlighted_text(example)
                 audio_link = example.find('a', href=lambda h: h and h.startswith('sound://'))
@@ -669,9 +723,12 @@ class LDOCEParser:
 
             # Also check for examples that are direct children but might be missed
             for example in sense.find_all(class_='example'):
-                # Skip if already in gram_examples or has a gramexa parent
-                parent_gramexa = example.find_parent(class_='gramexa')
-                if parent_gramexa:
+                # Skip if already in gram_examples or has a gramexa/grambox/colloexa parent
+                if example.find_parent(class_='gramexa'):
+                    continue
+                if example.find_parent(class_='grambox'):
+                    continue
+                if example.find_parent(class_='colloexa'):
                     continue
                 ex_text = extract_highlighted_text(example)
                 # Check if already added
@@ -708,9 +765,130 @@ class LDOCEParser:
                             'link': target_word
                         })
 
+            # Lexunit (sub-phrase like "call a doctor/the police")
+            # Only get direct lexunits, not ones already processed for subsenses
+            for lexunit in sense.find_all(class_='lexunit', recursive=False):
+                lu_text = clean_text(lexunit.get_text())
+                if lu_text and lu_text != sense_data.get('definition', ''):
+                    # Find definition that follows this lexunit
+                    lu_def = ''
+                    next_sib = lexunit.find_next_sibling()
+                    while next_sib:
+                        if next_sib.get('class') and 'def' in next_sib.get('class', []):
+                            lu_def = clean_text(next_sib.get_text())
+                            break
+                        # Check if it's a text node with definition in parentheses
+                        if hasattr(next_sib, 'get_text'):
+                            text = clean_text(next_sib.get_text())
+                            if text.startswith('(=') or text.startswith('('):
+                                lu_def = text
+                                break
+                        next_sib = next_sib.find_next_sibling()
+
+                    if not sense_data.get('lexunits'):
+                        sense_data['lexunits'] = []
+                    sense_data['lexunits'].append({
+                        'text': lu_text,
+                        'definition': lu_def
+                    })
+
+            # Colloexa - collocation examples (similar to lexunit but with collo class)
+            # Structure: <span class="colloexa"><span class="collo">text</span><span class="gloss">def</span><span class="example">...</span></span>
+            for colloexa in sense.find_all(class_='colloexa'):
+                collo = colloexa.find(class_='collo')
+                if collo:
+                    collo_text = clean_text(collo.get_text())
+                    if collo_text:
+                        # Get gloss (definition)
+                        gloss = colloexa.find(class_='gloss')
+                        collo_def = clean_text(gloss.get_text()) if gloss else ''
+
+                        # Get examples
+                        collo_examples = []
+                        for ex in colloexa.find_all(class_='example'):
+                            ex_text = extract_highlighted_text(ex)
+                            if ex_text:
+                                # Get audio if available
+                                audio_link = ex.find('a', href=lambda h: h and h.startswith('sound://'))
+                                audio_path = audio_link.get('href', '').replace('sound://', '') if audio_link else ''
+                                collo_examples.append({
+                                    'text': ex_text,
+                                    'audio_path': audio_path
+                                })
+
+                        if not sense_data.get('lexunits'):
+                            sense_data['lexunits'] = []
+                        sense_data['lexunits'].append({
+                            'text': collo_text,
+                            'definition': collo_def,
+                            'examples': collo_examples
+                        })
+
+            # Grammar box (GRAMMAR section with usage notes)
+            grambox = sense.find(class_='grambox')
+            if grambox:
+                gram_data = {
+                    'heading': '',
+                    'notes': []
+                }
+                heading = grambox.find(class_='heading')
+                if heading:
+                    gram_data['heading'] = clean_text(heading.get_text())
+
+                # Parse explanation items
+                for expl in grambox.find_all(class_='expl'):
+                    note = {
+                        'text': '',
+                        'expr': '',
+                        'example': '',
+                        'bad_example': ''
+                    }
+                    # Main expression
+                    expr = expl.find(class_='expr')
+                    if expr:
+                        note['expr'] = clean_text(expr.get_text())
+
+                    # Get the explanation text (excluding nested elements)
+                    note['text'] = clean_text(expl.get_text())
+
+                    # Good example
+                    example = expl.find(class_='example')
+                    if example:
+                        note['example'] = clean_text(example.get_text()).lstrip('·').strip()
+
+                    # Bad example (what NOT to say)
+                    badexa = expl.find(class_='badexa')
+                    if badexa:
+                        note['bad_example'] = clean_text(badexa.get_text())
+
+                    gram_data['notes'].append(note)
+
+                sense_data['grambox'] = gram_data
+
             if sense_data['definition']:
                 sense_data['sort_order'] = idx
                 entry['senses'].append(sense_data)
+
+        # Collect sense-level data (lexunits, grambox) to entry attributes
+        # This allows storage in entry_attributes table
+        # Use sense number as key (e.g., "1", "2") for lookup in rendering
+        sense_lexunits = {}
+        sense_gramboxes = {}
+        for sense in entry['senses']:
+            # Use sense number (e.g., "1", "2"), fallback to sort_order+1 if no number
+            sense_num = sense.get('number')
+            if not sense_num:
+                sense_num = str(sense.get('sort_order', 0) + 1)  # Convert 0-based to 1-based
+
+            if sense.get('lexunits'):
+                sense_lexunits[sense_num] = sense['lexunits']
+            if sense.get('grambox'):
+                sense_gramboxes[sense_num] = sense['grambox']
+
+        if sense_lexunits:
+            entry['attributes']['sense_lexunits'] = sense_lexunits
+        if sense_gramboxes:
+            entry['attributes']['sense_gramboxes'] = sense_gramboxes
 
         # === Phrasal Verbs ===
         phrasal_verbs = []
@@ -751,8 +929,11 @@ class LDOCEParser:
                 if def_elem:
                     phrv_sense['definition'] = clean_text(def_elem.get_text())
 
-                # Labels (register, geo, etc.)
+                # Labels (register, geo, etc.) - exclude those inside amequiv
                 for geo in sense.find_all(class_='geo'):
+                    # Skip if inside amequiv (American English equivalent)
+                    if geo.find_parent(class_='amequiv'):
+                        continue
                     geo_text = clean_text(geo.get_text())
                     if geo_text:
                         phrv_sense['labels'].append({'type': 'geo', 'value': geo_text})
@@ -762,7 +943,7 @@ class LDOCEParser:
                     if reg_text:
                         phrv_sense['labels'].append({'type': 'register', 'value': reg_text})
 
-                # Synonym
+                # Synonym - check both 'syn' class and 'amequiv' class
                 syn = sense.find(class_='syn')
                 if syn:
                     synopp = syn.find(class_='synopp')
@@ -771,11 +952,39 @@ class LDOCEParser:
                         if syn_word:
                             phrv_sense['labels'].append({'type': 'syn', 'value': syn_word})
 
+                # American English equivalent (e.g., "SYN draft American English")
+                amequiv = sense.find(class_='amequiv')
+                if amequiv:
+                    synopp = amequiv.find(class_='synopp')
+                    geo = amequiv.find(class_='geo')
+                    if synopp:
+                        # Get the synonym word (text between synopp and geo)
+                        syn_word = clean_text(amequiv.get_text())
+                        # Remove "SYN" prefix
+                        syn_word = syn_word.replace(clean_text(synopp.get_text()), '').strip()
+                        # Remove geo suffix if present
+                        if geo:
+                            geo_text = clean_text(geo.get_text())
+                            syn_word = syn_word.replace(geo_text, '').strip()
+                        if syn_word:
+                            # Format: "draft American English" or just "draft"
+                            if geo:
+                                phrv_sense['labels'].append({'type': 'syn', 'value': f"{syn_word} {geo_text}"})
+                            else:
+                                phrv_sense['labels'].append({'type': 'syn', 'value': syn_word})
+
                 # Examples
                 for ex in sense.find_all(class_='example'):
                     ex_text = clean_text(ex.get_text())
                     if ex_text:
                         phrv_sense['examples'].append(ex_text)
+
+                # Related word reference (e.g., "→ call-up")
+                relatedwd = sense.find(class_='relatedwd')
+                if relatedwd:
+                    related_text = clean_text(relatedwd.get_text())
+                    if related_text:
+                        phrv_sense['labels'].append({'type': 'related', 'value': related_text})
 
                 # Grammar examples (propformprep patterns)
                 for gramexa in sense.find_all(class_='gramexa'):
@@ -801,6 +1010,87 @@ class LDOCEParser:
         # NOTE: Phrases are parsed from popup sections, not directly from entry
         # (All phrases are inside popup containers in LDOCE)
 
+        # === Entry-level Grammar Box (e.g., "GRAMMAR: Patterns with day") ===
+        # These are gramboxes NOT inside any sense (usually in .tail section)
+        entry_gramboxes = []
+        for grambox in soup.find_all(class_='grambox'):
+            # Skip if inside a sense (those are handled separately)
+            if grambox.find_parent(class_='sense'):
+                continue
+
+            gram_data = {
+                'heading': '',
+                'notes': []
+            }
+            heading = grambox.find(class_='heading')
+            if heading:
+                gram_data['heading'] = clean_text(heading.get_text())
+
+            # Parse compareword items (for "Patterns with X" style)
+            for compareword in grambox.find_all(class_='compareword'):
+                note = {
+                    'text': '',
+                    'expr': '',
+                    'example': '',
+                    'bad_example': '',
+                    'pattern': ''  # e.g., "on a day"
+                }
+
+                # Pattern display (e.g., "on a day")
+                exp_display = compareword.find(class_='exp')
+                if exp_display:
+                    note['pattern'] = clean_text(exp_display.get_text())
+
+                # Explanation
+                expl = compareword.find(class_='expl')
+                if expl:
+                    note['text'] = clean_text(expl.get_text())
+                    # Expression to highlight
+                    expr = expl.find(class_='expr')
+                    if expr:
+                        note['expr'] = clean_text(expr.get_text())
+                    # Good example
+                    example = expl.find(class_='example')
+                    if example:
+                        note['example'] = clean_text(example.get_text()).lstrip('·').strip()
+                    # Bad example
+                    badexa = expl.find(class_='badexa')
+                    if badexa:
+                        note['bad_example'] = clean_text(badexa.get_text())
+
+                if note['text'] or note['pattern']:
+                    gram_data['notes'].append(note)
+
+            # Also parse regular expl items (for standard GRAMMAR style)
+            for expl in grambox.find_all(class_='expl', recursive=False):
+                # Skip if already processed as part of compareword
+                if expl.find_parent(class_='compareword'):
+                    continue
+                note = {
+                    'text': clean_text(expl.get_text()),
+                    'expr': '',
+                    'example': '',
+                    'bad_example': ''
+                }
+                expr = expl.find(class_='expr')
+                if expr:
+                    note['expr'] = clean_text(expr.get_text())
+                example = expl.find(class_='example')
+                if example:
+                    note['example'] = clean_text(example.get_text()).lstrip('·').strip()
+                badexa = expl.find(class_='badexa')
+                if badexa:
+                    note['bad_example'] = clean_text(badexa.get_text())
+
+                if note['text']:
+                    gram_data['notes'].append(note)
+
+            if gram_data['heading'] or gram_data['notes']:
+                entry_gramboxes.append(gram_data)
+
+        if entry_gramboxes:
+            entry['attributes']['entry_gramboxes'] = entry_gramboxes
+
         # === Cross references (only with valid links) ===
         cross_refs_dict = {}  # text -> link
 
@@ -824,20 +1114,80 @@ class LDOCEParser:
                 if ref_text and ref_link and ref_text not in cross_refs_dict:
                     cross_refs_dict[ref_text] = ref_link
 
+        # Parse crossref sections - handle reflex + link combinations
         for crossref in soup.find_all(class_='crossref'):
-            for ref in crossref.find_all(class_='refhwd'):
-                ref_text = clean_text(ref.get_text())
-                ref_link = extract_ref_link(ref)
-                # Only add if has valid link
-                if ref_text and ref_link and ref_text not in cross_refs_dict:
-                    cross_refs_dict[ref_text] = ref_link
+            # Process children in order to properly associate reflex with following link
+            children = list(crossref.children)
+            i = 0
+            while i < len(children):
+                child = children[i]
+                if hasattr(child, 'get') and 'reflex' in (child.get('class') or []):
+                    # Found a reflex - get its text
+                    reflex_text = clean_text(child.get_text())
+                    # Look for following <a> tag
+                    link_text = ''
+                    link_href = ''
+                    # Check next siblings for <a> tag
+                    j = i + 1
+                    while j < len(children):
+                        next_child = children[j]
+                        if hasattr(next_child, 'name') and next_child.name == 'a':
+                            # Found the associated link
+                            refhwd = next_child.find(class_='refhwd')
+                            if refhwd:
+                                link_text = clean_text(refhwd.get_text())
+                            homnum = next_child.find(class_='refhomnum')
+                            sensenum = next_child.find(class_='refsensenum')
+                            if homnum:
+                                link_text += clean_text(homnum.get_text())
+                            if sensenum:
+                                link_text += clean_text(sensenum.get_text())
+                            link_href = extract_ref_link(next_child) or ''
+                            break
+                        elif hasattr(next_child, 'get') and 'reflex' in (next_child.get('class') or []):
+                            # Hit another reflex, stop looking
+                            break
+                        j += 1
 
-        for ref_text, ref_link in cross_refs_dict.items():
-            entry['relations'].append({
-                'type': 'cross_ref',
-                'target': ref_text,
-                'link': ref_link
-            })
+                    # Combine reflex text with link text
+                    if reflex_text:
+                        combined_text = reflex_text
+                        if link_text:
+                            combined_text += ' ' + link_text
+                        entry['relations'].append({
+                            'type': 'cross_ref',
+                            'target': combined_text.strip(),
+                            'link': link_href  # Link for navigation (may be empty)
+                        })
+                    i = j + 1 if link_href else i + 1
+                elif hasattr(child, 'name') and child.name == 'a':
+                    # Standalone link (not preceded by reflex)
+                    refhwd = child.find(class_='refhwd')
+                    if refhwd:
+                        standalone_text = clean_text(refhwd.get_text())
+                        homnum = child.find(class_='refhomnum')
+                        sensenum = child.find(class_='refsensenum')
+                        if homnum:
+                            standalone_text += clean_text(homnum.get_text())
+                        if sensenum:
+                            standalone_text += clean_text(sensenum.get_text())
+                        standalone_link = extract_ref_link(child) or ''
+                        if standalone_text and standalone_link:
+                            # Check if this was already added as part of a reflex combination
+                            already_added = any(
+                                r.get('link') == standalone_link
+                                for r in entry['relations']
+                                if r.get('type') == 'cross_ref'
+                            )
+                            if not already_added:
+                                entry['relations'].append({
+                                    'type': 'cross_ref',
+                                    'target': standalone_text,
+                                    'link': standalone_link
+                                })
+                    i += 1
+                else:
+                    i += 1
 
         # === Collocations ===
         # Method 1: Try collobox (traditional format)
@@ -1012,10 +1362,14 @@ class LDOCEParser:
                         num = item.find(class_='sensenum')
                         signpost = item.find(class_='signpost')
                         lexunit = item.find(class_='lexunit')
-                        menu_items.append({
-                            'number': clean_text(num.get_text()) if num else '',
-                            'label': clean_text(signpost.get_text()) if signpost else (clean_text(lexunit.get_text()) if lexunit else '')
-                        })
+                        num_text = clean_text(num.get_text()) if num else ''
+                        label_text = clean_text(signpost.get_text()) if signpost else (clean_text(lexunit.get_text()) if lexunit else '')
+                        # Only add if has number or label
+                        if num_text or label_text:
+                            menu_items.append({
+                                'number': num_text,
+                                'label': label_text
+                            })
                     if menu_items:
                         entry_menu.append({
                             'header': header_text,
@@ -1326,14 +1680,18 @@ class LexDBWriter:
 
     def write_entry(self, entry_data):
         """Write a single entry."""
+        # Generate headword_lower (strip trailing digits for homograph grouping)
+        headword = entry_data['headword']
+        headword_lower = re.sub(r'\d+$', '', headword).lower()
+
         # Insert entry
         self.cursor.execute("""
             INSERT INTO entries (dict_id, headword, headword_lower, headword_display)
             VALUES (?, ?, ?, ?)
         """, (
             self.dict_id,
-            entry_data['headword'],
-            entry_data['headword'].lower(),
+            headword,
+            headword_lower,
             entry_data.get('headword_display') or None
         ))
         entry_id = self.cursor.lastrowid
@@ -1509,8 +1867,17 @@ class LexDBWriter:
                     attr_type = 'integer'
                     attr_value = str(value)
                 elif isinstance(value, (dict, list)):
-                    attr_type = 'json'
-                    attr_value = json.dumps(value, ensure_ascii=False)
+                    # Compact JSON (no extra whitespace)
+                    json_str = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+                    # Compress large JSON with zlib
+                    if len(json_str) > 1000:
+                        import zlib
+                        compressed = zlib.compress(json_str.encode('utf-8'), level=9)
+                        attr_type = 'json.gz'
+                        attr_value = compressed  # Store as BLOB
+                    else:
+                        attr_type = 'json'
+                        attr_value = json_str
                 else:
                     attr_type = 'text'
                     attr_value = str(value)
@@ -1532,14 +1899,24 @@ class LexDBWriter:
         if self.conn:
             self.conn.commit()
 
-    def close(self):
-        """Close connection and update entry count."""
+    def close(self, vacuum=True):
+        """Close connection and update entry count.
+        If vacuum is True, optimize and compress the database."""
         if self.conn:
             # Update entry count
             self.cursor.execute("""
                 UPDATE dictionaries SET entry_count = ? WHERE dict_id = ?
             """, (self.entry_count, self.dict_id))
             self.conn.commit()
+
+            if vacuum:
+                print("Optimizing database...")
+                # Analyze for query optimization
+                self.cursor.execute("ANALYZE")
+                # Vacuum to reclaim space and defragment
+                self.cursor.execute("VACUUM")
+                print("Database optimized and compressed")
+
             self.conn.close()
             self.conn = None
             self.cursor = None
@@ -1588,24 +1965,52 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
     # Extract audio if requested
     audio_dir = None
     if extract_audio:
-        mdd_file = mdx_path.with_suffix('.mdd')
-        if mdd_file.exists():
+        # Find all MDD files: name.mdd, name_1.mdd, name.1.mdd, name_2.mdd, name.2.mdd, etc.
+        mdd_files = []
+        base_mdd = mdx_path.with_suffix('.mdd')
+        if base_mdd.exists():
+            mdd_files.append(base_mdd)
+
+        # Look for numbered MDD files (both formats: name_1.mdd and name.1.mdd)
+        stem = mdx_path.stem
+        parent = mdx_path.parent
+        for i in range(1, 20):  # Check up to 19
+            # Try underscore format: name_1.mdd
+            numbered_mdd_underscore = parent / f"{stem}_{i}.mdd"
+            # Try dot format: name.1.mdd
+            numbered_mdd_dot = parent / f"{stem}.{i}.mdd"
+
+            if numbered_mdd_underscore.exists():
+                mdd_files.append(numbered_mdd_underscore)
+            elif numbered_mdd_dot.exists():
+                mdd_files.append(numbered_mdd_dot)
+            else:
+                break  # Stop if neither format found
+
+        if mdd_files:
             audio_dir = mdx_path.parent / 'audio'
             audio_dir.mkdir(exist_ok=True)
             print(f"Extracting audio to: {audio_dir}")
-            mdd = MDD(str(mdd_file))
-            for key, data in mdd.items():
-                if isinstance(key, bytes):
-                    key = key.decode('utf-8', errors='ignore')
-                # Normalize path separators: backslash to forward slash, strip leading slash
-                key = key.replace('\\', '/').lstrip('/')
-                out_path = audio_dir / key
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(out_path, 'wb') as f:
-                    f.write(data)
+            print(f"Found {len(mdd_files)} MDD file(s): {[f.name for f in mdd_files]}")
+
+            for mdd_file in mdd_files:
+                print(f"  Processing: {mdd_file.name}")
+                mdd = MDD(str(mdd_file))
+                file_count = 0
+                for key, data in mdd.items():
+                    if isinstance(key, bytes):
+                        key = key.decode('utf-8', errors='ignore')
+                    # Normalize path separators: backslash to forward slash, strip leading slash
+                    key = key.replace('\\', '/').lstrip('/')
+                    out_path = audio_dir / key
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(out_path, 'wb') as f:
+                        f.write(data)
+                    file_count += 1
+                print(f"    Extracted {file_count} files")
             print("Audio extraction complete")
         else:
-            print(f"Warning: MDD file not found: {mdd_file}")
+            print(f"Warning: No MDD files found for: {mdx_path.stem}")
 
     # Create parser based on dictionary type
     if dict_type == 'ldoce':
@@ -1723,6 +2128,29 @@ WHERE e.headword_lower = 'apple' AND e.dict_id = 'ldoce';
 # Entry Point
 # ============================================================
 
+def vacuum_database(db_path):
+    """Optimize and compress an existing database."""
+    import sqlite3
+    if not Path(db_path).exists():
+        print(f"Error: Database not found: {db_path}")
+        sys.exit(1)
+
+    print(f"Optimizing database: {db_path}")
+    original_size = Path(db_path).stat().st_size
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("ANALYZE")
+    cursor.execute("VACUUM")
+    conn.close()
+
+    new_size = Path(db_path).stat().st_size
+    saved = original_size - new_size
+    print(f"Original size: {original_size / 1024 / 1024:.2f} MB")
+    print(f"New size: {new_size / 1024 / 1024:.2f} MB")
+    print(f"Saved: {saved / 1024 / 1024:.2f} MB ({saved * 100 / original_size:.1f}%)")
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("""
@@ -1730,6 +2158,7 @@ Usage:
   python mdx2lexdb.py <mdx_file>
   python mdx2lexdb.py <mdx_file> --extract-audio
   python mdx2lexdb.py <mdx_file> -o <output_db_path>
+  python mdx2lexdb.py --vacuum <db_file>
 
 Dictionary types:
   ldoce     Longman Dictionary of Contemporary English (auto-detected)
@@ -1738,8 +2167,17 @@ Examples:
   python mdx2lexdb.py LDOCE6.mdx
   python mdx2lexdb.py LDOCE6.mdx --extract-audio
   python mdx2lexdb.py LDOCE6.mdx -o ~/dicts/ldoce.db
+  python mdx2lexdb.py --vacuum LDOCE6.db
 """)
         sys.exit(1)
+
+    # Check for vacuum command
+    if sys.argv[1] == '--vacuum':
+        if len(sys.argv) < 3:
+            print("Error: --vacuum requires a database path")
+            sys.exit(1)
+        vacuum_database(sys.argv[2])
+        sys.exit(0)
 
     mdx_file = sys.argv[1]
     extract_audio = '--extract-audio' in sys.argv
