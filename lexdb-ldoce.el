@@ -11,7 +11,18 @@
 ;; Adapter for Longman Dictionary of Contemporary English (LDOCE).
 ;; Supports both legacy schema (v1) and new LexDB schema (v2).
 ;;
-;; Usage:
+;; Usage (recommended - unified config):
+;;   (require 'lexdb-ldoce)
+;;   (setq lexdb-dictionaries
+;;         '((:id ldoce
+;;            :type ldoce
+;;            :name "Longman Dictionary"
+;;            :db-file "~/dicts/LDOCE6.db"
+;;            :audio-dir "~/dicts/ldoce-audio/"
+;;            :priority 1)))
+;;   (lexdb-init)
+;;
+;; Usage (legacy - still supported):
 ;;   (require 'lexdb-ldoce)
 ;;   (setq lexdb-ldoce-db-file "~/path/to/ldoce.db")
 ;;   (setq lexdb-ldoce-audio-directory "~/path/to/audio/")
@@ -148,33 +159,45 @@
 
 (defun lexdb-ldoce--v2-fetch-relations (entry-id db)
   "Fetch entry-level relations for ENTRY-ID from V2 schema.
-Only returns relations where sense_id IS NULL."
+Only returns relations where sense_id IS NULL.
+Uses fragment storage format: prefix + clickable + suffix."
   (let ((rows (sqlite-select db
-               "SELECT relation_type, target_text, target_link FROM relations WHERE entry_id = ? AND sense_id IS NULL ORDER BY sort_order"
+               "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE entry_id = ? AND sense_id IS NULL ORDER BY sort_order"
                (list entry-id))))
     (delq nil
           (mapcar (lambda (row)
-                    (pcase-let ((`(,rel-type ,target ,link) row))
-                      (when (lexdb-ldoce--non-empty-string-p target)
+                    (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
+                      (when (lexdb-ldoce--non-empty-string-p clickable)
                         (lexdb-relation-create
                          :type (intern rel-type)
-                         :target target
-                         :target-link (when (lexdb-ldoce--non-empty-string-p link) link)))))
+                         :prefix prefix
+                         :clickable clickable
+                         :suffix suffix
+                         :target-word target-word
+                         :target-sense target-sense
+                         ;; Legacy fields for compatibility
+                         :target (concat (or prefix "") clickable (or suffix ""))))))
                   rows))))
 
 (defun lexdb-ldoce--v2-fetch-sense-relations (sense-id db)
-  "Fetch sense-level relations for SENSE-ID from V2 schema."
+  "Fetch sense-level relations for SENSE-ID from V2 schema.
+Uses fragment storage format: prefix + clickable + suffix."
   (let ((rows (sqlite-select db
-               "SELECT relation_type, target_text, target_link FROM relations WHERE sense_id = ? ORDER BY sort_order"
+               "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE sense_id = ? ORDER BY sort_order"
                (list sense-id))))
     (delq nil
           (mapcar (lambda (row)
-                    (pcase-let ((`(,rel-type ,target ,link) row))
-                      (when (lexdb-ldoce--non-empty-string-p target)
+                    (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
+                      (when (lexdb-ldoce--non-empty-string-p clickable)
                         (lexdb-relation-create
                          :type (intern rel-type)
-                         :target target
-                         :target-link (when (lexdb-ldoce--non-empty-string-p link) link)))))
+                         :prefix prefix
+                         :clickable clickable
+                         :suffix suffix
+                         :target-word target-word
+                         :target-sense target-sense
+                         ;; Legacy fields for compatibility
+                         :target (concat (or prefix "") clickable (or suffix ""))))))
                   rows))))
 
 (defun lexdb-ldoce--decompress-json (compressed-data)
@@ -382,27 +405,52 @@ FREQ is the S1/W1 etc level text."
 ;;;; Registration
 ;;;; ============================================================
 
+(defun lexdb-ldoce--register-from-config (config)
+  "Register LDOCE adapter from CONFIG plist.
+Called by `lexdb-init' for unified configuration."
+  (let ((id (plist-get config :id))
+        (name (or (plist-get config :name)
+                  "Longman Dictionary of Contemporary English"))
+        (db-file (plist-get config :db-file))
+        (audio-dir (plist-get config :audio-dir)))
+    (unless db-file
+      (error "LDOCE config missing :db-file"))
+    ;; Set legacy variables for compatibility
+    (setq lexdb-ldoce-db-file (expand-file-name db-file))
+    (when audio-dir
+      (setq lexdb-ldoce-audio-directory (expand-file-name audio-dir)))
+    ;; Register adapter
+    (lexdb-register-adapter
+     (lexdb-adapter-create
+      :id id
+      :name name
+      :version "6th Edition"
+      :capabilities '(lookup definition pronunciation audio-uk audio-us audio-example
+                      pos grammar register hyphenation frequency-band
+                      examples collocations phrases synonyms cross-refs origin lemmatization)
+      :db-file lexdb-ldoce-db-file
+      :audio-dir lexdb-ldoce-audio-directory
+      :lookup-fn #'lexdb-ldoce--lookup
+      :close-fn #'lexdb-ldoce--close
+      :collocations-fn #'lexdb-ldoce--get-collocations
+      :relations-fn #'lexdb-ldoce--get-relations
+      :lemma-fn #'lexdb-ldoce--find-lemma
+      :prefetch-fn #'lexdb-ldoce--prefetch
+      :render-frequency-fn #'lexdb-ldoce--render-frequency))))
+
 ;;;###autoload
 (defun lexdb-ldoce-register ()
-  "Register LDOCE adapter."
+  "Register LDOCE adapter using legacy configuration variables.
+For new setups, prefer using `lexdb-dictionaries' and `lexdb-init'."
   (interactive)
-  (lexdb-register-adapter
-   (lexdb-adapter-create
-    :id 'ldoce
-    :name "Longman Dictionary of Contemporary English"
-    :version "6th Edition"
-    :capabilities '(lookup definition pronunciation audio-uk audio-us audio-example
-                    pos grammar register hyphenation frequency-band
-                    examples collocations phrases synonyms cross-refs origin lemmatization)
-    :db-file lexdb-ldoce-db-file
-    :audio-dir lexdb-ldoce-audio-directory
-    :lookup-fn #'lexdb-ldoce--lookup
-    :close-fn #'lexdb-ldoce--close
-    :collocations-fn #'lexdb-ldoce--get-collocations
-    :relations-fn #'lexdb-ldoce--get-relations
-    :lemma-fn #'lexdb-ldoce--find-lemma
-    :prefetch-fn #'lexdb-ldoce--prefetch
-    :render-frequency-fn #'lexdb-ldoce--render-frequency)))
+  (lexdb-ldoce--register-from-config
+   (list :id 'ldoce
+         :name "Longman Dictionary of Contemporary English"
+         :db-file lexdb-ldoce-db-file
+         :audio-dir lexdb-ldoce-audio-directory)))
+
+;; Register adapter type for unified config system
+(lexdb-register-adapter-type 'ldoce #'lexdb-ldoce--register-from-config)
 
 (provide 'lexdb-ldoce)
 ;;; lexdb-ldoce.el ends here

@@ -55,6 +55,99 @@ mpv is recommended as it supports both local files and URLs."
   :type 'string
   :group 'lexdb)
 
+(defcustom lexdb-dictionaries nil
+  "List of dictionary configurations.
+Each element is a plist with the following keys:
+
+  :id        - (required) Symbol identifying the dictionary (e.g., ldoce, oald)
+  :type      - (required) Dictionary type, must match a registered adapter type
+  :name      - Human-readable name (optional, defaults to type name)
+  :db-file   - Path to SQLite database file
+  :audio-dir - Path to audio files directory (optional)
+  :enabled   - Whether this dictionary is enabled (default t)
+  :priority  - Sort order, lower numbers shown first (default 100)
+
+Example:
+  (setq lexdb-dictionaries
+        \\='((:id ldoce
+           :type ldoce
+           :name \"Longman Dictionary\"
+           :db-file \"~/dicts/LDOCE6.db\"
+           :audio-dir \"~/dicts/ldoce-audio/\"
+           :priority 1)
+          (:id oald
+           :type oald
+           :name \"Oxford Advanced Learner's\"
+           :db-file \"~/dicts/OALD4_EC.db\"
+           :priority 2)))"
+  :type '(repeat plist)
+  :group 'lexdb)
+
+(defvar lexdb--adapter-types (make-hash-table :test 'eq)
+  "Hash table of adapter type registration functions.
+Key is type symbol, value is (register-fn . unregister-fn).")
+
+(defun lexdb-register-adapter-type (type register-fn &optional unregister-fn)
+  "Register adapter TYPE with REGISTER-FN and optional UNREGISTER-FN.
+REGISTER-FN takes a plist config and returns an adapter.
+This is called by adapter implementations (e.g., lexdb-ldoce.el)."
+  (puthash type (cons register-fn unregister-fn) lexdb--adapter-types))
+
+(defun lexdb-init ()
+  "Initialize all dictionaries from `lexdb-dictionaries'.
+Call this after setting up your dictionary configurations."
+  (interactive)
+  (unless lexdb-dictionaries
+    (user-error "No dictionaries configured. Set `lexdb-dictionaries' first"))
+  ;; Sort by priority
+  (let ((sorted-dicts (sort (copy-sequence lexdb-dictionaries)
+                            (lambda (a b)
+                              (< (or (plist-get a :priority) 100)
+                                 (or (plist-get b :priority) 100)))))
+        (registered 0)
+        (errors nil))
+    (dolist (config sorted-dicts)
+      (let* ((id (plist-get config :id))
+             (type (or (plist-get config :type) id))
+             (enabled (if (plist-member config :enabled)
+                          (plist-get config :enabled)
+                        t))
+             (type-info (gethash type lexdb--adapter-types)))
+        (cond
+         ((not enabled)
+          (message "Skipping disabled dictionary: %s" id))
+         ((not type-info)
+          (push (format "Unknown dictionary type: %s (for %s)" type id) errors))
+         (t
+          (condition-case err
+              (progn
+                (funcall (car type-info) config)
+                (cl-incf registered))
+            (error
+             (push (format "Failed to register %s: %s" id (error-message-string err))
+                   errors)))))))
+    ;; Set default adapter to first enabled dictionary
+    (unless lexdb-default-adapter
+      (when-let ((first-enabled (cl-find-if
+                                 (lambda (c)
+                                   (if (plist-member c :enabled)
+                                       (plist-get c :enabled)
+                                     t))
+                                 sorted-dicts)))
+        (setq lexdb-default-adapter (plist-get first-enabled :id))))
+    ;; Report results
+    (if errors
+        (progn
+          (message "Registered %d dictionaries with %d errors:" registered (length errors))
+          (dolist (err (nreverse errors))
+            (message "  - %s" err)))
+      (message "Registered %d dictionaries" registered))))
+
+(defun lexdb-get-dict-config (id)
+  "Get configuration plist for dictionary ID."
+  (cl-find-if (lambda (c) (eq (plist-get c :id) id))
+              lexdb-dictionaries))
+
 ;;;; ============================================================
 ;;;; Capability System
 ;;;; ============================================================
@@ -213,16 +306,35 @@ Keys should use namespace/key format (e.g., ldoce/frequency, oxford/cefr-level).
   (metadata nil :type alist))
 
 (cl-defstruct (lexdb-relation (:constructor lexdb-relation-create))
-  "A relationship to another word or phrase."
+  "A relationship to another word or phrase.
+Uses fragment storage for clean rendering: prefix + clickable + suffix."
   (type nil
         :type symbol
         :documentation "Relation type: synonym, antonym, phrase, cross-ref, etc.")
+  ;; Fragment fields for rendering
+  (prefix nil
+          :type (or string null)
+          :documentation "Non-clickable prefix (e.g., 'see THESAURUS at ')")
+  (clickable nil
+             :type string
+             :documentation "Clickable part (required)")
+  (suffix nil
+          :type (or string null)
+          :documentation "Non-clickable suffix (e.g., ' (v.)')")
+  ;; Navigation fields
+  (target-word nil
+               :type (or string null)
+               :documentation "Target word for navigation (lowercase)")
+  (target-sense nil
+                :type (or string null)
+                :documentation "Target sense number")
+  ;; Legacy fields (for backward compatibility)
   (target nil
-          :type string
-          :documentation "Target word or phrase (required)")
+          :type (or string null)
+          :documentation "Legacy: combined display text")
   (target-link nil
                :type (or string null)
-               :documentation "Link target word (for navigation)")
+               :documentation "Legacy: raw link target")
   (target-entry-id nil
                    :type (or integer null)
                    :documentation "ID of target entry if resolvable")
@@ -514,17 +626,22 @@ Returns list of lexdb-entry structs."
       (message "No history"))))
 
 (defun lexdb--search-without-history (word)
-  "Search for WORD without adding to history."
+  "Search for WORD without adding to history.
+Respects `lexdb-multi-dict-mode' setting."
   (require 'lexdb-ui)
-  (let* ((adapter-id (lexdb--ensure-adapter))
-         (adapter (lexdb-get-adapter adapter-id))
-         (entries (lexdb-lookup word adapter-id)))
-    (unless entries
-      (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-        (when-let ((lemma (lexdb-find-lemma word adapter-id)))
-          (unless (equal lemma (downcase word))
-            (setq entries (lexdb-lookup lemma adapter-id))))))
-    (lexdb-ui-display word entries adapter)))
+  (if lexdb-multi-dict-mode
+      ;; Multi-dictionary mode: use the same buffer, update all dicts
+      (lexdb-ui-display-multi word)
+    ;; Single dictionary mode
+    (let* ((adapter-id (lexdb--ensure-adapter))
+           (adapter (lexdb-get-adapter adapter-id))
+           (entries (lexdb-lookup word adapter-id)))
+      (unless entries
+        (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
+          (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+            (unless (equal lemma (downcase word))
+              (setq entries (lexdb-lookup lemma adapter-id))))))
+      (lexdb-ui-display word entries adapter))))
 
 (defun lexdb--ensure-adapter ()
   "Ensure an adapter is selected, return its ID."
@@ -544,28 +661,66 @@ Returns list of lexdb-entry structs."
 ;;;; ============================================================
 
 (declare-function lexdb-ui-display "lexdb-ui")
+(declare-function lexdb-ui-display-multi "lexdb-ui")
+
+(defcustom lexdb-multi-dict-mode t
+  "If non-nil, search all dictionaries and show with tabs.
+If nil, search only the current/default dictionary."
+  :type 'boolean
+  :group 'lexdb)
 
 ;;;###autoload
 (defun lexdb-search (word)
-  "Search for WORD in the current dictionary.
-Uses `lexdb-current-adapter' or `lexdb-default-adapter'."
+  "Search for WORD in dictionaries.
+If `lexdb-multi-dict-mode' is non-nil, search all enabled dictionaries.
+Otherwise, search only the current/default dictionary."
   (interactive
    (let ((default (thing-at-point 'word t)))
      (list (read-string
             (format "Lexdb%s: "
-                    (if lexdb-current-adapter
+                    (if (and (not lexdb-multi-dict-mode) lexdb-current-adapter)
                         (format " [%s]" lexdb-current-adapter)
                       ""))
             default))))
   (when (or (null word) (not (stringp word)) (string-empty-p word))
     (user-error "No word specified"))
   (setq lexdb--last-word word)
-  (lexdb--history-push word)  ; Add to history
+  (lexdb--history-push word)
+  (require 'lexdb-ui)
+  (if lexdb-multi-dict-mode
+      ;; Multi-dictionary mode
+      (lexdb-ui-display-multi word)
+    ;; Single dictionary mode
+    (let* ((adapter-id (lexdb--ensure-adapter))
+           (adapter (lexdb-get-adapter adapter-id))
+           (entries (lexdb-lookup word adapter-id)))
+      ;; Try lemmatization if no results
+      (unless entries
+        (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
+          (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+            (unless (equal lemma (downcase word))
+              (setq entries (lexdb-lookup lemma adapter-id))
+              (when entries
+                (setq word lemma))))))
+      (lexdb-ui-display word entries adapter))))
+
+;;;###autoload
+(defun lexdb-search-single (word)
+  "Search for WORD in current dictionary only (single-dict mode)."
+  (interactive
+   (let ((default (thing-at-point 'word t)))
+     (list (read-string
+            (format "Lexdb [%s]: "
+                    (or lexdb-current-adapter lexdb-default-adapter "?"))
+            default))))
+  (when (or (null word) (not (stringp word)) (string-empty-p word))
+    (user-error "No word specified"))
+  (setq lexdb--last-word word)
+  (lexdb--history-push word)
   (require 'lexdb-ui)
   (let* ((adapter-id (lexdb--ensure-adapter))
          (adapter (lexdb-get-adapter adapter-id))
          (entries (lexdb-lookup word adapter-id)))
-    ;; Try lemmatization if no results
     (unless entries
       (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
         (when-let ((lemma (lexdb-find-lemma word adapter-id)))

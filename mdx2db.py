@@ -26,12 +26,21 @@ import json
 from pathlib import Path
 from datetime import datetime
 from bs4 import BeautifulSoup, Tag
+import time
 
 try:
     from readmdict import MDX, MDD
 except ImportError:
     print("Please install dependencies first: pip install readmdict python-lzo beautifulsoup4")
     sys.exit(1)
+
+# Try to use lxml for faster parsing, fallback to html.parser
+try:
+    import lxml
+    HTML_PARSER = 'lxml'
+except ImportError:
+    HTML_PARSER = 'html.parser'
+    print("Note: Install lxml for faster parsing: pip install lxml")
 
 
 # ============================================================
@@ -117,14 +126,17 @@ CREATE TABLE IF NOT EXISTS labels (
 );
 
 -- Relations table (unified storage for phrase, synonym, antonym, cross_ref, etc.)
+-- Uses fragment storage: prefix + clickable + suffix for easy rendering
 CREATE TABLE IF NOT EXISTS relations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_id INTEGER NOT NULL,
     sense_id INTEGER,                   -- Optional: link to specific sense
     relation_type TEXT NOT NULL,        -- Type: phrase, synonym, antonym, cross_ref, inflection
-    target_text TEXT NOT NULL,          -- Display text (e.g., "room1(5)")
-    target_link TEXT,                   -- Link target (e.g., "room" extracted from href)
-    target_entry_id INTEGER,            -- Target entry ID (if resolvable)
+    prefix TEXT,                        -- Non-clickable prefix (e.g., "see THESAURUS at ")
+    clickable TEXT NOT NULL,            -- Clickable part (e.g., "PHONE")
+    suffix TEXT,                        -- Non-clickable suffix (e.g., " (v.)")
+    target_word TEXT NOT NULL,          -- Normalized target word (e.g., "phone")
+    target_sense TEXT,                  -- Target sense number (e.g., "1")
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
@@ -210,6 +222,65 @@ def clean_text(text):
     return re.sub(r'\s+', ' ', text).strip()
 
 
+def parse_link_target(link_href):
+    """Parse link href to extract target word and sense number.
+
+    Examples:
+        "phone#_s1" -> ("phone", "1")
+        "bank#hash_s2" -> ("bank", "2")
+        "mother" -> ("mother", None)
+        "entry://phone#_s1" -> ("phone", "1")
+
+    Returns:
+        (target_word, target_sense) tuple
+    """
+    if not link_href:
+        return (None, None)
+
+    # Remove entry:// prefix if present
+    href = link_href.replace('entry://', '')
+
+    # Split by # to get base word
+    parts = href.split('#', 1)
+    target_word = parts[0].lower() if parts[0] else None
+
+    # Extract sense number from hash part (e.g., "_s1", "hash_s2")
+    target_sense = None
+    if len(parts) > 1:
+        match = re.search(r'_s(\d+)', parts[1])
+        if match:
+            target_sense = match.group(1)
+
+    return (target_word, target_sense)
+
+
+def make_relation_fragments(prefix_text, clickable_text, suffix_text, link_href):
+    """Create a relation dict with fragment storage format.
+
+    Args:
+        prefix_text: Non-clickable prefix (e.g., "see THESAURUS at ")
+        clickable_text: Clickable part (e.g., "PHONE")
+        suffix_text: Non-clickable suffix (e.g., " (v.)")
+        link_href: Link target (e.g., "phone#_s1")
+
+    Returns:
+        dict with prefix, clickable, suffix, target_word, target_sense
+    """
+    target_word, target_sense = parse_link_target(link_href)
+
+    # Fallback: if no link, use clickable text as target word
+    if not target_word and clickable_text:
+        target_word = clickable_text.lower()
+
+    return {
+        'prefix': prefix_text.strip() + ' ' if prefix_text and prefix_text.strip() else None,
+        'clickable': clickable_text.strip() if clickable_text else '',
+        'suffix': ' ' + suffix_text.strip() if suffix_text and suffix_text.strip() else None,
+        'target_word': target_word or '',
+        'target_sense': target_sense
+    }
+
+
 def extract_highlighted_text(element):
     """Extract text with highlight markers for nodeword and colloinexa.
 
@@ -221,7 +292,7 @@ def extract_highlighted_text(element):
         return ""
 
     # Make a copy to avoid modifying original
-    elem_copy = BeautifulSoup(str(element), 'html.parser')
+    elem_copy = BeautifulSoup(str(element), HTML_PARSER)
 
     # Replace nodeword with markers
     for nodeword in elem_copy.find_all(class_='nodeword'):
@@ -242,7 +313,7 @@ def parse_hyphenation(element):
     if not hyph:
         return ''
 
-    hyph_copy = BeautifulSoup(str(hyph), 'html.parser').find(class_='hyphenation')
+    hyph_copy = BeautifulSoup(str(hyph), HTML_PARSER).find(class_='hyphenation')
     for hs in hyph_copy.find_all(class_=re.compile(r'^hs\d*$')):
         hs.replace_with('·')
 
@@ -294,7 +365,7 @@ class LDOCEParser:
 
     def parse(self, html, word_key):
         """Parse entry HTML, return list of structured entries (for homographs)."""
-        soup = BeautifulSoup(html, 'html.parser')
+        soup = BeautifulSoup(html, HTML_PARSER)
 
         # Find all entry divs (for homographs like swing1, swing2)
         entry_divs = soup.find_all(class_='entry')
@@ -467,12 +538,12 @@ class LDOCEParser:
                     if infl_word:
                         # Check if already added
                         existing = [r for r in entry['relations']
-                                   if r['type'] == 'inflection' and r['target'] == infl_word]
+                                   if r['type'] == 'inflection' and r.get('clickable') == infl_word]
                         if not existing:
+                            fragments = make_relation_fragments('', infl_word, '', infl_word)
                             entry['relations'].append({
                                 'type': 'inflection',
-                                'target': infl_word,
-                                'link': infl_word
+                                **fragments
                             })
 
         # === Pronunciation audio ===
@@ -563,6 +634,72 @@ class LDOCEParser:
                     'type': 'grammar',
                     'value': clean_text(gram.get_text())
                 })
+
+            # Register and geographic labels - parse in HTML order
+            # registerlab (e.g., "formal", "old-fashioned") and geo (e.g., "British English")
+            # These should appear in their original order in the dictionary
+            # Note: geo labels that are part of lexunit+variant pattern are handled separately
+            lexunit_elem = sense.find(class_='lexunit', recursive=False)
+            if not lexunit_elem:
+                for lu in sense.find_all(class_='lexunit'):
+                    if not lu.find_parent(class_='subsense'):
+                        lexunit_elem = lu
+                        break
+
+            for child in sense.children:
+                if not hasattr(child, 'get'):
+                    continue
+                classes = child.get('class') or []
+
+                if 'registerlab' in classes:
+                    reg_text = clean_text(child.get_text())
+                    if reg_text:
+                        sense_data['labels'].append({
+                            'type': 'register',
+                            'value': reg_text
+                        })
+                elif 'geo' in classes:
+                    # Skip if inside amequiv (will be handled separately)
+                    if child.find_parent(class_='amequiv'):
+                        continue
+                    # Skip if inside variant (handled in lexunit_prefix)
+                    if child.find_parent(class_='variant'):
+                        continue
+                    # Skip if this geo directly follows lexunit (handled in lexunit_prefix)
+                    if lexunit_elem:
+                        prev_sib = child.find_previous_sibling()
+                        if prev_sib and prev_sib == lexunit_elem:
+                            continue
+                    geo_text = clean_text(child.get_text())
+                    if geo_text:
+                        sense_data['labels'].append({
+                            'type': 'geo',
+                            'value': geo_text
+                        })
+
+            # American English equivalent (e.g., "SYN stuff American English")
+            # Structure: <span class="amequiv"><span class="synopp">SYN</span> stuff <span class="geo">American English</span></span>
+            for amequiv in sense.find_all(class_='amequiv'):
+                synopp = amequiv.find(class_='synopp')
+                geo = amequiv.find(class_='geo')
+                if synopp:
+                    # Get the synonym word (text content minus synopp and geo)
+                    full_text = clean_text(amequiv.get_text())
+                    synopp_text = clean_text(synopp.get_text())
+                    geo_text = clean_text(geo.get_text()) if geo else ''
+
+                    # Extract just the word
+                    syn_word = full_text.replace(synopp_text, '').replace(geo_text, '').strip()
+
+                    if syn_word:
+                        # Format: "SYN stuff American English"
+                        label_value = syn_word
+                        if geo_text:
+                            label_value = f"{syn_word} {geo_text}"
+                        sense_data['labels'].append({
+                            'type': 'syn',
+                            'value': label_value
+                        })
 
             # Check for subsenses first
             subsenses = sense.find_all(class_='subsense')
@@ -657,14 +794,62 @@ class LDOCEParser:
                         else:
                             sense_data['definition'] = fullform_text
 
-                # Lexunit prefix
-                lexunit = sense.find(class_='lexunit')
+                # Lexunit prefix (e.g., "from day to day")
+                lexunit = sense.find(class_='lexunit', recursive=False)
+                if not lexunit:
+                    # Try finding lexunit that's not inside a subsense
+                    for lu in sense.find_all(class_='lexunit'):
+                        if not lu.find_parent(class_='subsense'):
+                            lexunit = lu
+                            break
+
+                lexunit_text = ''
                 if lexunit:
-                    prefix = clean_text(lexunit.get_text())
-                    if prefix and sense_data['definition']:
-                        sense_data['definition'] = prefix + ': ' + sense_data['definition']
-                    elif prefix:
-                        sense_data['definition'] = prefix
+                    lexunit_text = clean_text(lexunit.get_text())
+
+                # Get geo label that directly follows lexunit (not inside variant or amequiv)
+                # Structure: <span class="lexunit">all round</span><span class="geo">British English</span>
+                lexunit_geo = ''
+                if lexunit:
+                    next_sib = lexunit.find_next_sibling()
+                    if next_sib and 'geo' in (next_sib.get('class') or []):
+                        lexunit_geo = clean_text(next_sib.get_text())
+
+                # Variant (e.g., ", all around American English")
+                # Structure: <span class="variant"><span class="neutral">,</span><span class="lexvar">all around</span><span class="geo">American English</span></span>
+                variant = sense.find(class_='variant', recursive=False)
+                if not variant:
+                    for v in sense.find_all(class_='variant'):
+                        if not v.find_parent(class_='subsense'):
+                            variant = v
+                            break
+
+                variant_text = ''
+                if variant:
+                    # Extract lexvar and its geo separately for proper formatting
+                    lexvar = variant.find(class_='lexvar')
+                    variant_geo = variant.find(class_='geo')
+                    if lexvar:
+                        variant_text = clean_text(lexvar.get_text())
+                        if variant_geo:
+                            variant_text += ' ' + clean_text(variant_geo.get_text())
+                    else:
+                        # Fallback to full text
+                        variant_text = clean_text(variant.get_text())
+
+                # Build lexunit_prefix: "all round British English, all around American English"
+                prefix_parts = []
+                if lexunit_text:
+                    if lexunit_geo:
+                        prefix_parts.append(lexunit_text + ' ' + lexunit_geo)
+                    else:
+                        prefix_parts.append(lexunit_text)
+                if variant_text:
+                    prefix_parts.append(variant_text)
+
+                if prefix_parts:
+                    sense_data['lexunit_prefix'] = ', '.join(prefix_parts)
+                # definition stays as-is (just the def text)
 
             # Grammar examples (GramExa with PROPFORM/PROPFORMPREP)
             for gramexa in sense.find_all(class_='gramexa'):
@@ -708,6 +893,8 @@ class LDOCEParser:
                     continue
                 if example.find_parent(class_='colloexa'):
                     continue
+                if example.find_parent(class_='f2nbox'):
+                    continue
                 ex_text = extract_highlighted_text(example)
                 audio_link = example.find('a', href=lambda h: h and h.startswith('sound://'))
                 audio_path = ''
@@ -723,12 +910,14 @@ class LDOCEParser:
 
             # Also check for examples that are direct children but might be missed
             for example in sense.find_all(class_='example'):
-                # Skip if already in gram_examples or has a gramexa/grambox/colloexa parent
+                # Skip if already in gram_examples or has a gramexa/grambox/colloexa/f2nbox parent
                 if example.find_parent(class_='gramexa'):
                     continue
                 if example.find_parent(class_='grambox'):
                     continue
                 if example.find_parent(class_='colloexa'):
+                    continue
+                if example.find_parent(class_='f2nbox'):
                     continue
                 ex_text = extract_highlighted_text(example)
                 # Check if already added
@@ -744,8 +933,110 @@ class LDOCEParser:
                     })
                     ex_idx += 1
 
-            # Cross references within sense (only with valid links)
+            # Cross references within sense - use fragment format
+            # Structure in LDOCE:
+            # Type 1: <span class="crossref">
+            #   <span class="neutral">→</span>
+            #   <a href="..."><span class="refhwd">word</span></a>
+            # </span>
+            # Type 2: <span class="crossref">
+            #   <span class="reflex">see THESAURUS at</span>
+            #   <a href="..."><span class="refhwd">THING</span></a>
+            # </span>
+            for crossref in sense.find_all(class_='crossref'):
+                children = list(crossref.children)
+                i = 0
+                current_prefix = ''
+
+                while i < len(children):
+                    child = children[i]
+
+                    # Check for neutral span with arrow (standalone → at start)
+                    if hasattr(child, 'get') and 'neutral' in (child.get('class') or []):
+                        text = clean_text(child.get_text())
+                        if '→' in text or text:  # Capture any neutral text as prefix
+                            current_prefix = text
+                        i += 1
+                        continue
+
+                    # Check for reflex span (contains "→", "see THESAURUS at", etc.)
+                    if hasattr(child, 'get') and 'reflex' in (child.get('class') or []):
+                        reflex_text = clean_text(child.get_text())
+                        # Remove leading comma and space (separator from previous ref)
+                        reflex_text = re.sub(r'^,\s*', '', reflex_text)
+                        current_prefix = reflex_text
+                        i += 1
+                        continue
+
+                    # Check for any other span that might contain prefix text (like "see THESAURUS at")
+                    if hasattr(child, 'name') and child.name == 'span' and child.name != 'a':
+                        classes = child.get('class') or []
+                        # Skip refhwd as it's the clickable part
+                        if 'refhwd' not in classes and 'refhomnum' not in classes and 'refsensenum' not in classes:
+                            text = clean_text(child.get_text())
+                            if text:
+                                current_prefix = current_prefix + ' ' + text if current_prefix else text
+                        i += 1
+                        continue
+
+                    # Check for <a> tag (the actual link)
+                    if hasattr(child, 'name') and child.name == 'a':
+                        href = child.get('href', '')
+
+                        # Extract clickable text from refhwd
+                        # Note: refhwd may contain <span class="neutral">at</span> - keep it as part of clickable
+                        refhwd = child.find(class_='refhwd')
+                        clickable_text = ''
+                        if refhwd:
+                            clickable_text = clean_text(refhwd.get_text())
+
+                        # Get homnum (homograph number) - append to clickable for "care2" -> "care²"
+                        # Get sensenum as suffix "(8)"
+                        homnum = child.find(class_='refhomnum')
+                        sensenum = child.find(class_='refsensenum')
+
+                        # Append homnum to clickable text (e.g., "care" + "2" = "care2")
+                        if homnum:
+                            homnum_text = clean_text(homnum.get_text())
+                            if homnum_text:
+                                clickable_text = clickable_text + homnum_text
+
+                        # Only sensenum goes to suffix
+                        suffix_text = clean_text(sensenum.get_text()) if sensenum else ''
+
+                        # Parse link target
+                        link_href = ''
+                        if href.startswith('entry://'):
+                            link_href = href.replace('entry://', '')
+
+                        target_word, target_sense = parse_link_target(link_href)
+                        if not target_word and clickable_text:
+                            target_word = clickable_text.lower()
+
+                        # Create cross_ref entry
+                        if clickable_text:
+                            sense_data['cross_refs'].append({
+                                'prefix': current_prefix.strip() + ' ' if current_prefix and current_prefix.strip() else None,
+                                'clickable': clickable_text.strip(),
+                                'suffix': suffix_text if suffix_text else None,
+                                'target_word': target_word or '',
+                                'target_sense': target_sense
+                            })
+
+                        # Reset prefix for next link
+                        current_prefix = ''
+                        i += 1
+                        continue
+
+                    i += 1
+
+            # Also handle refhwd not inside crossref or thesref (legacy/simple format)
             for ref in sense.find_all(class_='refhwd'):
+                # Skip if inside a crossref or thesref (already processed above)
+                if ref.find_parent(class_='crossref'):
+                    continue
+                if ref.find_parent(class_='thesref'):
+                    continue
                 ref_text = clean_text(ref.get_text())
                 if ref_text:
                     # Try to get link target from parent <a> or self
@@ -758,22 +1049,114 @@ class LDOCEParser:
                     target_word = None
                     if link and link.startswith('entry://'):
                         target_word = link.replace('entry://', '')
-                    # Only add if has a valid link
+                    # Only add if has a valid link and not already added
                     if target_word:
+                        already_added = any(
+                            r.get('target_word') == target_word or r.get('link') == target_word
+                            for r in sense_data['cross_refs']
+                        )
+                        if not already_added:
+                            sense_data['cross_refs'].append({
+                                'text': ref_text,
+                                'link': target_word
+                            })
+
+            # Synonym (SYN) within sense - store as label, not clickable
+            # Structure: <span class="syn"><span class="synopp">SYN</span> word</span>
+            for syn in sense.find_all(class_='syn'):
+                synopp = syn.find(class_='synopp')
+                if synopp:
+                    syn_word = clean_text(syn.get_text().replace(synopp.get_text(), ''))
+                    if syn_word:
+                        sense_data['labels'].append({'type': 'syn', 'value': syn_word})
+
+            # Antonym (OPP) within sense - store as label, not clickable
+            # Structure: <span class="opp"><span class="synopp">OPP</span> word</span>
+            for opp in sense.find_all(class_='opp'):
+                synopp = opp.find(class_='synopp')
+                if synopp:
+                    opp_word = clean_text(opp.get_text().replace(synopp.get_text(), ''))
+                    if opp_word:
+                        sense_data['labels'].append({'type': 'opp', 'value': opp_word})
+
+            # Thesaurus reference (► see THESAURUS at THING)
+            # Structure: <span class="thesref">
+            #   <span class="thesaurus">►</span> see <span class="thesaurus">thesaurus</span> at
+            #   <a href="..."><span class="refhwd">thing</span></a>
+            # </span>
+            for thesref in sense.find_all(class_='thesref'):
+                # Build prefix from text before <a> tag
+                prefix_parts = []
+                link_elem = thesref.find('a')
+
+                if link_elem:
+                    # Collect all text/elements before the <a> tag
+                    for child in thesref.children:
+                        if child == link_elem:
+                            break
+                        if hasattr(child, 'get_text'):
+                            text = clean_text(child.get_text())
+                            if text:
+                                prefix_parts.append(text)
+                        elif isinstance(child, str):
+                            text = clean_text(child)
+                            if text:
+                                prefix_parts.append(text)
+
+                    # Get clickable word
+                    refhwd = link_elem.find(class_='refhwd')
+                    clickable_text = clean_text(refhwd.get_text()) if refhwd else ''
+
+                    # Get link target
+                    href = link_elem.get('href', '')
+                    link_href = href.replace('entry://', '') if href.startswith('entry://') else ''
+                    target_word, target_sense = parse_link_target(link_href)
+                    if not target_word and clickable_text:
+                        target_word = clickable_text.lower()
+
+                    # Create cross_ref with prefix
+                    prefix_text = ' '.join(prefix_parts)
+                    if clickable_text:
                         sense_data['cross_refs'].append({
-                            'text': ref_text,
-                            'link': target_word
+                            'prefix': prefix_text + ' ' if prefix_text else None,
+                            'clickable': clickable_text,
+                            'suffix': None,
+                            'target_word': target_word or '',
+                            'target_sense': target_sense
                         })
 
             # Lexunit (sub-phrase like "call a doctor/the police")
+            # May contain alsoform like "(also from one day to the next)"
             # Only get direct lexunits, not ones already processed for subsenses
             for lexunit in sense.find_all(class_='lexunit', recursive=False):
+                # Get the main lexunit text
                 lu_text = clean_text(lexunit.get_text())
+
+                # Check for alsoform within or following the lexunit
+                alsoform = lexunit.find(class_='alsoform')
+                if not alsoform:
+                    # Check if alsoform follows the lexunit
+                    next_elem = lexunit.find_next_sibling()
+                    if next_elem and hasattr(next_elem, 'get') and 'alsoform' in (next_elem.get('class') or []):
+                        alsoform = next_elem
+
+                also_text = ''
+                if alsoform:
+                    also_text = clean_text(alsoform.get_text())
+                    # If alsoform was inside lexunit, it's already in lu_text
+                    # If it was outside, we need to append it
+                    if also_text and also_text not in lu_text:
+                        lu_text = lu_text + ' ' + also_text
+
                 if lu_text and lu_text != sense_data.get('definition', ''):
-                    # Find definition that follows this lexunit
+                    # Find definition that follows this lexunit (or alsoform)
                     lu_def = ''
-                    next_sib = lexunit.find_next_sibling()
+                    next_sib = alsoform.find_next_sibling() if alsoform and alsoform != lexunit else lexunit.find_next_sibling()
                     while next_sib:
+                        # Skip alsoform if we haven't already
+                        if hasattr(next_sib, 'get') and 'alsoform' in (next_sib.get('class') or []):
+                            next_sib = next_sib.find_next_sibling()
+                            continue
                         if next_sib.get('class') and 'def' in next_sib.get('class', []):
                             lu_def = clean_text(next_sib.get_text())
                             break
@@ -840,21 +1223,22 @@ class LDOCEParser:
                     note = {
                         'text': '',
                         'expr': '',
-                        'example': '',
+                        'examples': [],  # Changed to list for multiple examples
                         'bad_example': ''
                     }
-                    # Main expression
-                    expr = expl.find(class_='expr')
-                    if expr:
-                        note['expr'] = clean_text(expr.get_text())
+                    # Main expressions (may be multiple)
+                    exprs = [clean_text(e.get_text()) for e in expl.find_all(class_='expr')]
+                    if exprs:
+                        note['expr'] = ', '.join(exprs)
 
                     # Get the explanation text (excluding nested elements)
                     note['text'] = clean_text(expl.get_text())
 
-                    # Good example
-                    example = expl.find(class_='example')
-                    if example:
-                        note['example'] = clean_text(example.get_text()).lstrip('·').strip()
+                    # Good examples (may be multiple)
+                    for example in expl.find_all(class_='example'):
+                        ex_text = clean_text(example.get_text()).lstrip('·').strip()
+                        if ex_text:
+                            note['examples'].append(ex_text)
 
                     # Bad example (what NOT to say)
                     badexa = expl.find(class_='badexa')
@@ -865,15 +1249,54 @@ class LDOCEParser:
 
                 sense_data['grambox'] = gram_data
 
+            # Register box (f2nbox) - usage register notes
+            # Structure: <span class="f2nbox"><span class="heading">Register</span><span class="expl">...</span></span>
+            f2nbox = sense.find(class_='f2nbox')
+            if f2nbox:
+                register_data = {
+                    'heading': '',
+                    'notes': []
+                }
+                heading = f2nbox.find(class_='heading')
+                if heading:
+                    register_data['heading'] = clean_text(heading.get_text())
+
+                # Parse explanation items
+                for expl in f2nbox.find_all(class_='expl'):
+                    note = {
+                        'text': '',
+                        'expr': '',
+                        'examples': []  # Changed to list for multiple examples
+                    }
+                    # Extract expressions (highlighted words)
+                    exprs = [clean_text(e.get_text()) for e in expl.find_all(class_='expr')]
+                    if exprs:
+                        note['expr'] = ', '.join(exprs)
+
+                    # Get the explanation text
+                    note['text'] = clean_text(expl.get_text())
+
+                    # Examples (may be multiple)
+                    for example in expl.find_all(class_='example'):
+                        ex_text = clean_text(example.get_text()).lstrip('·').strip()
+                        if ex_text:
+                            note['examples'].append(ex_text)
+
+                    register_data['notes'].append(note)
+
+                sense_data['registerbox'] = register_data
+
             if sense_data['definition']:
                 sense_data['sort_order'] = idx
                 entry['senses'].append(sense_data)
 
-        # Collect sense-level data (lexunits, grambox) to entry attributes
+        # Collect sense-level data (lexunits, grambox, registerbox, lexunit_prefix) to entry attributes
         # This allows storage in entry_attributes table
         # Use sense number as key (e.g., "1", "2") for lookup in rendering
         sense_lexunits = {}
         sense_gramboxes = {}
+        sense_registerboxes = {}
+        sense_lexunit_prefixes = {}
         for sense in entry['senses']:
             # Use sense number (e.g., "1", "2"), fallback to sort_order+1 if no number
             sense_num = sense.get('number')
@@ -884,11 +1307,19 @@ class LDOCEParser:
                 sense_lexunits[sense_num] = sense['lexunits']
             if sense.get('grambox'):
                 sense_gramboxes[sense_num] = sense['grambox']
+            if sense.get('registerbox'):
+                sense_registerboxes[sense_num] = sense['registerbox']
+            if sense.get('lexunit_prefix'):
+                sense_lexunit_prefixes[sense_num] = sense['lexunit_prefix']
 
         if sense_lexunits:
             entry['attributes']['sense_lexunits'] = sense_lexunits
         if sense_gramboxes:
             entry['attributes']['sense_gramboxes'] = sense_gramboxes
+        if sense_registerboxes:
+            entry['attributes']['sense_registerboxes'] = sense_registerboxes
+        if sense_lexunit_prefixes:
+            entry['attributes']['sense_lexunit_prefixes'] = sense_lexunit_prefixes
 
         # === Phrasal Verbs ===
         phrasal_verbs = []
@@ -1031,7 +1462,7 @@ class LDOCEParser:
                 note = {
                     'text': '',
                     'expr': '',
-                    'example': '',
+                    'examples': [],  # Changed to list for multiple examples
                     'bad_example': '',
                     'pattern': ''  # e.g., "on a day"
                 }
@@ -1049,10 +1480,11 @@ class LDOCEParser:
                     expr = expl.find(class_='expr')
                     if expr:
                         note['expr'] = clean_text(expr.get_text())
-                    # Good example
-                    example = expl.find(class_='example')
-                    if example:
-                        note['example'] = clean_text(example.get_text()).lstrip('·').strip()
+                    # Good examples (may be multiple)
+                    for example in expl.find_all(class_='example'):
+                        ex_text = clean_text(example.get_text()).lstrip('·').strip()
+                        if ex_text:
+                            note['examples'].append(ex_text)
                     # Bad example
                     badexa = expl.find(class_='badexa')
                     if badexa:
@@ -1069,15 +1501,18 @@ class LDOCEParser:
                 note = {
                     'text': clean_text(expl.get_text()),
                     'expr': '',
-                    'example': '',
+                    'examples': [],  # Changed to list for multiple examples
                     'bad_example': ''
                 }
-                expr = expl.find(class_='expr')
-                if expr:
-                    note['expr'] = clean_text(expr.get_text())
-                example = expl.find(class_='example')
-                if example:
-                    note['example'] = clean_text(example.get_text()).lstrip('·').strip()
+                # Expressions (may be multiple)
+                exprs = [clean_text(e.get_text()) for e in expl.find_all(class_='expr')]
+                if exprs:
+                    note['expr'] = ', '.join(exprs)
+                # Good examples (may be multiple)
+                for example in expl.find_all(class_='example'):
+                    ex_text = clean_text(example.get_text()).lstrip('·').strip()
+                    if ex_text:
+                        note['examples'].append(ex_text)
                 badexa = expl.find(class_='badexa')
                 if badexa:
                     note['bad_example'] = clean_text(badexa.get_text())
@@ -1092,6 +1527,7 @@ class LDOCEParser:
             entry['attributes']['entry_gramboxes'] = entry_gramboxes
 
         # === Cross references (only with valid links) ===
+        # Using fragment storage: prefix + clickable + suffix
         cross_refs_dict = {}  # text -> link
 
         def extract_ref_link(ref_elem):
@@ -1115,6 +1551,7 @@ class LDOCEParser:
                     cross_refs_dict[ref_text] = ref_link
 
         # Parse crossref sections - handle reflex + link combinations
+        # Now using fragment storage for cleaner rendering
         for crossref in soup.find_all(class_='crossref'):
             # Process children in order to properly associate reflex with following link
             children = list(crossref.children)
@@ -1122,26 +1559,30 @@ class LDOCEParser:
             while i < len(children):
                 child = children[i]
                 if hasattr(child, 'get') and 'reflex' in (child.get('class') or []):
-                    # Found a reflex - get its text
-                    reflex_text = clean_text(child.get_text())
+                    # Found a reflex - this is the prefix (e.g., "see THESAURUS at")
+                    prefix_text = clean_text(child.get_text())
                     # Look for following <a> tag
-                    link_text = ''
+                    clickable_text = ''
                     link_href = ''
+                    suffix_text = ''
                     # Check next siblings for <a> tag
                     j = i + 1
                     while j < len(children):
                         next_child = children[j]
                         if hasattr(next_child, 'name') and next_child.name == 'a':
-                            # Found the associated link
+                            # Found the associated link - this is the clickable part
                             refhwd = next_child.find(class_='refhwd')
                             if refhwd:
-                                link_text = clean_text(refhwd.get_text())
+                                clickable_text = clean_text(refhwd.get_text())
                             homnum = next_child.find(class_='refhomnum')
                             sensenum = next_child.find(class_='refsensenum')
+                            # homnum goes into clickable (e.g., "care" + "2" = "care2")
+                            # sensenum goes into suffix (e.g., "(8)")
                             if homnum:
-                                link_text += clean_text(homnum.get_text())
-                            if sensenum:
-                                link_text += clean_text(sensenum.get_text())
+                                homnum_text = clean_text(homnum.get_text())
+                                if homnum_text:
+                                    clickable_text = clickable_text + homnum_text
+                            suffix_text = clean_text(sensenum.get_text()) if sensenum else ''
                             link_href = extract_ref_link(next_child) or ''
                             break
                         elif hasattr(next_child, 'get') and 'reflex' in (next_child.get('class') or []):
@@ -1149,41 +1590,45 @@ class LDOCEParser:
                             break
                         j += 1
 
-                    # Combine reflex text with link text
-                    if reflex_text:
-                        combined_text = reflex_text
-                        if link_text:
-                            combined_text += ' ' + link_text
+                    # Create fragment-based relation
+                    if prefix_text or clickable_text:
+                        fragments = make_relation_fragments(
+                            prefix_text, clickable_text, suffix_text, link_href
+                        )
                         entry['relations'].append({
                             'type': 'cross_ref',
-                            'target': combined_text.strip(),
-                            'link': link_href  # Link for navigation (may be empty)
+                            **fragments
                         })
                     i = j + 1 if link_href else i + 1
                 elif hasattr(child, 'name') and child.name == 'a':
                     # Standalone link (not preceded by reflex)
                     refhwd = child.find(class_='refhwd')
                     if refhwd:
-                        standalone_text = clean_text(refhwd.get_text())
+                        clickable_text = clean_text(refhwd.get_text())
                         homnum = child.find(class_='refhomnum')
                         sensenum = child.find(class_='refsensenum')
+                        # homnum goes into clickable (e.g., "care" + "2" = "care2")
+                        # sensenum goes into suffix (e.g., "(8)")
                         if homnum:
-                            standalone_text += clean_text(homnum.get_text())
-                        if sensenum:
-                            standalone_text += clean_text(sensenum.get_text())
+                            homnum_text = clean_text(homnum.get_text())
+                            if homnum_text:
+                                clickable_text = clickable_text + homnum_text
+                        suffix_text = clean_text(sensenum.get_text()) if sensenum else ''
                         standalone_link = extract_ref_link(child) or ''
-                        if standalone_text and standalone_link:
+                        if clickable_text and standalone_link:
                             # Check if this was already added as part of a reflex combination
                             already_added = any(
-                                r.get('link') == standalone_link
+                                r.get('target_word') == parse_link_target(standalone_link)[0]
                                 for r in entry['relations']
                                 if r.get('type') == 'cross_ref'
                             )
                             if not already_added:
+                                fragments = make_relation_fragments(
+                                    '', clickable_text, suffix_text, standalone_link
+                                )
                                 entry['relations'].append({
                                     'type': 'cross_ref',
-                                    'target': standalone_text,
-                                    'link': standalone_link
+                                    **fragments
                                 })
                     i += 1
                 else:
@@ -1280,9 +1725,10 @@ class LDOCEParser:
             for relword in thesobox.find_all(class_='relword'):
                 word_text = clean_text(relword.get_text())
                 if word_text:
+                    fragments = make_relation_fragments('', word_text, '', word_text)
                     entry['relations'].append({
                         'type': 'synonym',
-                        'target': word_text
+                        **fragments
                     })
 
         # === Verb Table ===
@@ -1797,35 +2243,69 @@ class LexDBWriter:
             for idx, ref in enumerate(sense.get('cross_refs', [])):
                 # Handle both old format (string) and new format (dict)
                 if isinstance(ref, str):
+                    # Legacy string format - convert to fragments
                     ref_text, ref_link = ref, None
+                    fragments = make_relation_fragments('', ref_text, '', ref_link)
+                elif 'clickable' in ref:
+                    # Already in fragment format
+                    fragments = ref
                 else:
+                    # Old dict format with text/link
                     ref_text = ref.get('text', '')
                     ref_link = ref.get('link')
-                if ref_text:
+                    fragments = make_relation_fragments('', ref_text, '', ref_link)
+
+                if fragments.get('clickable'):
                     self.cursor.execute("""
-                        INSERT INTO relations (entry_id, sense_id, relation_type, target_text, target_link, sort_order)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO relations (entry_id, sense_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         entry_id,
                         sense_id,
                         'cross_ref',
-                        ref_text,
-                        ref_link,
+                        fragments.get('prefix'),
+                        fragments.get('clickable'),
+                        fragments.get('suffix'),
+                        fragments.get('target_word', ''),
+                        fragments.get('target_sense'),
                         idx
                     ))
 
         # Insert relations (phrases, synonyms, entry-level cross-refs, inflections)
+        # Now using fragment storage format
         for idx, rel in enumerate(entry_data.get('relations', [])):
-            self.cursor.execute("""
-                INSERT INTO relations (entry_id, sense_id, relation_type, target_text, target_link, sort_order)
-                VALUES (?, NULL, ?, ?, ?, ?)
-            """, (
-                entry_id,
-                rel['type'],
-                rel['target'],
-                rel.get('link'),
-                idx
-            ))
+            # Check if relation is in new fragment format or old format
+            if 'clickable' in rel:
+                # New fragment format
+                self.cursor.execute("""
+                    INSERT INTO relations (entry_id, sense_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)
+                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    entry_id,
+                    rel['type'],
+                    rel.get('prefix'),
+                    rel.get('clickable'),
+                    rel.get('suffix'),
+                    rel.get('target_word', ''),
+                    rel.get('target_sense'),
+                    idx
+                ))
+            else:
+                # Old format - convert to fragments
+                fragments = make_relation_fragments('', rel.get('target', ''), '', rel.get('link'))
+                self.cursor.execute("""
+                    INSERT INTO relations (entry_id, sense_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)
+                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    entry_id,
+                    rel['type'],
+                    fragments.get('prefix'),
+                    fragments.get('clickable'),
+                    fragments.get('suffix'),
+                    fragments.get('target_word', ''),
+                    fragments.get('target_sense'),
+                    idx
+                ))
 
         # Insert collocations
         for coll in entry_data.get('collocations', []):
@@ -2033,22 +2513,33 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
     writer.open()
 
     print("Parsing and importing entries...")
-    items = mdx.items()
-    count = 0
-    success = 0
+    print(f"  Using parser: {HTML_PARSER}")
 
+    items = list(mdx.items())  # Convert to list for progress tracking
+    total = len(items)
+    start_time = time.time()
+
+    # Decode items
+    decoded_items = []
     for word_key, html in items:
         if isinstance(word_key, bytes):
             word_key = word_key.decode('utf-8', errors='ignore')
         if isinstance(html, bytes):
             html = html.decode('utf-8', errors='ignore')
+        decoded_items.append((word_key, html))
 
+    print(f"  Total entries: {total}")
+
+    batch_size = 1000
+    count = 0
+    success = 0
+
+    for word_key, html in decoded_items:
         count += 1
 
         try:
             entries = parser.parse(html, word_key)
 
-            # Write all entries (homographs)
             for entry_data in entries:
                 if entry_data.get('senses'):
                     writer.write_entry(entry_data)
@@ -2056,13 +2547,20 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
         except Exception as e:
             print(f"Warning: Parse failed [{word_key}]: {e}")
 
-        if count % 5000 == 0:
+        if count % batch_size == 0:
             writer.commit()
-            print(f"  Processed {count}, succeeded {success}...")
+            elapsed = time.time() - start_time
+            rate = count / elapsed if elapsed > 0 else 0
+            remaining = (total - count) / rate if rate > 0 else 0
+            print(f"  Processed {count}/{total} ({count*100//total}%), "
+                  f"{rate:.0f} entries/sec, ~{remaining:.0f}s remaining")
 
     writer.close()
 
+    elapsed = time.time() - start_time
+
     db_size = os.path.getsize(db_path) / (1024 * 1024)
+    rate = count / elapsed if elapsed > 0 else 0
 
     print(f"""
 ╔══════════════════════════════════════════════════════════════╗
@@ -2070,6 +2568,7 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
 ╠══════════════════════════════════════════════════════════════╣
 ║  Total entries:   {count:>10}
 ║  Parsed:          {success:>10}
+║  Time:            {elapsed:>10.1f}s ({rate:.0f} entries/sec)
 ║  Database:        {db_path}
 ║  Size:            {db_size:.2f} MB
 ╚══════════════════════════════════════════════════════════════╝
