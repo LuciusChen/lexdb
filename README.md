@@ -25,10 +25,15 @@ Emacs 词典查询系统，将 MDX 词典转换为 SQLite 数据库，提供快�
 ├── lexdb-ui.el           # Emacs UI 渲染
 ├── lexdb-ldoce.el        # LDOCE 词典适配器
 ├── lexdb-oald.el         # OALD 词典适配器
-├── lexdb_schema.py       # Python Schema 模块
-├── mdx2db.py             # MDX → SQLite 转换 (LDOCE)
-├── mdx2db_oald.py        # MDX → SQLite 转换 (OALD)
-└── schema.md             # Schema 规范文档
+├── schema.md             # Schema 规范文档
+├── assets/
+│   ├── screenshot.jpg
+│   └── screenshot1.jpg
+└── scripts/
+    ├── lexdb_schema.py   # Python Schema 模块
+    ├── mdx2db.py         # MDX → SQLite 转换 (LDOCE)
+    ├── mdx2db_oald.py    # MDX → SQLite 转换 (OALD)
+    └── extract_html.py   # MDX html 提取工具
 ```
 
 ## 快速开始
