@@ -35,9 +35,7 @@
 ;;;; Utility Functions
 ;;;; ============================================================
 
-(defsubst lexdb-oald--non-empty-string-p (s)
-  "Return t if S is a non-empty string."
-  (and s (stringp s) (not (string-empty-p s))))
+;; Note: Uses lexdb--non-empty-string-p from lexdb.el
 
 ;;;; ============================================================
 ;;;; Configuration
@@ -102,7 +100,7 @@
                                   :text text
                                   ;; Store Chinese in metadata
                                   :metadata (when (and lexdb-oald-show-chinese
-                                                       (lexdb-oald--non-empty-string-p text-zh))
+                                                       (lexdb--non-empty-string-p text-zh))
                                               (list (cons 'oald/text-zh text-zh))))))
                              ex-rows))
            (gram-rows (sqlite-select db
@@ -119,15 +117,15 @@
                            label-rows)))
       (lexdb-sense-create
        :id id
-       :number (when (lexdb-oald--non-empty-string-p sense-num) sense-num)
-       :signpost (when (lexdb-oald--non-empty-string-p signpost) signpost)
+       :number (when (lexdb--non-empty-string-p sense-num) sense-num)
+       :signpost (when (lexdb--non-empty-string-p signpost) signpost)
        :definition definition
        :examples examples
        :grammar-patterns gram-patterns
        :labels labels
        ;; Store Chinese definition in metadata
        :metadata (when (and lexdb-oald-show-chinese
-                            (lexdb-oald--non-empty-string-p definition-zh))
+                            (lexdb--non-empty-string-p definition-zh))
                    (list (cons 'oald/definition-zh definition-zh)))))))
 
 (defun lexdb-oald--build-pronunciations (entry-id db)
@@ -138,11 +136,11 @@
     (delq nil
           (mapcar (lambda (row)
                     (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (lexdb-oald--non-empty-string-p ipa)
+                      (when (lexdb--non-empty-string-p ipa)
                         (lexdb-pronunciation-create
                          :ipa ipa
                          :variant (when variant (intern variant))
-                         :audio (when (lexdb-oald--non-empty-string-p audio) audio)))))
+                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
                   rows))))
 
 (defun lexdb-oald--decompress-json (compressed-data)
@@ -181,7 +179,7 @@
                         (list id))))
         (dolist (attr attr-rows)
           (pcase-let ((`(,key ,value ,type) attr))
-            (when (lexdb-oald--non-empty-string-p value)
+            (when (lexdb--non-empty-string-p value)
               (push (cons (intern key)
                           (if (equal type "json_compressed")
                               (lexdb-oald--decompress-json value)
@@ -189,7 +187,7 @@
                     metadata)))))
       (lexdb-entry-create
        :id id :headword word
-       :headword-display (when (lexdb-oald--non-empty-string-p hyph) hyph)
+       :headword-display (when (lexdb--non-empty-string-p hyph) hyph)
        :senses senses :pronunciations prons :metadata metadata))))
 
 ;;;; ============================================================
@@ -224,7 +222,7 @@
              (idioms (when attr-row
                        (let ((value (caar attr-row))
                              (type (cadar attr-row)))
-                         (when (lexdb-oald--non-empty-string-p value)
+                         (when (lexdb--non-empty-string-p value)
                            (if (equal type "json_compressed")
                                (lexdb-oald--decompress-json value)
                              (json-parse-string value :object-type 'alist)))))))

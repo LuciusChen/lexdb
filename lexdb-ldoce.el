@@ -37,9 +37,7 @@
 ;;;; Utility Functions
 ;;;; ============================================================
 
-(defsubst lexdb-ldoce--non-empty-string-p (s)
-  "Return t if S is a non-empty string."
-  (and s (stringp s) (not (string-empty-p s))))
+;; Note: Uses lexdb--non-empty-string-p from lexdb.el
 
 ;;;; ============================================================
 ;;;; Configuration
@@ -101,7 +99,7 @@
                                (lexdb-example-create
                                 :text (nth 0 ex)
                                 :audio (let ((p (nth 1 ex)))
-                                         (when (lexdb-ldoce--non-empty-string-p p) p))
+                                         (when (lexdb--non-empty-string-p p) p))
                                 :metadata (list (cons 'position (nth 2 ex)))))
                              ex-rows))
            (label-rows (sqlite-select db
@@ -114,8 +112,8 @@
            (sense-relations (lexdb-ldoce--v2-fetch-sense-relations id db)))
       (lexdb-sense-create
        :id id
-       :number (when (lexdb-ldoce--non-empty-string-p sense-num) sense-num)
-       :signpost (when (lexdb-ldoce--non-empty-string-p signpost) signpost)
+       :number (when (lexdb--non-empty-string-p sense-num) sense-num)
+       :signpost (when (lexdb--non-empty-string-p signpost) signpost)
        :definition definition
        :examples examples
        :grammar-patterns gram-patterns
@@ -139,7 +137,7 @@
                                        (lexdb-example-create
                                         :text (nth 0 ex)
                                         :audio (let ((p (nth 1 ex)))
-                                                 (when (lexdb-ldoce--non-empty-string-p p) p))))
+                                                 (when (lexdb--non-empty-string-p p) p))))
                                      ex-rows)))))
             rows)))
 
@@ -151,12 +149,12 @@
     (delq nil
           (mapcar (lambda (row)
                     (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (or (lexdb-ldoce--non-empty-string-p ipa)
-                                (lexdb-ldoce--non-empty-string-p audio))
+                      (when (or (lexdb--non-empty-string-p ipa)
+                                (lexdb--non-empty-string-p audio))
                         (lexdb-pronunciation-create
                          :ipa ipa
                          :variant (when variant (intern variant))
-                         :audio (when (lexdb-ldoce--non-empty-string-p audio) audio)))))
+                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
                   rows))))
 
 (defun lexdb-ldoce--v2-fetch-relations (entry-id db)
@@ -169,7 +167,7 @@ Uses fragment storage format: prefix + clickable + suffix."
     (delq nil
           (mapcar (lambda (row)
                     (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
-                      (when (lexdb-ldoce--non-empty-string-p clickable)
+                      (when (lexdb--non-empty-string-p clickable)
                         (lexdb-relation-create
                          :type (intern rel-type)
                          :prefix prefix
@@ -190,7 +188,7 @@ Uses fragment storage format: prefix + clickable + suffix."
     (delq nil
           (mapcar (lambda (row)
                     (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
-                      (when (lexdb-ldoce--non-empty-string-p clickable)
+                      (when (lexdb--non-empty-string-p clickable)
                         (lexdb-relation-create
                          :type (intern rel-type)
                          :prefix prefix
@@ -267,7 +265,7 @@ Uses fragment storage format: prefix + clickable + suffix."
                             (lexdb-sense-metadata sense))))))))
       (lexdb-entry-create
        :id id :headword word
-       :headword-display (when (lexdb-ldoce--non-empty-string-p hyph) hyph)
+       :headword-display (when (lexdb--non-empty-string-p hyph) hyph)
        :senses senses :pronunciations prons :relations relations :metadata metadata))))
 
 ;;;; ============================================================
@@ -336,7 +334,7 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
                 (lexdb-relation-create
                  :type type
                  :target target
-                 :target-link (when (lexdb-ldoce--non-empty-string-p link) link))))
+                 :target-link (when (lexdb--non-empty-string-p link) link))))
             rows)))
 
 (defun lexdb-ldoce--prefetch (entry-ids)
@@ -400,7 +398,7 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
 (defun lexdb-ldoce--render-frequency (freq)
   "Render LDOCE frequency with dots.
 FREQ is the S1/W1 etc level text."
-  (when (lexdb-ldoce--non-empty-string-p freq)
+  (when (lexdb--non-empty-string-p freq)
     (propertize freq 'face 'lexdb-frequency-face)))
 
 ;;;; ============================================================

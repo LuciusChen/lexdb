@@ -217,6 +217,18 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
         (throw 'found (cdr pair))))))
 
 ;;;; ============================================================
+;;;; Common Utility Functions
+;;;; ============================================================
+
+(defsubst lexdb--non-empty-string-p (s)
+  "Return non-nil if S is a non-empty string."
+  (and (stringp s) (not (string-empty-p s))))
+
+(defsubst lexdb--ensure-string (s &optional default)
+  "Ensure S is a string, return DEFAULT if nil or empty."
+  (if (lexdb--non-empty-string-p s) s (or default "")))
+
+;;;; ============================================================
 ;;;; Core Data Structures
 ;;;; ============================================================
 

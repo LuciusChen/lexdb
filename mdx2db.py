@@ -1,21 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-MDX/MDD Dictionary to LexDB SQLite Database Converter
+MDX/MDD Dictionary to LexDB SQLite Database Converter (LDOCE)
 
 Supports multiple dictionaries in a single database using EAV pattern for extensibility.
-
-Schema Design:
-- dictionaries: Dictionary metadata
-- entries: Core entries (minimal common fields)
-- senses: Definitions
-- examples: Example sentences
-- labels: Labels (pos, grammar, register, etc. unified storage)
-- relations: Relations (phrase, synonym, cross_ref, etc. unified storage)
-- pronunciations: Pronunciation info
-- collocations: Collocations
-- collocation_examples: Collocation examples
-- entry_attributes: EAV extension table (dictionary-specific fields)
+Uses unified schema from lexdb_schema module.
 """
 
 import sqlite3
@@ -42,254 +31,23 @@ except ImportError:
     HTML_PARSER = 'html.parser'
     print("Note: Install lxml for faster parsing: pip install lxml")
 
-
-# ============================================================
-# Schema Definition
-# ============================================================
-
-SCHEMA_VERSION = "1.0.0"
-
-SCHEMA_SQL = """
--- Dictionary metadata table
-CREATE TABLE IF NOT EXISTS dictionaries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dict_id TEXT UNIQUE NOT NULL,      -- Dictionary identifier (e.g., ldoce, oxford)
-    name TEXT NOT NULL,                 -- Display name
-    version TEXT,                       -- Version
-    source_file TEXT,                   -- Source file
-    created_at TEXT NOT NULL,           -- Creation time
-    entry_count INTEGER DEFAULT 0       -- Entry count
-);
-
--- Core entries table (minimal common fields)
-CREATE TABLE IF NOT EXISTS entries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    dict_id TEXT NOT NULL,              -- Parent dictionary
-    headword TEXT NOT NULL,             -- Headword
-    headword_lower TEXT NOT NULL,       -- Lowercase form (for queries)
-    headword_display TEXT,              -- Display form (e.g., with syllable dots: ap·ple)
-    FOREIGN KEY (dict_id) REFERENCES dictionaries(dict_id)
-);
-
--- Senses table
-CREATE TABLE IF NOT EXISTS senses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id INTEGER NOT NULL,
-    sense_number TEXT,                  -- Sense number (1, 2, 2a, etc.)
-    signpost TEXT,                      -- Guide word (e.g., "MOVE FROM A FIXED POINT")
-    definition TEXT NOT NULL,
-    definition_zh TEXT,                 -- Chinese definition (for bilingual dictionaries)
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
-);
-
--- Examples table
-CREATE TABLE IF NOT EXISTS examples (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sense_id INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    text_zh TEXT,                       -- Chinese translation (for bilingual dictionaries)
-    audio_path TEXT,
-    position INTEGER DEFAULT 0,         -- 0=before grammar patterns, 1=after grammar patterns
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
-);
-
--- Grammar patterns table (e.g., "be required to do something")
-CREATE TABLE IF NOT EXISTS grammar_patterns (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sense_id INTEGER NOT NULL,
-    pattern TEXT NOT NULL,
-    gloss TEXT,                           -- Short explanation (e.g., "=during a particular day")
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
-);
-
--- Grammar pattern examples table
-CREATE TABLE IF NOT EXISTS grammar_examples (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern_id INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    audio_path TEXT,
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (pattern_id) REFERENCES grammar_patterns(id) ON DELETE CASCADE
-);
-
--- Labels table (unified storage for pos, grammar, register, domain, etc.)
-CREATE TABLE IF NOT EXISTS labels (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id INTEGER,                   -- Entry-level label
-    sense_id INTEGER,                   -- Sense-level label
-    label_type TEXT NOT NULL,           -- Type: pos, grammar, register, domain, region
-    label_value TEXT NOT NULL,
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
-    FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
-);
-
--- Relations table (unified storage for phrase, synonym, antonym, cross_ref, etc.)
--- Uses fragment storage: prefix + clickable + suffix for easy rendering
-CREATE TABLE IF NOT EXISTS relations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id INTEGER NOT NULL,
-    sense_id INTEGER,                   -- Optional: link to specific sense
-    relation_type TEXT NOT NULL,        -- Type: phrase, synonym, antonym, cross_ref, inflection
-    prefix TEXT,                        -- Non-clickable prefix (e.g., "see THESAURUS at ")
-    clickable TEXT NOT NULL,            -- Clickable part (e.g., "PHONE")
-    suffix TEXT,                        -- Non-clickable suffix (e.g., " (v.)")
-    target_word TEXT NOT NULL,          -- Normalized target word (e.g., "phone")
-    target_sense TEXT,                  -- Target sense number (e.g., "1")
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
-    FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
-);
-
--- Pronunciations table
-CREATE TABLE IF NOT EXISTS pronunciations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id INTEGER NOT NULL,
-    variant TEXT,                       -- uk, us, au, etc.
-    ipa TEXT,                           -- IPA transcription
-    audio_path TEXT,
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
-);
-
--- Collocations table
-CREATE TABLE IF NOT EXISTS collocations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id INTEGER NOT NULL,
-    category TEXT,                      -- Category: ADJECTIVES, VERBS, etc.
-    text TEXT NOT NULL,                 -- Collocation text
-    gloss TEXT,                         -- Explanation
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE
-);
-
--- Collocation examples table
-CREATE TABLE IF NOT EXISTS collocation_examples (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    collocation_id INTEGER NOT NULL,
-    text TEXT NOT NULL,
-    sort_order INTEGER DEFAULT 0,
-    FOREIGN KEY (collocation_id) REFERENCES collocations(id) ON DELETE CASCADE
-);
-
--- EAV extension table (dictionary-specific fields)
-CREATE TABLE IF NOT EXISTS entry_attributes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id INTEGER NOT NULL,
-    attr_key TEXT NOT NULL,             -- Namespaced key format, e.g., ldoce/frequency
-    attr_value TEXT,                    -- Value (text or JSON)
-    attr_type TEXT DEFAULT 'text',      -- Type: text, json, integer, boolean
-    FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
-    UNIQUE(entry_id, attr_key)
-);
-
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_entries_dict ON entries(dict_id);
-CREATE INDEX IF NOT EXISTS idx_entries_headword ON entries(headword_lower);
-CREATE INDEX IF NOT EXISTS idx_entries_headword_dict ON entries(dict_id, headword_lower);
-CREATE INDEX IF NOT EXISTS idx_senses_entry ON senses(entry_id);
-CREATE INDEX IF NOT EXISTS idx_examples_sense ON examples(sense_id);
-CREATE INDEX IF NOT EXISTS idx_grammar_patterns_sense ON grammar_patterns(sense_id);
-CREATE INDEX IF NOT EXISTS idx_grammar_examples_pattern ON grammar_examples(pattern_id);
-CREATE INDEX IF NOT EXISTS idx_labels_entry ON labels(entry_id);
-CREATE INDEX IF NOT EXISTS idx_labels_sense ON labels(sense_id);
-CREATE INDEX IF NOT EXISTS idx_labels_type ON labels(label_type);
-CREATE INDEX IF NOT EXISTS idx_relations_entry ON relations(entry_id);
-CREATE INDEX IF NOT EXISTS idx_relations_type ON relations(relation_type);
-CREATE INDEX IF NOT EXISTS idx_pronunciations_entry ON pronunciations(entry_id);
-CREATE INDEX IF NOT EXISTS idx_collocations_entry ON collocations(entry_id);
-CREATE INDEX IF NOT EXISTS idx_collocation_examples_coll ON collocation_examples(collocation_id);
-CREATE INDEX IF NOT EXISTS idx_entry_attributes_entry ON entry_attributes(entry_id);
-CREATE INDEX IF NOT EXISTS idx_entry_attributes_key ON entry_attributes(attr_key);
-
--- Meta info table
-CREATE TABLE IF NOT EXISTS _lexdb_meta (
-    key TEXT PRIMARY KEY,
-    value TEXT
-);
-"""
+# Import unified schema module
+from lexdb_schema import (
+    SCHEMA_SQL,
+    SCHEMA_VERSION,
+    init_database,
+    clean_text,
+    parse_link_target,
+    make_relation_fragments,
+    LabelType,
+    RelationType,
+    AttrType
+)
 
 
 # ============================================================
-# Utility Functions
+# LDOCE-specific Utility Functions
 # ============================================================
-
-def clean_text(text):
-    """Clean and normalize text."""
-    if not text:
-        return ""
-    return re.sub(r'\s+', ' ', text).strip()
-
-
-def parse_link_target(link_href):
-    """Parse link href to extract target word and sense number.
-
-    Examples:
-        "phone#_s1" -> ("phone", "1")
-        "bank#hash_s2" -> ("bank", "2")
-        "mother" -> ("mother", None)
-        "entry://phone#_s1" -> ("phone", "1")
-
-    Returns:
-        (target_word, target_sense) tuple
-    """
-    if not link_href:
-        return (None, None)
-
-    # Remove entry:// prefix if present
-    href = link_href.replace('entry://', '')
-
-    # Split by # to get base word
-    parts = href.split('#', 1)
-    target_word = parts[0].lower() if parts[0] else None
-
-    # Extract sense number from hash part (e.g., "_s1", "hash_s2")
-    target_sense = None
-    if len(parts) > 1:
-        match = re.search(r'_s(\d+)', parts[1])
-        if match:
-            target_sense = match.group(1)
-
-    return (target_word, target_sense)
-
-
-def make_relation_fragments(prefix_text, clickable_text, suffix_text, link_href):
-    """Create a relation dict with fragment storage format.
-
-    Args:
-        prefix_text: Non-clickable prefix (e.g., "see THESAURUS at ")
-        clickable_text: Clickable part (e.g., "PHONE")
-        suffix_text: Non-clickable suffix (e.g., "(8)")
-        link_href: Link target (e.g., "phone#_s1")
-
-    Returns:
-        dict with prefix, clickable, suffix, target_word, target_sense
-    """
-    target_word, _ = parse_link_target(link_href)
-
-    # Fallback: if no link, use clickable text as target word
-    if not target_word and clickable_text:
-        target_word = clickable_text.lower()
-
-    # Extract displayed sense number from suffix (e.g., "(8)" -> "8")
-    # This is what the user sees and should jump to
-    display_sense = None
-    if suffix_text:
-        sense_match = re.search(r'\((\d+)\)', suffix_text)
-        if sense_match:
-            display_sense = sense_match.group(1)
-
-    return {
-        'prefix': prefix_text.strip() + ' ' if prefix_text and prefix_text.strip() else None,
-        'clickable': clickable_text.strip() if clickable_text else '',
-        'suffix': suffix_text.strip() if suffix_text and suffix_text.strip() else None,
-        'target_word': target_word or '',
-        'target_sense': display_sense
-    }
-
 
 def extract_highlighted_text(element):
     """Extract text with highlight markers for nodeword and colloinexa.
@@ -2153,14 +1911,8 @@ class LexDBWriter:
         self.conn = sqlite3.connect(self.db_path)
         self.cursor = self.conn.cursor()
 
-        # Create schema
-        self.cursor.executescript(SCHEMA_SQL)
-
-        # Write schema version
-        self.cursor.execute(
-            "INSERT OR REPLACE INTO _lexdb_meta (key, value) VALUES (?, ?)",
-            ('schema_version', SCHEMA_VERSION)
-        )
+        # Initialize schema using unified module
+        init_database(self.conn)
 
         # Register dictionary
         self.cursor.execute("""

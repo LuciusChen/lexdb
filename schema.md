@@ -9,217 +9,461 @@ LexDB 采用 **"能力感知"** 设计：
 - Emacs UI 会自动检测并只渲染存在的内容
 - 扩展数据通过 `entry_attributes` 表存储，无需修改 Schema
 
-## 数据库表结构
+---
 
-### 1. `dictionaries` - 词典元信息
+## 表关系总览
 
-```sql
-CREATE TABLE dictionaries (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,           -- 词典名称，如 "Longman Dictionary of Contemporary English"
-    version TEXT,                 -- 版本，如 "6th Edition"
-    description TEXT,             -- 简介
-    capabilities TEXT,            -- JSON 数组，声明词典能力
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+```mermaid
+erDiagram
+    dictionaries ||--o{ entries : contains
+    entries ||--o{ senses : has
+    entries ||--o{ pronunciations : has
+    entries ||--o{ labels : "entry-level"
+    entries ||--o{ relations : has
+    entries ||--o{ collocations : has
+    entries ||--o{ entry_attributes : extends
+
+    senses ||--o{ examples : has
+    senses ||--o{ grammar_patterns : has
+    senses ||--o{ labels : "sense-level"
+    senses ||--o{ relations : "sense-level"
+
+    grammar_patterns ||--o{ grammar_examples : has
+    collocations ||--o{ collocation_examples : has
 ```
 
-**capabilities 示例：**
-```json
-["pronunciation", "audio-uk", "audio-us", "frequency-band", "collocations", "chinese-definition"]
+---
+
+## 核心表：词条与义项
+
+```mermaid
+erDiagram
+    entries {
+        int id PK
+        text dict_id FK
+        text headword
+        text headword_lower "查询用"
+        text headword_display "显示用"
+    }
+
+    senses {
+        int id PK
+        int entry_id FK
+        text sense_number "1, 2a"
+        text signpost "导航词"
+        text definition
+        text definition_zh "双解"
+        int sort_order
+    }
+
+    entries ||--o{ senses : has
 ```
 
-### 2. `entries` - 词条主表
+### `entries` - 词条主表
 
 ```sql
 CREATE TABLE entries (
     id INTEGER PRIMARY KEY,
-    dict_id INTEGER NOT NULL REFERENCES dictionaries(id),
-    headword TEXT NOT NULL,           -- 词头原形，如 "mother"
-    headword_lower TEXT NOT NULL,     -- 小写形式，用于查询
-    headword_display TEXT,            -- 显示形式（含音节点），如 "moth·er"
-    homograph_number INTEGER,         -- 同形异义词编号，如 bank¹, bank²
-    pronunciation_uk TEXT,            -- 英式音标，如 "/ˈmʌðə/"
-    pronunciation_us TEXT,            -- 美式音标，如 "/ˈmʌðər/"
-    audio_uk TEXT,                    -- 英式发音文件路径
-    audio_us TEXT,                    -- 美式发音文件路径
-    pos TEXT,                         -- 主词性，如 "noun", "verb"
-    inflections TEXT,                 -- 变形，如 "mothers, mothered, mothering"
-    frequency TEXT,                   -- 词频标记，如 "S1 W1"
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    dict_id TEXT NOT NULL,           -- 所属词典
+    headword TEXT NOT NULL,          -- 词头，如 "mother"
+    headword_lower TEXT NOT NULL,    -- 小写形式，用于查询
+    headword_display TEXT            -- 显示形式，如 "moth·er"
 );
 
-CREATE INDEX idx_entries_headword_lower ON entries(headword_lower);
-CREATE INDEX idx_entries_dict_id ON entries(dict_id);
+CREATE INDEX idx_entries_headword ON entries(headword_lower);
+CREATE INDEX idx_entries_headword_dict ON entries(dict_id, headword_lower);
 ```
 
-### 3. `senses` - 义项表
+### `senses` - 义项表
 
 ```sql
 CREATE TABLE senses (
     id INTEGER PRIMARY KEY,
     entry_id INTEGER NOT NULL REFERENCES entries(id),
-    sense_number TEXT,                -- 义项编号，如 "1", "2a"
-    pos TEXT,                         -- 该义项的词性（可能与词条不同）
-    definition TEXT,                  -- 英文释义
-    definition_zh TEXT,               -- 中文释义（双解词典）
-    signpost TEXT,                    -- 义项导航词，如 "PARENT", "ORIGIN"
-    register TEXT,                    -- 语域标记，如 "formal", "informal", "literary"
-    grammar_codes TEXT,               -- 语法代码，如 "[C]", "[U]", "[Tn]"
-    domain TEXT,                      -- 学科领域，如 "medical", "legal"
-    region TEXT,                      -- 地区标记，如 "BrE", "AmE"
-    sort_order INTEGER DEFAULT 0      -- 排序顺序
+    sense_number TEXT,               -- 义项编号，如 "1", "2a"
+    signpost TEXT,                   -- 导航词，如 "PARENT", "LIQUID"
+    definition TEXT NOT NULL,        -- 英文释义
+    definition_zh TEXT,              -- 中文释义（双解词典）
+    sort_order INTEGER DEFAULT 0
 );
 
-CREATE INDEX idx_senses_entry_id ON senses(entry_id);
+CREATE INDEX idx_senses_entry ON senses(entry_id);
 ```
 
-### 4. `examples` - 例句表
+---
+
+## 例句与语法模式
+
+```mermaid
+flowchart TB
+    subgraph sense["义项 Sense"]
+        direction TB
+        def[定义 Definition]
+        ex0["例句 (position=0)"]
+        gp[语法模式]
+        gex[语法模式例句]
+        ex1["例句 (position=1)"]
+    end
+
+    def --> ex0
+    ex0 --> gp
+    gp --> gex
+    gex --> ex1
+
+    style ex0 fill:#e1f5fe
+    style ex1 fill:#e1f5fe
+    style gp fill:#fff3e0
+    style gex fill:#fff3e0
+```
+
+### `examples` - 例句表
 
 ```sql
 CREATE TABLE examples (
     id INTEGER PRIMARY KEY,
     sense_id INTEGER NOT NULL REFERENCES senses(id),
-    text TEXT NOT NULL,               -- 英文例句
-    text_zh TEXT,                     -- 中文翻译
-    audio TEXT,                       -- 例句音频路径
-    source TEXT,                      -- 来源，如 "corpus", "editorial"
+    text TEXT NOT NULL,              -- 英文例句
+    text_zh TEXT,                    -- 中文翻译
+    audio_path TEXT,                 -- 例句音频路径
+    position INTEGER DEFAULT 0,      -- 位置：0=语法模式前，1=语法模式后
     sort_order INTEGER DEFAULT 0
 );
 
-CREATE INDEX idx_examples_sense_id ON examples(sense_id);
+CREATE INDEX idx_examples_sense ON examples(sense_id);
+CREATE INDEX idx_examples_position ON examples(sense_id, position);
 ```
 
-### 5. `relations` - 关系表（交叉引用、同义词等）
+**position 字段说明：**
 
-采用片段化存储，将跳转信息原子化，便于渲染。
+| position | 渲染位置 | 典型用途 |
+|----------|----------|----------|
+| `0` | grammar_patterns 之前 | 普通例句（默认） |
+| `1` | grammar_patterns 之后 | 补充例句 |
+
+### `grammar_patterns` - 语法模式表
+
+```sql
+CREATE TABLE grammar_patterns (
+    id INTEGER PRIMARY KEY,
+    sense_id INTEGER NOT NULL REFERENCES senses(id),
+    pattern TEXT NOT NULL,           -- 语法模式，如 "on a ... day"
+    gloss TEXT,                      -- 简短解释，如 "(=during a particular day)"
+    sort_order INTEGER DEFAULT 0
+);
+```
+
+### `grammar_examples` - 语法模式例句表
+
+```sql
+CREATE TABLE grammar_examples (
+    id INTEGER PRIMARY KEY,
+    pattern_id INTEGER NOT NULL REFERENCES grammar_patterns(id),
+    text TEXT NOT NULL,
+    audio_path TEXT,
+    sort_order INTEGER DEFAULT 0
+);
+```
+
+---
+
+## 标签系统
+
+```mermaid
+flowchart LR
+    subgraph labels["labels 表"]
+        direction TB
+        entry_labels["词条级 <br/>entry_id ≠ NULL<br/>sense_id = NULL"]
+        sense_labels["义项级 <br/>entry_id = NULL<br/>sense_id ≠ NULL"]
+    end
+
+    subgraph types["label_type"]
+        pos[pos 词性]
+        grammar[grammar 语法]
+        register[register 语域]
+        geo[geo 地域]
+        domain[domain 领域]
+        syn[syn 同义]
+        opp[opp 反义]
+        freq[frequency 词频]
+    end
+
+    entry_labels --> pos
+    entry_labels --> freq
+    sense_labels --> grammar
+    sense_labels --> register
+    sense_labels --> geo
+    sense_labels --> syn
+    sense_labels --> opp
+```
+
+### `labels` - 统一标签表
+
+```sql
+CREATE TABLE labels (
+    id INTEGER PRIMARY KEY,
+    entry_id INTEGER,                -- 词条级标签
+    sense_id INTEGER,                -- 义项级标签
+    label_type TEXT NOT NULL,        -- 标签类型
+    label_value TEXT NOT NULL,       -- 标签值
+    sort_order INTEGER DEFAULT 0
+);
+
+CREATE INDEX idx_labels_entry ON labels(entry_id);
+CREATE INDEX idx_labels_sense ON labels(sense_id);
+```
+
+**label_type 枚举：**
+
+| 类型 | 级别 | 说明 | 示例值 |
+|------|------|------|--------|
+| `pos` | 词条 | 词性 | noun, verb, adjective |
+| `grammar` | 义项 | 语法代码 | [C], [U], [Tn], [I] |
+| `register` | 义项 | 语域 | formal, informal, literary |
+| `geo` | 义项 | 地域 | British English, American English |
+| `domain` | 义项 | 领域 | medical, legal, computing |
+| `syn` | 义项 | 同义词 | SYN happy |
+| `opp` | 义项 | 反义词 | OPP sad |
+| `frequency` | 词条 | 词频 | S1, W2 |
+
+---
+
+## 关系与交叉引用
+
+```mermaid
+flowchart LR
+    subgraph storage["relations 表存储"]
+        prefix["prefix<br/>'→ see '"]
+        clickable["clickable<br/>'mother'"]
+        suffix["suffix<br/>'¹(2)'"]
+        target["target_word<br/>'mother'"]
+        sense["target_sense<br/>'2'"]
+    end
+
+    subgraph render["渲染结果"]
+        result["→ see <u>mother</u>¹(2)"]
+    end
+
+    prefix --> result
+    clickable --> result
+    suffix --> result
+
+    style clickable fill:#bbdefb
+    style result fill:#c8e6c9
+```
+
+### `relations` - 关系表（Fragment 格式）
 
 ```sql
 CREATE TABLE relations (
     id INTEGER PRIMARY KEY,
     entry_id INTEGER NOT NULL REFERENCES entries(id),
-    sense_id INTEGER REFERENCES senses(id),  -- NULL = entry 级别
-    relation_type TEXT NOT NULL,      -- cross_ref, synonym, antonym, see_also, inflection
-    prefix TEXT,                      -- 前缀文本，如 "see THESAURUS at "
-    clickable TEXT NOT NULL,          -- 可点击部分，如 "PHONE"
-    suffix TEXT,                      -- 后缀文本，如 " (v.)"
-    target_word TEXT NOT NULL,        -- 跳转目标词（规范化），如 "phone"
-    target_sense TEXT,                -- 目标义项编号，如 "1"
+    sense_id INTEGER,                -- NULL = 词条级别
+    relation_type TEXT NOT NULL,     -- 关系类型
+    prefix TEXT,                     -- 不可点击前缀
+    clickable TEXT NOT NULL,         -- 可点击部分
+    suffix TEXT,                     -- 不可点击后缀
+    target_word TEXT NOT NULL,       -- 跳转目标词（规范化）
+    target_sense TEXT,               -- 目标义项编号
     sort_order INTEGER DEFAULT 0
 );
-
-CREATE INDEX idx_relations_entry_id ON relations(entry_id);
-CREATE INDEX idx_relations_sense_id ON relations(sense_id);
-CREATE INDEX idx_relations_type ON relations(relation_type);
 ```
 
-**字段说明：**
+**渲染示例：**
 
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| `prefix` | 不可点击的前缀 | "see THESAURUS at " |
-| `clickable` | 可点击部分（显示文本） | "PHONE" |
-| `suffix` | 不可点击的后缀 | " (v.)" |
-| `target_word` | 跳转目标词（小写规范化） | "phone" |
-| `target_sense` | 目标义项（可选） | "1" |
+| 原文 | prefix | clickable | suffix | target_word | target_sense |
+|------|--------|-----------|--------|-------------|--------------|
+| `→ for all sb cares at care²(8)` | `→ for all sb cares at ` | `care²` | `(8)` | `care` | `8` |
+| `SYN happy` | `SYN ` | `happy` | | `happy` | |
 
-**渲染方式：**
-```
-[prefix][clickable 按钮][suffix]
-→ "see THESAURUS at [PHONE] (v.)"
-```
-
-**relation_type 类型：**
+**relation_type 枚举：**
 
 | 类型 | 说明 |
 |------|------|
-| `cross_ref` | 交叉引用（→ see also） |
-| `synonym` | 同义词（SYN） |
-| `antonym` | 反义词（OPP） |
+| `cross_ref` | 交叉引用 → see X |
+| `synonym` | 同义词 SYN |
+| `antonym` | 反义词 OPP |
+| `thesaurus` | 同义词库引用 |
 | `see_also` | 另见 |
 | `inflection` | 词形变化 |
-| `thesaurus` | 同义词库引用 |
+| `compare` | 比较 |
 
-### 6. `entry_attributes` - 扩展属性表（EAV 模式）
+---
 
-这是最灵活的表，用于存储各词典特有的数据。
+## 发音与音频
+
+```mermaid
+erDiagram
+    entries ||--o{ pronunciations : has
+
+    pronunciations {
+        int id PK
+        int entry_id FK
+        text variant "uk/us/au"
+        text ipa "音标"
+        text audio_path "音频路径"
+    }
+```
+
+### `pronunciations` - 发音表
+
+```sql
+CREATE TABLE pronunciations (
+    id INTEGER PRIMARY KEY,
+    entry_id INTEGER NOT NULL REFERENCES entries(id),
+    variant TEXT,                    -- uk, us, au
+    ipa TEXT,                        -- IPA 音标
+    audio_path TEXT,                 -- 音频文件路径
+    sort_order INTEGER DEFAULT 0
+);
+```
+
+---
+
+## 搭配 (Collocations)
+
+```mermaid
+erDiagram
+    entries ||--o{ collocations : has
+    collocations ||--o{ collocation_examples : has
+
+    collocations {
+        int id PK
+        int entry_id FK
+        text category "ADJECTIVES/VERBS"
+        text text "搭配词"
+        text gloss "解释"
+    }
+
+    collocation_examples {
+        int id PK
+        int collocation_id FK
+        text text "例句"
+    }
+```
+
+### `collocations` - 搭配表
+
+```sql
+CREATE TABLE collocations (
+    id INTEGER PRIMARY KEY,
+    entry_id INTEGER NOT NULL REFERENCES entries(id),
+    category TEXT,                   -- 搭配类别，如 "ADJECTIVES", "VERBS"
+    text TEXT NOT NULL,              -- 搭配文本
+    gloss TEXT,                      -- 解释
+    sort_order INTEGER DEFAULT 0
+);
+```
+
+### `collocation_examples` - 搭配例句表
+
+```sql
+CREATE TABLE collocation_examples (
+    id INTEGER PRIMARY KEY,
+    collocation_id INTEGER NOT NULL REFERENCES collocations(id),
+    text TEXT NOT NULL,
+    sort_order INTEGER DEFAULT 0
+);
+```
+
+---
+
+## 扩展属性 (EAV 模式)
+
+```mermaid
+flowchart TB
+    subgraph entry_attributes["entry_attributes 表"]
+        direction LR
+        key["attr_key"]
+        value["attr_value"]
+        type["attr_type"]
+    end
+
+    subgraph entry_level["词条级属性"]
+        idioms["idioms (json)"]
+        phrasal["phrasal_verbs (json)"]
+        grammar_box["entry_grammar_boxes (json)"]
+    end
+
+    subgraph sense_level["义项级属性 (以 sense_number 索引)"]
+        sense_grammar["sense_grammar_boxes"]
+        sense_register["sense_register_boxes"]
+        sense_prefix["sense_lexunit_prefixes"]
+        sense_lexunits["sense_lexunits"]
+    end
+
+    entry_attributes --> entry_level
+    entry_attributes --> sense_level
+```
+
+### `entry_attributes` - 扩展属性表
 
 ```sql
 CREATE TABLE entry_attributes (
     id INTEGER PRIMARY KEY,
     entry_id INTEGER NOT NULL REFERENCES entries(id),
-    attr_key TEXT NOT NULL,           -- 属性键，如 "ldoce/collocations", "oald/idioms"
-    attr_value TEXT,                  -- 属性值（字符串或 JSON）
-    attr_type TEXT DEFAULT 'text'     -- 类型：text, json, json_compressed
+    attr_key TEXT NOT NULL,          -- 属性键
+    attr_value TEXT,                 -- 属性值（TEXT 或 JSON）
+    attr_type TEXT DEFAULT 'text',   -- 类型提示
+    UNIQUE(entry_id, attr_key)
 );
-
-CREATE INDEX idx_entry_attributes_entry_id ON entry_attributes(entry_id);
-CREATE INDEX idx_entry_attributes_key ON entry_attributes(attr_key);
 ```
 
-**常用 attr_key 约定：**
+**attr_type 枚举：**
+
+| 类型 | 说明 |
+|------|------|
+| `text` | 纯文本 |
+| `json` | JSON 格式 |
+| `json_compressed` | zlib 压缩的 JSON |
+| `integer` | 整数 |
+
+### 常用 attr_key
+
+**词条级：**
 
 | attr_key | 类型 | 说明 |
 |----------|------|------|
-| `{dict}/idioms` | json_compressed | 习语列表 |
-| `{dict}/phrasal_verbs` | json_compressed | 短语动词 |
-| `{dict}/collocations` | json_compressed | 搭配 |
-| `{dict}/thesaurus` | json_compressed | 同义词 |
-| `{dict}/word_family` | json_compressed | 词族 |
-| `{dict}/origin` | text | 词源（简短） |
-| `{dict}/origin_full` | text | 词源（详细） |
-| `{dict}/derivatives` | json_compressed | 派生词 |
-| `{dict}/frequency_band` | text | 词频等级 |
-| `{dict}/cefr_level` | text | CEFR 等级 (A1-C2) |
+| `ldoce/frequency` | text | 词频 "S1 W2" |
+| `ldoce/homograph` | text | 同形词号 |
+| `idioms` | json | 习语列表 |
+| `phrasal_verbs` | json | 短语动词 |
+| `entry_grammar_boxes` | json | 词条级语法框 |
 
-### 7. `sense_attributes` - 义项扩展属性表
+**义项级（以 sense_number 为 key 的 JSON 对象）：**
 
-```sql
-CREATE TABLE sense_attributes (
-    id INTEGER PRIMARY KEY,
-    sense_id INTEGER NOT NULL REFERENCES senses(id),
-    attr_key TEXT NOT NULL,
-    attr_value TEXT,
-    attr_type TEXT DEFAULT 'text'
-);
-
-CREATE INDEX idx_sense_attributes_sense_id ON sense_attributes(sense_id);
-```
-
-**常用 attr_key：**
-
-| attr_key | 类型 | 说明 |
-|----------|------|------|
-| `{dict}/lexunits` | json_compressed | 词汇单元（短语用法） |
-| `{dict}/grambox` | json_compressed | 语法框 |
-| `{dict}/synonyms` | json | 同义词列表 |
-| `{dict}/antonyms` | json | 反义词列表 |
-| `{dict}/cross_refs` | json | 交叉引用 |
-
-### 8. `lemmas` - 词形还原表（可选）
-
-```sql
-CREATE TABLE lemmas (
-    id INTEGER PRIMARY KEY,
-    dict_id INTEGER NOT NULL REFERENCES dictionaries(id),
-    word TEXT NOT NULL,               -- 变形词，如 "mothers", "mothered"
-    lemma TEXT NOT NULL               -- 原形，如 "mother"
-);
-
-CREATE INDEX idx_lemmas_word ON lemmas(word);
-```
+| attr_key | 说明 |
+|----------|------|
+| `sense_grammar_boxes` | `{"1": {...}, "2": {...}}` |
+| `sense_register_boxes` | 语域框 |
+| `sense_lexunit_prefixes` | 词组前缀（含地域变体） |
+| `sense_lexunits` | 词组用法 |
 
 ---
 
-## JSON 数据结构
+## JSON 数据结构示例
 
-### Idioms (习语)
+### sense_lexunit_prefixes（词组 + 地域变体）
+
+```json
+{
+  "7": [
+    {"type": "lexunit", "text": "all round"},
+    {"type": "geo", "text": "British English"},
+    {"type": "lexvar", "text": "all around"},
+    {"type": "geo", "text": "American English"}
+  ]
+}
+```
+
+渲染：`all round British English, all around American English`
+
+### idioms（习语）
 
 ```json
 [
   {
     "text": "necessity is the mother of invention",
-    "definition": "used to say that when you are in difficulty, you think of clever ways",
+    "definition": "used to say that when you are in difficulty...",
     "definition_zh": "需要是发明之母",
     "examples": [
       {"text": "...", "text_zh": "..."}
@@ -228,200 +472,136 @@ CREATE INDEX idx_lemmas_word ON lemmas(word);
 ]
 ```
 
-### Phrasal Verbs (短语动词)
+### sense_grammar_boxes（语法框）
 
 ```json
-[
-  {
-    "headword": "call back",
-    "pos": "phr v",
-    "senses": [
-      {
-        "definition": "to telephone someone again",
-        "definition_zh": "回电话",
-        "examples": [...]
-      }
-    ]
-  }
-]
-```
-
-### Collocations (搭配)
-
-```json
-[
-  {
-    "category": "ADJECTIVES",
-    "items": [
-      {
-        "word": "
-
-
-",
-        "gloss": "a mother who is expecting a baby",
-        "example": "..."
-      }
-    ]
-  }
-]
-```
-
-### Thesaurus (同义词)
-
-```json
-[
-  {
-    "sense_hint": "female parent",
-    "synonyms": [
-      {"word": "mom", "register": "informal"},
-      {"word": "mum", "region": "BrE"}
-    ],
-    "antonyms": [
-      {"word": "father"}
-    ]
-  }
-]
-```
-
-### Lexunits (词汇单元)
-
-```json
-[
-  {
-    "phrase": "mother of two/three etc",
-    "definition": "a mother who has two, three etc children",
-    "examples": [...]
-  }
-]
-```
-
-### Grammar Box (语法框)
-
-```json
-[
-  {
-    "heading": "GRAMMAR: Singular or plural verb?",
+{
+  "1": {
+    "heading": "GRAMMAR: Patterns with all",
     "notes": [
       {
-        "pattern": "mother + singular verb",
-        "text": "Use a singular verb after mother...",
-        "example": "My mother is coming.",
-        "bad_example": "My mother are coming."
+        "text": "You use all the or all of the before...",
+        "expr": "all the, all of the",
+        "examples": ["All the students passed."],
+        "bad_example": "All of students..."
       }
     ]
   }
-]
+}
 ```
 
 ---
 
-## 能力声明 (Capabilities)
+## 渲染顺序
 
-在 `dictionaries.capabilities` 中声明词典支持的功能：
+```mermaid
+flowchart TB
+    subgraph sense_render["义项渲染顺序"]
+        n1["1. sense_number 义项编号"]
+        n2["2. 🌐 翻译指示器"]
+        n3["3. signpost 导航词"]
+        n4["4. grammar labels [C][U]"]
+        n5["5. lexunit_prefix 词组前缀"]
+        n6["6. register/geo labels"]
+        n7["7. definition 释义"]
+        n8["8. syn/opp labels"]
+        n9["9. examples (position=0)"]
+        n10["10. grammar_patterns + gloss"]
+        n11["11. grammar_examples"]
+        n12["12. examples (position=1)"]
+        n13["13. subsenses/grammar_box/lexunits"]
+    end
 
-### 核心能力
+    n1 --> n2 --> n3 --> n4 --> n5 --> n6 --> n7 --> n8 --> n9 --> n10 --> n11 --> n12 --> n13
+```
+
+**视觉效果：**
+
+```
+1 🌐 PARENT [C] a female parent of a child or animal SYN mom
+  🔊🌐 The mother of three young children
+  [on a ... day] (=during a particular day)
+    🔊 On a clear day you can see the mountains.
+  🌐 She became a mother at 18.
+```
+
+---
+
+## 元信息表
+
+### `dictionaries` - 词典元信息
+
+```sql
+CREATE TABLE dictionaries (
+    id INTEGER PRIMARY KEY,
+    dict_id TEXT UNIQUE NOT NULL,    -- 词典标识 "ldoce6"
+    name TEXT NOT NULL,              -- 词典名称
+    version TEXT,
+    source_file TEXT,
+    capabilities TEXT,               -- JSON 数组
+    created_at TEXT,
+    entry_count INTEGER DEFAULT 0
+);
+```
+
+### `_lexdb_meta` - Schema 元信息
+
+```sql
+CREATE TABLE _lexdb_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+-- 必须包含：
+INSERT INTO _lexdb_meta VALUES ('schema_version', '2.1');
+```
+
+---
+
+## 能力声明
+
+在 `dictionaries.capabilities` 中声明词典支持的功能（JSON 数组）：
+
+```json
+["pronunciation", "audio-uk", "audio-us", "frequency-band", "collocations", "chinese-definition", "chinese-example"]
+```
+
 | 能力 | 说明 |
 |------|------|
 | `lookup` | 基础查词 |
 | `definition` | 英文释义 |
 | `chinese-definition` | 中文释义 |
-| `chinese-example` | 中文例句 |
-
-### 语音能力
-| 能力 | 说明 |
-|------|------|
+| `chinese-example` | 例句中文翻译 |
 | `pronunciation` | 音标 |
-| `audio-uk` | 英式发音 |
-| `audio-us` | 美式发音 |
-| `audio-example` | 例句发音 |
-
-### 词汇信息
-| 能力 | 说明 |
-|------|------|
-| `pos` | 词性 |
-| `grammar` | 语法标注 |
-| `register` | 语域标记 |
-| `hyphenation` | 音节划分 |
-| `inflections` | 词形变化 |
-
-### 词频信息
-| 能力 | 说明 |
-|------|------|
-| `frequency-band` | 词频等级 (S1/W1) |
-| `frequency-rank` | 词频排名 |
-| `cefr-level` | CEFR 等级 |
-
-### 扩展内容
-| 能力 | 说明 |
-|------|------|
+| `audio-uk` / `audio-us` | 英/美式发音 |
+| `audio-example` | 例句音频 |
 | `examples` | 例句 |
 | `collocations` | 搭配 |
 | `idioms` | 习语 |
 | `phrasal-verbs` | 短语动词 |
-| `synonyms` | 同义词 |
-| `antonyms` | 反义词 |
-| `thesaurus` | 词库 |
-| `word-family` | 词族 |
-| `origin` | 词源 |
-| `lemmatization` | 词形还原 |
+| `thesaurus` | 同义词库 |
+| `frequency-band` | 词频等级 |
+| `signpost` | 导航词 |
+| `grammar-box` | 语法框 |
+| `register-box` | 语域框 |
 
 ---
 
-## 压缩存储
+## 同一数据的不同存储位置
 
-对于较大的 JSON 数据（如 collocations、thesaurus），建议使用 zlib 压缩：
+某些数据类型（如 geo）可能出现在不同上下文：
 
-```python
-import zlib
-import json
+```mermaid
+flowchart LR
+    geo["geo 地域标签"]
 
-def compress_json(data):
-    json_str = json.dumps(data, ensure_ascii=False)
-    return zlib.compress(json_str.encode('utf-8'))
+    geo --> labels_sense["labels 表 <br/> 义项独立标签 <br/>'British English'"]
+    geo --> lexunit_prefix["entry_attributes<br/>sense_lexunit_prefixes<br/>'all round British English'"]
+    geo --> labels_entry["labels 表 <br/> 词条级标签"]
 
-def decompress_json(compressed):
-    json_str = zlib.decompress(compressed).decode('utf-8')
-    return json.loads(json_str)
+    style labels_sense fill:#e3f2fd
+    style lexunit_prefix fill:#fff3e0
+    style labels_entry fill:#f3e5f5
 ```
 
-在 `attr_type` 字段标记为 `json_compressed`。
-
 ---
-
-## 最小化示例
-
-一个最简单的词典只需要：
-
-```sql
--- 1. 创建词典
-INSERT INTO dictionaries (name, capabilities)
-VALUES ('My Dictionary', '["lookup", "definition"]');
-
--- 2. 添加词条
-INSERT INTO entries (dict_id, headword, headword_lower)
-VALUES (1, 'hello', 'hello');
-
--- 3. 添加义项
-INSERT INTO senses (entry_id, definition)
-VALUES (1, 'used as a greeting');
-```
-
-这样就能在 LexDB 中查询和显示了！
-
----
-
-## 贡献新词典
-
-1. **解析原始数据** - 用任意语言/工具解析 MDX/XML/其他格式
-2. **生成 SQLite** - 按本 Schema 创建数据库
-3. **声明能力** - 在 `dictionaries.capabilities` 中列出支持的功能
-4. **编写 Adapter** - 创建 `lexdb-{dict}.el` 注册到 LexDB
-
-Emacs UI 会自动根据能力和数据渲染，无需修改 UI 代码。
-
----
-
-## 版本
-
-- Schema Version: 1.0
-- Last Updated: 2025-01

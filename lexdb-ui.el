@@ -20,9 +20,7 @@
 ;;;; Utility Functions
 ;;;; ============================================================
 
-(defsubst lexdb-ui--non-empty-string-p (s)
-  "Return t if S is a non-empty string."
-  (and s (stringp s) (not (string-empty-p s))))
+;; Note: Uses lexdb--non-empty-string-p from lexdb.el
 
 ;;;; ============================================================
 ;;;; Slot-based Rendering System (插槽渲染系统)
@@ -545,6 +543,27 @@ Same color as example-highlight-face for consistency."
   "Face for audio indicators (🔊)."
   :group 'lexdb)
 
+(defface lexdb-translation-indicator-face
+  '((((background dark))  :foreground "#56B6C2")
+    (((background light)) :foreground "#0E7490"))
+  "Face for translation indicators (🌐)."
+  :group 'lexdb)
+
+(defface lexdb-translation-peek-face
+  '((((background dark))  :foreground "#888888" :slant italic)
+    (((background light)) :foreground "#666666" :slant italic))
+  "Face for peeked translation text."
+  :group 'lexdb)
+
+(defcustom lexdb-ui-translation-indicator "🌐"
+  "Indicator for available translations.
+Set to nil to disable translation indicators."
+  :type '(choice string (const nil))
+  :group 'lexdb)
+
+(defvar-local lexdb-ui--translation-overlay nil
+  "Overlay for displaying peeked translation.")
+
 (defface lexdb-collocation-background-face
   '((((background dark))  :background "#1e1c1a" :extend t)
     (((background light)) :background "#f8f5f0" :extend t))
@@ -908,7 +927,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
   (let* ((display (or (lexdb-entry-headword-display entry)
                       (lexdb-entry-headword entry)))
          (formatted (lexdb-ui--number-to-superscript display)))
-    (when (lexdb-ui--non-empty-string-p formatted)
+    (when (lexdb--non-empty-string-p formatted)
       (insert (propertize formatted 'face 'lexdb-headword-face)))))
 
 (defun lexdb-ui--render-pronunciations (entry adapter)
@@ -919,7 +938,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     ;; Collect UK and US pronunciations
     (dolist (pron prons)
       (when-let ((ipa (lexdb-pronunciation-ipa pron)))
-        (when (lexdb-ui--non-empty-string-p ipa)
+        (when (lexdb--non-empty-string-p ipa)
           (pcase (lexdb-pronunciation-variant pron)
             ('uk (setq uk-ipa ipa))
             ('us (setq us-ipa ipa))))))
@@ -945,12 +964,12 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     ;; Frequency dots (●●● etc)
     (when (memq 'frequency-band caps)
       (when-let ((dots (lexdb-meta-get meta ns "frequency-dots")))
-        (when (lexdb-ui--non-empty-string-p dots)
+        (when (lexdb--non-empty-string-p dots)
           (insert " " (propertize dots 'face 'lexdb-frequency-dots-face)))))
     ;; Frequency level (S1 W2 etc) - use adapter hook if provided
     (when (memq 'frequency-band caps)
       (when-let ((freq (lexdb-meta-get meta ns "frequency")))
-        (when (lexdb-ui--non-empty-string-p freq)
+        (when (lexdb--non-empty-string-p freq)
           (if-let ((hook (lexdb-adapter-render-frequency-fn adapter)))
               (when-let ((rendered (funcall hook freq)))
                 (insert " " rendered))
@@ -958,7 +977,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     ;; CEFR level
     (when (memq 'cefr caps)
       (when-let ((cefr (lexdb-meta-get meta ns "cefr-level")))
-        (when (lexdb-ui--non-empty-string-p cefr)
+        (when (lexdb--non-empty-string-p cefr)
           (insert " " (propertize (format "[%s]" cefr) 'face 'lexdb-cefr-face)))))))
 
 (defun lexdb-ui--render-pos (entry adapter)
@@ -966,7 +985,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
   (when (lexdb-adapter-has-capability-p adapter 'pos)
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
            (pos (lexdb-meta-get (lexdb-entry-metadata entry) ns "pos")))
-      (when (lexdb-ui--non-empty-string-p pos)
+      (when (lexdb--non-empty-string-p pos)
         (insert " " (propertize pos 'face 'lexdb-pos-face))))))
 
 (defun lexdb-ui--render-audio-buttons (entry adapter)
@@ -980,7 +999,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
       ;; UK audio
       (when (memq 'audio-uk caps)
         (when-let ((path (lexdb-meta-get meta ns "audio-uk")))
-          (when (lexdb-ui--non-empty-string-p path)
+          (when (lexdb--non-empty-string-p path)
             (setq has-audio t)
             (insert (propertize "🔊 UK"
                                 'face 'lexdb-audio-indicator-face
@@ -990,7 +1009,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
       ;; US audio
       (when (memq 'audio-us caps)
         (when-let ((path (lexdb-meta-get meta ns "audio-us")))
-          (when (lexdb-ui--non-empty-string-p path)
+          (when (lexdb--non-empty-string-p path)
             (when has-audio (insert "  "))
             (setq has-audio t)
             (insert (propertize "🔊 US"
@@ -1009,7 +1028,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
          (relations (lexdb-entry-relations entry))
          (inflections (seq-filter (lambda (r) (eq (lexdb-relation-type r) 'inflection)) relations)))
     ;; Display full inflection text if available
-    (when (lexdb-ui--non-empty-string-p infl-text)
+    (when (lexdb--non-empty-string-p infl-text)
       (insert " ")
       ;; Make inflection words clickable within the text
       (let ((text (concat "(" infl-text ")"))
@@ -1053,12 +1072,21 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
         (sense-num-str (or (lexdb-sense-number sense) "0")))
     ;; Sense number
     (when-let ((num (lexdb-sense-number sense)))
-      (when (lexdb-ui--non-empty-string-p num)
+      (when (lexdb--non-empty-string-p num)
         (insert (propertize num 'face 'lexdb-sense-num-face) " ")))
+    ;; Translation indicator (🌐) - right after sense number
+    (when (memq 'chinese-definition caps)
+      (when-let ((def-zh (lexdb-meta-get (lexdb-sense-metadata sense) ns "definition-zh")))
+        (when (and (lexdb--non-empty-string-p def-zh) lexdb-ui-translation-indicator)
+          (insert (propertize lexdb-ui-translation-indicator
+                              'face 'lexdb-translation-indicator-face
+                              'lexdb-translation def-zh
+                              'help-echo "Press t to peek translation")
+                  " "))))
     ;; Signpost (guide word) - displayed in uppercase with background
     ;; For OALD: fix parentheses spacing (remove spaces around parentheses)
     (when-let ((signpost (lexdb-sense-signpost sense)))
-      (when (lexdb-ui--non-empty-string-p signpost)
+      (when (lexdb--non-empty-string-p signpost)
         (let ((formatted (upcase signpost)))
           ;; Fix spacing: "CALL (OUT)" -> "CALL(OUT)" for OALD style
           (when (eq (lexdb-adapter-id adapter) 'oald)
@@ -1093,7 +1121,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
     ;; Grammar label (for non-OALD adapters)
     (when (memq 'grammar caps)
       (when-let ((gram (lexdb-sense-grammar sense)))
-        (when (lexdb-ui--non-empty-string-p gram)
+        (when (lexdb--non-empty-string-p gram)
           (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
     ;; Lexunit prefix (e.g., "all round British English, all around American English")
     ;; Read from entry-level sense_lexunit_prefixes indexed by sense number
@@ -1140,7 +1168,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
     ;; Definition (English) - this may be just the lexunit for senses with subsenses
     (let ((def (lexdb-sense-definition sense)))
-      (when (lexdb-ui--non-empty-string-p def)
+      (when (lexdb--non-empty-string-p def)
         (insert (propertize def 'face 'lexdb-definition-face))))
     ;; SYN/OPP labels after definition (not clickable)
     (let ((labels (lexdb-sense-labels sense)))
@@ -1151,11 +1179,6 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (when (and lvalue (member ltype '(syn opp)))
               (insert " " (propertize (upcase (symbol-name ltype)) 'face 'lexdb-synonym-face)
                       " " (propertize lvalue 'face 'lexdb-synonym-face)))))))
-    ;; Chinese definition (if capability present)
-    (when (memq 'chinese-definition caps)
-      (when-let ((def-zh (lexdb-meta-get (lexdb-sense-metadata sense) ns "definition-zh")))
-        (when (lexdb-ui--non-empty-string-p def-zh)
-          (insert " " (propertize def-zh 'face 'lexdb-chinese-face)))))
     (insert "\n")
 
     ;; Subsenses (a, b, c)
@@ -1205,24 +1228,41 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
       (unless subsenses
         (when (memq 'examples caps)
           (dolist (ex (lexdb-sense-examples sense))
-            (let ((ex-text (lexdb-example-text ex))
-                  (audio-path (lexdb-example-audio ex))
-                  (position (or (cdr (assoc 'position (lexdb-example-metadata ex))) 0)))
-              (when (and (lexdb-ui--non-empty-string-p ex-text) (= position 0))
-                ;; Audio indicator at start if audio available
-                (if (and (memq 'audio-example caps) audio-path (lexdb-ui--non-empty-string-p audio-path))
-                    (insert (propertize "    🔊 "
-                                        'face 'lexdb-audio-indicator-face
-                                        'lexdb-audio-path audio-path
-                                        'lexdb-audio-dir audio-dir
-                                        'help-echo "C-c C-c to play"))
-                  (insert "    "))
+            (let* ((ex-text (lexdb-example-text ex))
+                   (audio-path (lexdb-example-audio ex))
+                   (position (or (cdr (assoc 'position (lexdb-example-metadata ex))) 0))
+                   (ex-zh (when (memq 'chinese-example caps)
+                            (lexdb-meta-get (lexdb-example-metadata ex) ns "text-zh")))
+                   (has-audio (and (memq 'audio-example caps) audio-path (lexdb--non-empty-string-p audio-path)))
+                   (has-translation (and ex-zh (lexdb--non-empty-string-p ex-zh) lexdb-ui-translation-indicator)))
+              (when (and (lexdb--non-empty-string-p ex-text) (= position 0))
+                ;; Build indicator string: [audio][translation]
+                (cond
+                 ((and has-audio has-translation)
+                  (insert (propertize "  🔊"
+                                      'face 'lexdb-audio-indicator-face
+                                      'lexdb-audio-path audio-path
+                                      'lexdb-audio-dir audio-dir
+                                      'help-echo "C-c C-c to play"))
+                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                      'face 'lexdb-translation-indicator-face
+                                      'lexdb-translation ex-zh
+                                      'help-echo "Press t to peek translation")))
+                 (has-audio
+                  (insert (propertize "  🔊 "
+                                      'face 'lexdb-audio-indicator-face
+                                      'lexdb-audio-path audio-path
+                                      'lexdb-audio-dir audio-dir
+                                      'help-echo "C-c C-c to play")))
+                 (has-translation
+                  (insert "  ")
+                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                      'face 'lexdb-translation-indicator-face
+                                      'lexdb-translation ex-zh
+                                      'help-echo "Press t to peek translation")))
+                 (t
+                  (insert "    ")))
                 (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-                ;; Chinese translation (if capability present)
-                (when (memq 'chinese-example caps)
-                  (when-let ((ex-zh (lexdb-meta-get (lexdb-example-metadata ex) ns "text-zh")))
-                    (when (lexdb-ui--non-empty-string-p ex-zh)
-                      (insert " " (propertize ex-zh 'face 'lexdb-chinese-face)))))
                 (insert "\n")))))))
     ;; Grammar patterns
     (let ((adapter-id (lexdb-adapter-id adapter)))
@@ -1230,20 +1270,20 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
         (dolist (gp (lexdb-sense-grammar-patterns sense))
           (let ((pattern (lexdb-grammar-pattern-pattern gp))
                 (gloss (lexdb-grammar-pattern-gloss gp)))
-            (when (lexdb-ui--non-empty-string-p pattern)
+            (when (lexdb--non-empty-string-p pattern)
               ;; Pattern on its own line
               (insert (propertize pattern 'face 'lexdb-grammar-pattern-face))
               ;; Gloss after pattern (e.g., "(=during a particular day)")
-              (when (and gloss (lexdb-ui--non-empty-string-p gloss))
+              (when (and gloss (lexdb--non-empty-string-p gloss))
                 (insert " " (propertize gloss 'face 'lexdb-definition-face)))
               (insert "\n")
               ;; Grammar pattern examples
               (dolist (ex (lexdb-grammar-pattern-examples gp))
                 (let ((ex-text (lexdb-example-text ex))
                       (audio-path (lexdb-example-audio ex)))
-                  (when (lexdb-ui--non-empty-string-p ex-text)
+                  (when (lexdb--non-empty-string-p ex-text)
                     ;; Audio indicator at start if audio available
-                    (if (and audio-path (lexdb-ui--non-empty-string-p audio-path))
+                    (if (and audio-path (lexdb--non-empty-string-p audio-path))
                         (insert (propertize "    🔊 "
                                             'face 'lexdb-audio-indicator-face
                                             'lexdb-audio-path audio-path
@@ -1257,24 +1297,41 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
       (unless subsenses
         (when (memq 'examples caps)
           (dolist (ex (lexdb-sense-examples sense))
-            (let ((ex-text (lexdb-example-text ex))
-                  (audio-path (lexdb-example-audio ex))
-                  (position (or (cdr (assoc 'position (lexdb-example-metadata ex))) 0)))
-              (when (and (lexdb-ui--non-empty-string-p ex-text) (= position 1))
-                ;; Audio indicator at start if audio available
-                (if (and (memq 'audio-example caps) audio-path (lexdb-ui--non-empty-string-p audio-path))
-                    (insert (propertize "    🔊 "
-                                        'face 'lexdb-audio-indicator-face
-                                        'lexdb-audio-path audio-path
-                                        'lexdb-audio-dir audio-dir
-                                        'help-echo "C-c C-c to play"))
-                  (insert "    "))
+            (let* ((ex-text (lexdb-example-text ex))
+                   (audio-path (lexdb-example-audio ex))
+                   (position (or (cdr (assoc 'position (lexdb-example-metadata ex))) 0))
+                   (ex-zh (when (memq 'chinese-example caps)
+                            (lexdb-meta-get (lexdb-example-metadata ex) ns "text-zh")))
+                   (has-audio (and (memq 'audio-example caps) audio-path (lexdb--non-empty-string-p audio-path)))
+                   (has-translation (and ex-zh (lexdb--non-empty-string-p ex-zh) lexdb-ui-translation-indicator)))
+              (when (and (lexdb--non-empty-string-p ex-text) (= position 1))
+                ;; Build indicator string: [audio][translation]
+                (cond
+                 ((and has-audio has-translation)
+                  (insert (propertize "  🔊"
+                                      'face 'lexdb-audio-indicator-face
+                                      'lexdb-audio-path audio-path
+                                      'lexdb-audio-dir audio-dir
+                                      'help-echo "C-c C-c to play"))
+                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                      'face 'lexdb-translation-indicator-face
+                                      'lexdb-translation ex-zh
+                                      'help-echo "Press t to peek translation")))
+                 (has-audio
+                  (insert (propertize "  🔊 "
+                                      'face 'lexdb-audio-indicator-face
+                                      'lexdb-audio-path audio-path
+                                      'lexdb-audio-dir audio-dir
+                                      'help-echo "C-c C-c to play")))
+                 (has-translation
+                  (insert "  ")
+                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                      'face 'lexdb-translation-indicator-face
+                                      'lexdb-translation ex-zh
+                                      'help-echo "Press t to peek translation")))
+                 (t
+                  (insert "    ")))
                 (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-                ;; Chinese translation (if capability present)
-                (when (memq 'chinese-example caps)
-                  (when-let ((ex-zh (lexdb-meta-get (lexdb-example-metadata ex) ns "text-zh")))
-                    (when (lexdb-ui--non-empty-string-p ex-zh)
-                      (insert " " (propertize ex-zh 'face 'lexdb-chinese-face)))))
                 (insert "\n")))))))
     ;; Lexunits (sub-phrases like "call a doctor/the police")
     ;; Read from entry-level sense_lexunits indexed by sense number
@@ -2076,7 +2133,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
               (gloss (lexdb-collocation-gloss coll))
               (examples (lexdb-collocation-examples coll)))
           ;; Category header - more prominent
-          (when (and (lexdb-ui--non-empty-string-p category)
+          (when (and (lexdb--non-empty-string-p category)
                      (not (equal category current-category)))
             (setq current-category category)
             ;; Add blank line before category (except first)
@@ -2087,10 +2144,10 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                                 'face 'lexdb-tab-section-header-face))
             (insert "\n"))
           ;; Collocation word
-          (when (lexdb-ui--non-empty-string-p text)
+          (when (lexdb--non-empty-string-p text)
             (insert "    " (propertize text 'face 'lexdb-collocation-word-face))
             ;; Gloss
-            (when (lexdb-ui--non-empty-string-p gloss)
+            (when (lexdb--non-empty-string-p gloss)
               (insert " " (propertize gloss 'face 'lexdb-collocation-gloss-face)))
             (insert "\n")
             ;; Examples
@@ -2141,7 +2198,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
     ;; WORD ORIGIN tab
     (when (lexdb-adapter-has-capability-p adapter 'origin)
       (let ((origin (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin_full")))
-        (when (lexdb-ui--non-empty-string-p origin)
+        (when (lexdb--non-empty-string-p origin)
           (push (list 'origin "WORD ORIGIN"
                       (concat "  " (propertize origin 'face 'lexdb-origin-face) "\n"))
                 tabs))))
@@ -2282,8 +2339,18 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                   (idiom-def-zh (alist-get 'definition_zh idiom))
                   (idiom-examples (alist-get 'examples idiom))
                   (jump-adapter adapter-id))
+              ;; Translation indicator at start of line
+              (if (and idiom-def-zh (stringp idiom-def-zh) (not (string-empty-p idiom-def-zh))
+                       lexdb-ui-translation-indicator)
+                  (insert (propertize lexdb-ui-translation-indicator
+                                      'face 'lexdb-translation-indicator-face
+                                      'lexdb-translation idiom-def-zh
+                                      'help-echo "Press t to peek translation")
+                          " ")
+                (insert "  "))
+              ;; Idiom text
               (when idiom-text
-                (insert "  " (propertize idiom-text 'face 'lexdb-phrase-face)))
+                (insert (propertize idiom-text 'face 'lexdb-phrase-face)))
               ;; Definition - check for pre-parsed crossref first, then fallback to regex
               (when (and idiom-def (stringp idiom-def) (not (string-empty-p idiom-def)))
                 (insert " ")
@@ -2317,8 +2384,6 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                                               'help-echo (format "Look up: %s [%s]" search-word jump-adapter)))
                       ;; Regular definition
                       (insert (propertize idiom-def 'face 'lexdb-definition-face))))))
-              (when (and idiom-def-zh (stringp idiom-def-zh) (not (string-empty-p idiom-def-zh)))
-                (insert " " (propertize idiom-def-zh 'face 'lexdb-chinese-face)))
               (insert "\n")
               (when idiom-examples
                 (let ((ex-list (cond ((vectorp idiom-examples) (append idiom-examples nil))
@@ -2328,10 +2393,16 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                     (let ((ex-text (alist-get 'text ex))
                           (ex-zh (alist-get 'text_zh ex)))
                       (when (and ex-text (stringp ex-text) (not (string-empty-p ex-text)))
-                        (insert "    ")
+                        ;; Indicator for idiom example translation
+                        (if (and ex-zh (stringp ex-zh) (not (string-empty-p ex-zh))
+                                 lexdb-ui-translation-indicator)
+                            (insert "  " (propertize lexdb-ui-translation-indicator
+                                                     'face 'lexdb-translation-indicator-face
+                                                     'lexdb-translation ex-zh
+                                                     'help-echo "Press t to peek translation")
+                                    " ")
+                          (insert "    "))
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-                        (when (and ex-zh (stringp ex-zh) (not (string-empty-p ex-zh)))
-                          (insert " " (propertize ex-zh 'face 'lexdb-chinese-face)))
                         (insert "\n")))))))))))))
 
 (defun lexdb-ui--slot-phrasal-verbs (entry adapter)
@@ -2375,6 +2446,54 @@ adapter-specific template from `lexdb-ui-adapter-templates'."
     (lexdb-ui-render-entry entry adapter)))
 
 ;;;; ============================================================
+;;;; Translation Peek
+;;;; ============================================================
+
+(defun lexdb-ui--clear-translation-overlay ()
+  "Clear the translation peek overlay."
+  (when lexdb-ui--translation-overlay
+    (delete-overlay lexdb-ui--translation-overlay)
+    (setq lexdb-ui--translation-overlay nil))
+  (remove-hook 'pre-command-hook #'lexdb-ui--clear-translation-overlay t))
+
+(defun lexdb-ui--find-translation-at-point ()
+  "Find translation text at or near point.
+Search current line for `lexdb-translation' text property."
+  (save-excursion
+    (let ((line-start (line-beginning-position))
+          (line-end (line-end-position))
+          (result nil))
+      ;; Search from line start to find any translation property
+      (goto-char line-start)
+      (while (and (< (point) line-end) (not result))
+        (let ((translation (get-text-property (point) 'lexdb-translation)))
+          (if translation
+              (setq result (cons (point) translation))
+            (goto-char (or (next-single-property-change (point) 'lexdb-translation nil line-end)
+                           line-end)))))
+      result)))
+
+(defun lexdb-ui-peek-translation ()
+  "Temporarily show translation for the current line.
+The translation disappears on the next command."
+  (interactive)
+  ;; Clear any existing overlay first
+  (lexdb-ui--clear-translation-overlay)
+  ;; Find translation at current line
+  (let ((found (lexdb-ui--find-translation-at-point)))
+    (if found
+        (let* ((pos (car found))
+               (translation (cdr found))
+               (ov (make-overlay (line-end-position) (line-end-position))))
+          (overlay-put ov 'after-string
+                       (propertize (concat "\n    " translation)
+                                   'face 'lexdb-translation-peek-face))
+          (setq lexdb-ui--translation-overlay ov)
+          ;; Register hook to clear on next command
+          (add-hook 'pre-command-hook #'lexdb-ui--clear-translation-overlay nil t))
+      (message "No translation available on this line"))))
+
+;;;; ============================================================
 ;;;; Buffer Management
 ;;;; ============================================================
 
@@ -2410,6 +2529,8 @@ adapter-specific template from `lexdb-ui-adapter-templates'."
     (define-key map "-" #'lexdb-ui-collapse-all)
     ;; Audio
     (define-key map (kbd "C-c C-c") #'lexdb-ui-play-audio-at-point)
+    ;; Translation peek
+    (define-key map "t" #'lexdb-ui-peek-translation)
     ;; History navigation
     (define-key map "l" #'lexdb-history-back)      ; back (like browser)
     (define-key map "r" #'lexdb-history-forward)   ; forward
