@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS examples (
     text TEXT NOT NULL,
     text_zh TEXT,                       -- Chinese translation (for bilingual dictionaries)
     audio_path TEXT,
+    position INTEGER DEFAULT 0,         -- 0=before grammar patterns, 1=after grammar patterns
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
 );
@@ -99,6 +100,7 @@ CREATE TABLE IF NOT EXISTS grammar_patterns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sense_id INTEGER NOT NULL,
     pattern TEXT NOT NULL,
+    gloss TEXT,                           -- Short explanation (e.g., "=during a particular day")
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
 );
@@ -260,24 +262,32 @@ def make_relation_fragments(prefix_text, clickable_text, suffix_text, link_href)
     Args:
         prefix_text: Non-clickable prefix (e.g., "see THESAURUS at ")
         clickable_text: Clickable part (e.g., "PHONE")
-        suffix_text: Non-clickable suffix (e.g., " (v.)")
+        suffix_text: Non-clickable suffix (e.g., "(8)")
         link_href: Link target (e.g., "phone#_s1")
 
     Returns:
         dict with prefix, clickable, suffix, target_word, target_sense
     """
-    target_word, target_sense = parse_link_target(link_href)
+    target_word, _ = parse_link_target(link_href)
 
     # Fallback: if no link, use clickable text as target word
     if not target_word and clickable_text:
         target_word = clickable_text.lower()
 
+    # Extract displayed sense number from suffix (e.g., "(8)" -> "8")
+    # This is what the user sees and should jump to
+    display_sense = None
+    if suffix_text:
+        sense_match = re.search(r'\((\d+)\)', suffix_text)
+        if sense_match:
+            display_sense = sense_match.group(1)
+
     return {
         'prefix': prefix_text.strip() + ' ' if prefix_text and prefix_text.strip() else None,
         'clickable': clickable_text.strip() if clickable_text else '',
-        'suffix': ' ' + suffix_text.strip() if suffix_text and suffix_text.strip() else None,
+        'suffix': suffix_text.strip() if suffix_text and suffix_text.strip() else None,
         'target_word': target_word or '',
-        'target_sense': target_sense
+        'target_sense': display_sense
     }
 
 
@@ -718,12 +728,53 @@ class LDOCEParser:
 
                 # Also check for lexunit that applies to all subsenses
                 lexunit = sense.find(class_='lexunit', recursive=False)
+                if not lexunit:
+                    for lu in sense.find_all(class_='lexunit'):
+                        if not lu.find_parent(class_='subsense'):
+                            lexunit = lu
+                            break
+
                 lexunit_text = clean_text(lexunit.get_text()) if lexunit else ''
+
+                # Get geo label that directly follows lexunit
+                lexunit_geo = ''
+                if lexunit:
+                    next_sib = lexunit.find_next_sibling()
+                    if next_sib and 'geo' in (next_sib.get('class') or []):
+                        lexunit_geo = clean_text(next_sib.get_text())
+
+                # Variant (e.g., ", all around American English")
+                variant = sense.find(class_='variant', recursive=False)
+                if not variant:
+                    for v in sense.find_all(class_='variant'):
+                        if not v.find_parent(class_='subsense'):
+                            variant = v
+                            break
+
+                variant_lexvar = ''
+                variant_geo = ''
+                if variant:
+                    lexvar = variant.find(class_='lexvar')
+                    var_geo = variant.find(class_='geo')
+                    if lexvar:
+                        variant_lexvar = clean_text(lexvar.get_text())
+                    if var_geo:
+                        variant_geo = clean_text(var_geo.get_text())
+
+                # Build lexunit_prefix as structured list for proper rendering
+                # Format: [{'type': 'lexunit'/'geo', 'text': '...'}, ...]
+                prefix_parts = []
                 if lexunit_text:
-                    if sense_data['definition']:
-                        sense_data['definition'] = lexunit_text + ': ' + sense_data['definition']
-                    else:
-                        sense_data['definition'] = lexunit_text
+                    prefix_parts.append({'type': 'lexunit', 'text': lexunit_text})
+                if lexunit_geo:
+                    prefix_parts.append({'type': 'geo', 'text': lexunit_geo})
+                if variant_lexvar:
+                    prefix_parts.append({'type': 'lexvar', 'text': variant_lexvar})
+                if variant_geo:
+                    prefix_parts.append({'type': 'geo', 'text': variant_geo})
+
+                if prefix_parts:
+                    sense_data['lexunit_prefix'] = prefix_parts
 
                 for subsense in subsenses:
                     sub_data = {
@@ -770,14 +821,8 @@ class LDOCEParser:
                     if sub_data['definition']:
                         sense_data['subsenses'].append(sub_data)
 
-                # If no main definition but has subsenses, use signpost or first subsense def as placeholder
-                if not sense_data['definition'] and sense_data['subsenses']:
-                    # Use signpost if available
-                    if sense_data['signpost']:
-                        sense_data['definition'] = f"[{sense_data['signpost']}]"
-                    else:
-                        # Use first subsense definition as main
-                        sense_data['definition'] = sense_data['subsenses'][0]['definition']
+                # When there are subsenses, don't set a main definition
+                # The lexunit_prefix will show the main phrase, subsenses have their own definitions
             else:
                 # No subsenses - regular definition parsing
                 defi = sense.find(class_='def')
@@ -824,31 +869,30 @@ class LDOCEParser:
                             variant = v
                             break
 
-                variant_text = ''
+                variant_lexvar = ''
+                variant_geo = ''
                 if variant:
-                    # Extract lexvar and its geo separately for proper formatting
                     lexvar = variant.find(class_='lexvar')
-                    variant_geo = variant.find(class_='geo')
+                    var_geo = variant.find(class_='geo')
                     if lexvar:
-                        variant_text = clean_text(lexvar.get_text())
-                        if variant_geo:
-                            variant_text += ' ' + clean_text(variant_geo.get_text())
-                    else:
-                        # Fallback to full text
-                        variant_text = clean_text(variant.get_text())
+                        variant_lexvar = clean_text(lexvar.get_text())
+                    if var_geo:
+                        variant_geo = clean_text(var_geo.get_text())
 
-                # Build lexunit_prefix: "all round British English, all around American English"
+                # Build lexunit_prefix as structured list for proper rendering
+                # Format: [{'type': 'lexunit'/'geo'/'lexvar', 'text': '...'}, ...]
                 prefix_parts = []
                 if lexunit_text:
-                    if lexunit_geo:
-                        prefix_parts.append(lexunit_text + ' ' + lexunit_geo)
-                    else:
-                        prefix_parts.append(lexunit_text)
-                if variant_text:
-                    prefix_parts.append(variant_text)
+                    prefix_parts.append({'type': 'lexunit', 'text': lexunit_text})
+                if lexunit_geo:
+                    prefix_parts.append({'type': 'geo', 'text': lexunit_geo})
+                if variant_lexvar:
+                    prefix_parts.append({'type': 'lexvar', 'text': variant_lexvar})
+                if variant_geo:
+                    prefix_parts.append({'type': 'geo', 'text': variant_geo})
 
                 if prefix_parts:
-                    sense_data['lexunit_prefix'] = ', '.join(prefix_parts)
+                    sense_data['lexunit_prefix'] = prefix_parts
                 # definition stays as-is (just the def text)
 
             # Grammar examples (GramExa with PROPFORM/PROPFORMPREP)
@@ -862,6 +906,10 @@ class LDOCEParser:
                     propformprep = gramexa.find(class_='propformprep')
                     if propformprep:
                         pattern = clean_text(propformprep.get_text())
+
+                # Get gloss (short explanation like "(=during a particular day)")
+                gloss = gramexa.find(class_='gloss')
+                gloss_text = clean_text(gloss.get_text()) if gloss else ''
 
                 # Get examples within this GramExa
                 gram_exs = []
@@ -880,58 +928,54 @@ class LDOCEParser:
                 if pattern:
                     sense_data['gram_examples'].append({
                         'pattern': pattern,
+                        'gloss': gloss_text,
                         'examples': gram_exs
                     })
 
-            # Regular examples (not inside GramExa)
+            # Parse examples and gramexa in HTML order
+            # We need to preserve the order: some examples come before gramexa, some after
+            # Strategy: iterate through direct children in order
+            # Position: 0 = before any gramexa, 1 = after gramexa
             ex_idx = 0
-            for example in sense.find_all(class_='example', recursive=False):
-                # Skip if inside a GramExa, grambox, or colloexa
-                if example.find_parent(class_='gramexa'):
-                    continue
-                if example.find_parent(class_='grambox'):
-                    continue
-                if example.find_parent(class_='colloexa'):
-                    continue
-                if example.find_parent(class_='f2nbox'):
-                    continue
-                ex_text = extract_highlighted_text(example)
-                audio_link = example.find('a', href=lambda h: h and h.startswith('sound://'))
-                audio_path = ''
-                if audio_link:
-                    audio_path = audio_link.get('href', '').replace('sound://', '')
-                if ex_text:
-                    sense_data['examples'].append({
-                        'text': ex_text,
-                        'audio_path': audio_path,
-                        'sort_order': ex_idx
-                    })
-                    ex_idx += 1
+            has_seen_gramexa = False
+            processed_examples = set()
 
-            # Also check for examples that are direct children but might be missed
-            for example in sense.find_all(class_='example'):
-                # Skip if already in gram_examples or has a gramexa/grambox/colloexa/f2nbox parent
-                if example.find_parent(class_='gramexa'):
+            for child in sense.children:
+                if not hasattr(child, 'get'):
                     continue
-                if example.find_parent(class_='grambox'):
+                classes = child.get('class') or []
+
+                if 'gramexa' in classes:
+                    has_seen_gramexa = True
                     continue
-                if example.find_parent(class_='colloexa'):
-                    continue
-                if example.find_parent(class_='f2nbox'):
-                    continue
-                ex_text = extract_highlighted_text(example)
-                # Check if already added
-                if ex_text and not any(e['text'] == ex_text for e in sense_data['examples']):
-                    audio_link = example.find('a', href=lambda h: h and h.startswith('sound://'))
-                    audio_path = ''
-                    if audio_link:
-                        audio_path = audio_link.get('href', '').replace('sound://', '')
-                    sense_data['examples'].append({
-                        'text': ex_text,
-                        'audio_path': audio_path,
-                        'sort_order': ex_idx
-                    })
-                    ex_idx += 1
+
+                if 'example' in classes:
+                    # Skip if inside special containers
+                    if child.find_parent(class_='gramexa'):
+                        continue
+                    if child.find_parent(class_='grambox'):
+                        continue
+                    if child.find_parent(class_='colloexa'):
+                        continue
+                    if child.find_parent(class_='f2nbox'):
+                        continue
+                    if child.find_parent(class_='subsense'):
+                        continue
+
+                    ex_text = extract_highlighted_text(child)
+                    if ex_text and ex_text not in processed_examples:
+                        processed_examples.add(ex_text)
+                        audio_link = child.find('a', href=lambda h: h and h.startswith('sound://'))
+                        audio_path = ''
+                        if audio_link:
+                            audio_path = audio_link.get('href', '').replace('sound://', '')
+                        sense_data['examples'].append({
+                            'text': ex_text,
+                            'audio_path': audio_path,
+                            'position': 1 if has_seen_gramexa else 0,
+                            'sort_order': ex_idx
+                        })
+                        ex_idx += 1
 
             # Cross references within sense - use fragment format
             # Structure in LDOCE:
@@ -1004,23 +1048,31 @@ class LDOCEParser:
                         # Only sensenum goes to suffix
                         suffix_text = clean_text(sensenum.get_text()) if sensenum else ''
 
-                        # Parse link target
+                        # Extract displayed sense number from refsensenum (e.g., "(8)" -> "8")
+                        # This is what the user sees and should jump to
+                        display_sense = None
+                        if sensenum:
+                            sense_match = re.search(r'\((\d+)\)', suffix_text)
+                            if sense_match:
+                                display_sense = sense_match.group(1)
+
+                        # Parse link target for word
                         link_href = ''
                         if href.startswith('entry://'):
                             link_href = href.replace('entry://', '')
 
-                        target_word, target_sense = parse_link_target(link_href)
+                        target_word, _ = parse_link_target(link_href)
                         if not target_word and clickable_text:
                             target_word = clickable_text.lower()
 
-                        # Create cross_ref entry
+                        # Create cross_ref entry - use display_sense for jumping
                         if clickable_text:
                             sense_data['cross_refs'].append({
                                 'prefix': current_prefix.strip() + ' ' if current_prefix and current_prefix.strip() else None,
                                 'clickable': clickable_text.strip(),
                                 'suffix': suffix_text if suffix_text else None,
                                 'target_word': target_word or '',
-                                'target_sense': target_sense
+                                'target_sense': display_sense
                             })
 
                         # Reset prefix for next link
@@ -1210,13 +1262,13 @@ class LDOCEParser:
             # Grammar box (GRAMMAR section with usage notes)
             grambox = sense.find(class_='grambox')
             if grambox:
-                gram_data = {
+                grammar_box_data = {
                     'heading': '',
                     'notes': []
                 }
                 heading = grambox.find(class_='heading')
                 if heading:
-                    gram_data['heading'] = clean_text(heading.get_text())
+                    grammar_box_data['heading'] = clean_text(heading.get_text())
 
                 # Parse explanation items
                 for expl in grambox.find_all(class_='expl'):
@@ -1245,21 +1297,21 @@ class LDOCEParser:
                     if badexa:
                         note['bad_example'] = clean_text(badexa.get_text())
 
-                    gram_data['notes'].append(note)
+                    grammar_box_data['notes'].append(note)
 
-                sense_data['grambox'] = gram_data
+                sense_data['grammar_box'] = grammar_box_data
 
             # Register box (f2nbox) - usage register notes
             # Structure: <span class="f2nbox"><span class="heading">Register</span><span class="expl">...</span></span>
             f2nbox = sense.find(class_='f2nbox')
             if f2nbox:
-                register_data = {
+                register_box_data = {
                     'heading': '',
                     'notes': []
                 }
                 heading = f2nbox.find(class_='heading')
                 if heading:
-                    register_data['heading'] = clean_text(heading.get_text())
+                    register_box_data['heading'] = clean_text(heading.get_text())
 
                 # Parse explanation items
                 for expl in f2nbox.find_all(class_='expl'):
@@ -1282,11 +1334,12 @@ class LDOCEParser:
                         if ex_text:
                             note['examples'].append(ex_text)
 
-                    register_data['notes'].append(note)
+                    register_box_data['notes'].append(note)
 
-                sense_data['registerbox'] = register_data
+                sense_data['register_box'] = register_box_data
 
-            if sense_data['definition']:
+            # Add sense if it has definition OR subsenses OR lexunit_prefix
+            if sense_data['definition'] or sense_data.get('subsenses') or sense_data.get('lexunit_prefix'):
                 sense_data['sort_order'] = idx
                 entry['senses'].append(sense_data)
 
@@ -1294,8 +1347,8 @@ class LDOCEParser:
         # This allows storage in entry_attributes table
         # Use sense number as key (e.g., "1", "2") for lookup in rendering
         sense_lexunits = {}
-        sense_gramboxes = {}
-        sense_registerboxes = {}
+        sense_grammar_boxes = {}
+        sense_register_boxes = {}
         sense_lexunit_prefixes = {}
         for sense in entry['senses']:
             # Use sense number (e.g., "1", "2"), fallback to sort_order+1 if no number
@@ -1305,19 +1358,19 @@ class LDOCEParser:
 
             if sense.get('lexunits'):
                 sense_lexunits[sense_num] = sense['lexunits']
-            if sense.get('grambox'):
-                sense_gramboxes[sense_num] = sense['grambox']
-            if sense.get('registerbox'):
-                sense_registerboxes[sense_num] = sense['registerbox']
+            if sense.get('grammar_box'):
+                sense_grammar_boxes[sense_num] = sense['grammar_box']
+            if sense.get('register_box'):
+                sense_register_boxes[sense_num] = sense['register_box']
             if sense.get('lexunit_prefix'):
                 sense_lexunit_prefixes[sense_num] = sense['lexunit_prefix']
 
         if sense_lexunits:
             entry['attributes']['sense_lexunits'] = sense_lexunits
-        if sense_gramboxes:
-            entry['attributes']['sense_gramboxes'] = sense_gramboxes
-        if sense_registerboxes:
-            entry['attributes']['sense_registerboxes'] = sense_registerboxes
+        if sense_grammar_boxes:
+            entry['attributes']['sense_grammar_boxes'] = sense_grammar_boxes
+        if sense_register_boxes:
+            entry['attributes']['sense_register_boxes'] = sense_register_boxes
         if sense_lexunit_prefixes:
             entry['attributes']['sense_lexunit_prefixes'] = sense_lexunit_prefixes
 
@@ -1443,19 +1496,19 @@ class LDOCEParser:
 
         # === Entry-level Grammar Box (e.g., "GRAMMAR: Patterns with day") ===
         # These are gramboxes NOT inside any sense (usually in .tail section)
-        entry_gramboxes = []
+        entry_grammar_boxes = []
         for grambox in soup.find_all(class_='grambox'):
             # Skip if inside a sense (those are handled separately)
             if grambox.find_parent(class_='sense'):
                 continue
 
-            gram_data = {
+            grammar_box_data = {
                 'heading': '',
                 'notes': []
             }
             heading = grambox.find(class_='heading')
             if heading:
-                gram_data['heading'] = clean_text(heading.get_text())
+                grammar_box_data['heading'] = clean_text(heading.get_text())
 
             # Parse compareword items (for "Patterns with X" style)
             for compareword in grambox.find_all(class_='compareword'):
@@ -1491,7 +1544,7 @@ class LDOCEParser:
                         note['bad_example'] = clean_text(badexa.get_text())
 
                 if note['text'] or note['pattern']:
-                    gram_data['notes'].append(note)
+                    grammar_box_data['notes'].append(note)
 
             # Also parse regular expl items (for standard GRAMMAR style)
             for expl in grambox.find_all(class_='expl', recursive=False):
@@ -1518,13 +1571,13 @@ class LDOCEParser:
                     note['bad_example'] = clean_text(badexa.get_text())
 
                 if note['text']:
-                    gram_data['notes'].append(note)
+                    grammar_box_data['notes'].append(note)
 
-            if gram_data['heading'] or gram_data['notes']:
-                entry_gramboxes.append(gram_data)
+            if grammar_box_data['heading'] or grammar_box_data['notes']:
+                entry_grammar_boxes.append(grammar_box_data)
 
-        if entry_gramboxes:
-            entry['attributes']['entry_gramboxes'] = entry_gramboxes
+        if entry_grammar_boxes:
+            entry['attributes']['entry_grammar_boxes'] = entry_grammar_boxes
 
         # === Cross references (only with valid links) ===
         # Using fragment storage: prefix + clickable + suffix
@@ -2205,24 +2258,26 @@ class LexDBWriter:
             # Examples
             for example in sense.get('examples', []):
                 self.cursor.execute("""
-                    INSERT INTO examples (sense_id, text, text_zh, audio_path, sort_order)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO examples (sense_id, text, text_zh, audio_path, position, sort_order)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """, (
                     sense_id,
                     example['text'],
                     example.get('chinese') or None,
                     example.get('audio_path') or None,
+                    example.get('position', 0),
                     example.get('sort_order', 0)
                 ))
 
             # Grammar patterns within sense
             for pat_idx, gram_ex in enumerate(sense.get('gram_examples', [])):
                 self.cursor.execute("""
-                    INSERT INTO grammar_patterns (sense_id, pattern, sort_order)
-                    VALUES (?, ?, ?)
+                    INSERT INTO grammar_patterns (sense_id, pattern, gloss, sort_order)
+                    VALUES (?, ?, ?, ?)
                 """, (
                     sense_id,
                     gram_ex['pattern'],
+                    gram_ex.get('gloss') or None,
                     pat_idx
                 ))
                 pattern_id = self.cursor.lastrowid

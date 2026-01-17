@@ -275,6 +275,7 @@ Keys should use namespace/key format (e.g., ldoce/frequency, oxford/cefr-level).
 (cl-defstruct (lexdb-grammar-pattern (:constructor lexdb-grammar-pattern-create))
   "A grammar pattern with examples (e.g., 'be required to do something')."
   (pattern nil :type string :documentation "The pattern text (required)")
+  (gloss nil :type (or string null) :documentation "Short explanation (e.g., '=during a particular day')")
   (examples nil :type list :documentation "List of lexdb-example structs"))
 
 (cl-defstruct (lexdb-example (:constructor lexdb-example-create))

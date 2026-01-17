@@ -95,13 +95,14 @@
   "Convert V2 SENSE-ROW to lexdb-sense."
   (pcase-let ((`(,id ,sense-num ,signpost ,definition ,_sort) sense-row))
     (let* ((ex-rows (sqlite-select db
-                     "SELECT text, audio_path FROM examples WHERE sense_id = ? ORDER BY sort_order"
+                     "SELECT text, audio_path, position FROM examples WHERE sense_id = ? ORDER BY position, sort_order"
                      (list id)))
            (examples (mapcar (lambda (ex)
                                (lexdb-example-create
                                 :text (nth 0 ex)
                                 :audio (let ((p (nth 1 ex)))
-                                         (when (lexdb-ldoce--non-empty-string-p p) p))))
+                                         (when (lexdb-ldoce--non-empty-string-p p) p))
+                                :metadata (list (cons 'position (nth 2 ex)))))
                              ex-rows))
            (label-rows (sqlite-select db
                         "SELECT label_type, label_value FROM labels WHERE sense_id = ? ORDER BY sort_order"
@@ -124,15 +125,16 @@
 (defun lexdb-ldoce--v2-fetch-grammar-patterns (sense-id db)
   "Fetch grammar patterns for SENSE-ID from V2 schema."
   (let ((rows (sqlite-select db
-               "SELECT id, pattern FROM grammar_patterns WHERE sense_id = ? ORDER BY sort_order"
+               "SELECT id, pattern, gloss FROM grammar_patterns WHERE sense_id = ? ORDER BY sort_order"
                (list sense-id))))
     (mapcar (lambda (row)
-              (pcase-let ((`(,pat-id ,pattern) row))
+              (pcase-let ((`(,pat-id ,pattern ,gloss) row))
                 (let ((ex-rows (sqlite-select db
                                 "SELECT text, audio_path FROM grammar_examples WHERE pattern_id = ? ORDER BY sort_order"
                                 (list pat-id))))
                   (lexdb-grammar-pattern-create
                    :pattern pattern
+                   :gloss (when (and gloss (not (string-empty-p gloss))) gloss)
                    :examples (mapcar (lambda (ex)
                                        (lexdb-example-create
                                         :text (nth 0 ex)

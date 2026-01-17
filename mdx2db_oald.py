@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS examples (
     text TEXT NOT NULL,
     text_zh TEXT,
     audio_path TEXT,
+    position INTEGER DEFAULT 0,         -- 0=before grammar patterns, 1=after grammar patterns
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
 );
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS grammar_patterns (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sense_id INTEGER NOT NULL,
     pattern TEXT NOT NULL,
+    gloss TEXT,                           -- Short explanation (e.g., "=during a particular day")
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
 );
@@ -106,15 +108,18 @@ CREATE TABLE IF NOT EXISTS labels (
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
 );
 
--- Relations table
+-- Relations table (unified storage for phrase, synonym, antonym, cross_ref, etc.)
+-- Uses fragment storage: prefix + clickable + suffix for easy rendering
 CREATE TABLE IF NOT EXISTS relations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_id INTEGER NOT NULL,
-    sense_id INTEGER,
-    relation_type TEXT NOT NULL,
-    target_text TEXT NOT NULL,
-    target_link TEXT,
-    target_entry_id INTEGER,
+    sense_id INTEGER,                   -- Optional: link to specific sense
+    relation_type TEXT NOT NULL,        -- Type: phrase, synonym, antonym, cross_ref, inflection
+    prefix TEXT,                        -- Non-clickable prefix (e.g., "see THESAURUS at ")
+    clickable TEXT NOT NULL,            -- Clickable part (e.g., "PHONE")
+    suffix TEXT,                        -- Non-clickable suffix (e.g., " (v.)")
+    target_word TEXT NOT NULL,          -- Normalized target word (e.g., "phone")
+    target_sense TEXT,                  -- Target sense number (e.g., "1")
     sort_order INTEGER DEFAULT 0,
     FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
     FOREIGN KEY (sense_id) REFERENCES senses(id) ON DELETE CASCADE
@@ -253,7 +258,7 @@ def parse_cross_reference(text):
     """Parse cross-reference text like '→necessity.' or '→old.'
 
     Returns:
-        dict with 'is_crossref', 'prefix', 'clickable', 'target_word'
+        dict with 'is_crossref', 'prefix', 'clickable', 'suffix', 'target_word', 'target_sense'
         or None if not a cross-reference
     """
     if not text:
@@ -268,7 +273,8 @@ def parse_cross_reference(text):
             'prefix': '→',
             'clickable': target,
             'suffix': None,
-            'target_word': target.lower()
+            'target_word': target.lower(),
+            'target_sense': None  # OALD4 doesn't have sense-level cross-refs
         }
     return None
 
@@ -1152,6 +1158,22 @@ def insert_entry(conn, dict_id, entry):
                     VALUES (?, ?, ?, ?)
                 """, (subsense_id, ex.get('text', ''), ex.get('text_zh', ''),
                       ex.get('sort_order', 0)))
+
+    # Insert relations (cross-refs, etc.)
+    for idx, rel in enumerate(entry.get('relations', [])):
+        cursor.execute("""
+            INSERT INTO relations (entry_id, sense_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            entry_id,
+            rel.get('type', 'cross_ref'),
+            rel.get('prefix'),
+            rel.get('clickable', ''),
+            rel.get('suffix'),
+            rel.get('target_word', ''),
+            rel.get('target_sense'),
+            idx
+        ))
 
     # Insert entry attributes (compressed JSON for complex data)
     for key, value in entry.get('attributes', {}).items():

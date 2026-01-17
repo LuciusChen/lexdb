@@ -38,7 +38,7 @@
   '((header          . lexdb-ui--slot-header)
     (tabs            . lexdb-ui--slot-tabs)
     (senses          . lexdb-ui--slot-senses)
-    (entry-grambox   . lexdb-ui--slot-entry-grambox)
+    (entry-grammar-box   . lexdb-ui--slot-entry-grammar-box)
     (idioms          . lexdb-ui--slot-idioms)
     (phrasal-verbs   . lexdb-ui--slot-phrasal-verbs)
     (synonyms        . lexdb-ui--slot-synonyms)
@@ -47,7 +47,7 @@
 Each function takes (entry adapter) and renders content at point.")
 
 (defcustom lexdb-ui-default-template
-  '(header tabs senses entry-grambox idioms phrasal-verbs synonyms separator)
+  '(header tabs senses entry-grammar-box idioms phrasal-verbs synonyms separator)
   "Default slot order for rendering entries.
 This is a list of slot names from `lexdb-ui-slot-functions'."
   :type '(repeat symbol)
@@ -1095,14 +1095,40 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
       (when-let ((gram (lexdb-sense-grammar sense)))
         (when (lexdb-ui--non-empty-string-p gram)
           (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
-    ;; Lexunit prefix (e.g., "the same old story/excuse etc") - before register labels
+    ;; Lexunit prefix (e.g., "all round British English, all around American English")
     ;; Read from entry-level sense_lexunit_prefixes indexed by sense number
+    ;; Now structured: [{'type': 'lexunit'/'geo'/'lexvar', 'text': '...'}, ...]
     (when entry
       (let* ((sense-prefixes (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_lexunit_prefixes"))
              (lexunit-prefix (when sense-prefixes
                                (cdr (assoc sense-num-str sense-prefixes #'string=)))))
-        (when (and lexunit-prefix (lexdb-ui--non-empty-string-p lexunit-prefix))
-          (insert (propertize lexunit-prefix 'face 'lexdb-lexunit-face) " "))))
+        (when lexunit-prefix
+          (let ((parts (cond
+                        ((vectorp lexunit-prefix) (append lexunit-prefix nil))
+                        ((listp lexunit-prefix) lexunit-prefix)
+                        ((stringp lexunit-prefix) (list (list (cons 'type "lexunit") (cons 'text lexunit-prefix))))
+                        (t nil)))
+                (first-part t))
+            (dolist (part parts)
+              (let ((ptype (cdr (assoc 'type part)))
+                    (ptext (cdr (assoc 'text part))))
+                (when (and ptext (not (string-empty-p ptext)))
+                  ;; Add comma separator before lexvar
+                  (when (and (not first-part) (equal ptype "lexvar"))
+                    (insert ", "))
+                  ;; Add space between parts (except before comma)
+                  (when (and (not first-part) (not (equal ptype "lexvar")))
+                    (insert " "))
+                  ;; Render based on type
+                  (cond
+                   ((or (equal ptype "lexunit") (equal ptype "lexvar"))
+                    (insert (propertize ptext 'face 'lexdb-lexunit-face)))
+                   ((equal ptype "geo")
+                    (insert (propertize ptext 'face 'lexdb-register-face)))
+                   (t
+                    (insert (propertize ptext 'face 'lexdb-lexunit-face))))
+                  (setq first-part nil))))
+            (when parts (insert " "))))))
     ;; Register labels (e.g., "formal", "informal") - after lexunit, before definition
     ;; Also geographic/regional labels (e.g., "especially British English")
     (let ((labels (lexdb-sense-labels sense)))
@@ -1174,15 +1200,43 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                         (insert "\n")))))))))))
 
-    ;; Grammar patterns - render differently based on adapter
-    ;; For OALD: patterns are verb codes like "[Tn]", "[I]" - already shown inline above definition
-    ;; For LDOCE: patterns are full phrases like "be required to do something"
+    ;; Regular examples BEFORE grammar patterns (position=0)
+    (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))
+      (unless subsenses
+        (when (memq 'examples caps)
+          (dolist (ex (lexdb-sense-examples sense))
+            (let ((ex-text (lexdb-example-text ex))
+                  (audio-path (lexdb-example-audio ex))
+                  (position (or (cdr (assoc 'position (lexdb-example-metadata ex))) 0)))
+              (when (and (lexdb-ui--non-empty-string-p ex-text) (= position 0))
+                ;; Audio indicator at start if audio available
+                (if (and (memq 'audio-example caps) audio-path (lexdb-ui--non-empty-string-p audio-path))
+                    (insert (propertize "    🔊 "
+                                        'face 'lexdb-audio-indicator-face
+                                        'lexdb-audio-path audio-path
+                                        'lexdb-audio-dir audio-dir
+                                        'help-echo "C-c C-c to play"))
+                  (insert "    "))
+                (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
+                ;; Chinese translation (if capability present)
+                (when (memq 'chinese-example caps)
+                  (when-let ((ex-zh (lexdb-meta-get (lexdb-example-metadata ex) ns "text-zh")))
+                    (when (lexdb-ui--non-empty-string-p ex-zh)
+                      (insert " " (propertize ex-zh 'face 'lexdb-chinese-face)))))
+                (insert "\n")))))))
+    ;; Grammar patterns
     (let ((adapter-id (lexdb-adapter-id adapter)))
       (unless (eq adapter-id 'oald)  ; Skip for OALD - codes shown inline
         (dolist (gp (lexdb-sense-grammar-patterns sense))
-          (let ((pattern (lexdb-grammar-pattern-pattern gp)))
+          (let ((pattern (lexdb-grammar-pattern-pattern gp))
+                (gloss (lexdb-grammar-pattern-gloss gp)))
             (when (lexdb-ui--non-empty-string-p pattern)
-              (insert "  " (propertize pattern 'face 'lexdb-grammar-pattern-face) "\n")
+              ;; Pattern on its own line
+              (insert (propertize pattern 'face 'lexdb-grammar-pattern-face))
+              ;; Gloss after pattern (e.g., "(=during a particular day)")
+              (when (and gloss (lexdb-ui--non-empty-string-p gloss))
+                (insert " " (propertize gloss 'face 'lexdb-definition-face)))
+              (insert "\n")
               ;; Grammar pattern examples
               (dolist (ex (lexdb-grammar-pattern-examples gp))
                 (let ((ex-text (lexdb-example-text ex))
@@ -1198,14 +1252,15 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                       (insert "    "))
                     (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                     (insert "\n")))))))))
-    ;; Regular examples (only if no subsenses)
+    ;; Regular examples AFTER grammar patterns (position=1)
     (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))
       (unless subsenses
         (when (memq 'examples caps)
           (dolist (ex (lexdb-sense-examples sense))
             (let ((ex-text (lexdb-example-text ex))
-                  (audio-path (lexdb-example-audio ex)))
-              (when (lexdb-ui--non-empty-string-p ex-text)
+                  (audio-path (lexdb-example-audio ex))
+                  (position (or (cdr (assoc 'position (lexdb-example-metadata ex))) 0)))
+              (when (and (lexdb-ui--non-empty-string-p ex-text) (= position 1))
                 ;; Audio indicator at start if audio available
                 (if (and (memq 'audio-example caps) audio-path (lexdb-ui--non-empty-string-p audio-path))
                     (insert (propertize "    🔊 "
@@ -1316,9 +1371,9 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (insert "\n")))))
 
     ;; Grammar box (GRAMMAR usage notes)
-    ;; Read from entry-level sense_gramboxes indexed by sense number
+    ;; Read from entry-level sense_grammar_boxes indexed by sense number
     (when entry
-      (let* ((sense-gramboxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_gramboxes"))
+      (let* ((sense-gramboxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_grammar_boxes"))
              ;; Use string= for proper string key matching in JSON-parsed alist
              (grambox (when sense-gramboxes
                         (cdr (assoc sense-num-str sense-gramboxes #'string=)))))
@@ -1377,9 +1432,9 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (insert "\n")))))
 
     ;; Register box (Register usage notes)
-    ;; Read from entry-level sense_registerboxes indexed by sense number
+    ;; Read from entry-level sense_register_boxes indexed by sense number
     (when entry
-      (let* ((sense-registerboxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_registerboxes"))
+      (let* ((sense-registerboxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_register_boxes"))
              (registerbox (when sense-registerboxes
                             (cdr (assoc sense-num-str sense-registerboxes #'string=)))))
         (when registerbox
@@ -2143,12 +2198,12 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
     (lexdb-ui--render-sense sense adapter entry))
   (insert "\n"))
 
-(defun lexdb-ui--slot-entry-grambox (entry adapter)
+(defun lexdb-ui--slot-entry-grammar-box (entry adapter)
   "Slot: Render entry-level grammar box."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
-         (entry-gramboxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "entry_gramboxes")))
-    (when (and entry-gramboxes (> (length entry-gramboxes) 0))
-      (let ((grambox-list (if (vectorp entry-gramboxes) (append entry-gramboxes nil) entry-gramboxes)))
+         (entry-grammar-boxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "entry_grammar_boxes")))
+    (when (and entry-grammar-boxes (> (length entry-grammar-boxes) 0))
+      (let ((grambox-list (if (vectorp entry-grammar-boxes) (append entry-grammar-boxes nil) entry-grammar-boxes)))
         (dolist (grambox grambox-list)
           (let ((heading (cdr (assoc 'heading grambox)))
                 (notes (cdr (assoc 'notes grambox)))
