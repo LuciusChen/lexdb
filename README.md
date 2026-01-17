@@ -12,6 +12,12 @@ Emacs 词典查询系统，将 MDX 词典转换为 SQLite 数据库，提供快�
 - 📖 imenu 支持，快速跳转义项
 - 📦 习语、短语动词、搭配、语法框等完整支持
 
+## 截图
+
+![screenshot](assets/screenshot.jpg)
+
+![screenshot1](assets/screenshot1.jpg)
+
 ## 文件结构
 
 ```
@@ -47,8 +53,8 @@ python mdx2db.py LDOCE6.mdx --extract-audio
 
 ```elisp
 (add-to-list 'load-path "/path/to/lexdb")
-(require 'lexdb)
-(require 'lexdb-ui)
+
+;; 加载适配器（自动加载 lexdb 和 lexdb-ui）
 (require 'lexdb-ldoce)
 (require 'lexdb-oald)
 
