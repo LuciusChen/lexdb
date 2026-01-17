@@ -276,8 +276,8 @@ Returns alist of (adapter-id . (entries . adapter))."
 
 ;; Headword and pronunciation
 (defface lexdb-headword-face
-  '((((background dark))  :foreground "#04cecd" :weight bold)
-    (((background light)) :foreground "#fe0000" :weight bold))
+  '((((background dark))  :foreground "#04cecd" :weight bold :height 1.3)
+    (((background light)) :foreground "#fe0000" :weight bold :height 1.3))
   "Face for headword display."
   :group 'lexdb)
 
