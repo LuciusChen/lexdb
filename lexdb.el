@@ -874,6 +874,281 @@ VARIANT can be \\='uk or \\='us (default: \\='uk)."
   (lexdb-play-pronunciation 'us))
 
 ;;;; ============================================================
+;;;; Generic Adapter (通用适配器)
+;;;; ============================================================
+
+;; Generic adapter for any dictionary that follows the LexDB schema.
+;; No need to write a separate .el file - just configure and use.
+
+(defvar lexdb-generic--connections (make-hash-table :test 'equal)
+  "Hash table mapping db-file paths to SQLite connections.")
+
+(defvar lexdb-generic--caches (make-hash-table :test 'equal)
+  "Hash table mapping adapter-id to data cache.")
+
+(defun lexdb-generic--ensure-db (db-file)
+  "Ensure database connection for DB-FILE is open."
+  (or (gethash db-file lexdb-generic--connections)
+      (let ((db (sqlite-open db-file)))
+        (puthash db-file db lexdb-generic--connections)
+        db)))
+
+(defun lexdb-generic--close-db (db-file adapter-id)
+  "Close database connection for DB-FILE and clear cache for ADAPTER-ID."
+  (when-let ((db (gethash db-file lexdb-generic--connections)))
+    (when (sqlitep db)
+      (sqlite-close db))
+    (remhash db-file lexdb-generic--connections))
+  (remhash adapter-id lexdb-generic--caches))
+
+(defun lexdb-generic--get-cache (adapter-id)
+  "Get or create cache for ADAPTER-ID."
+  (or (gethash adapter-id lexdb-generic--caches)
+      (let ((cache (make-hash-table :test 'equal)))
+        (puthash adapter-id cache lexdb-generic--caches)
+        cache)))
+
+(defun lexdb-generic--row-to-sense (sense-row db show-chinese)
+  "Convert SENSE-ROW to lexdb-sense using DB.
+SHOW-CHINESE controls whether to include Chinese translations."
+  (pcase-let ((`(,id ,sense-num ,signpost ,definition ,definition-zh ,_sort) sense-row))
+    (let* ((ex-rows (sqlite-select db
+                     "SELECT text, text_zh, audio_path FROM examples WHERE sense_id = ? ORDER BY position, sort_order"
+                     (list id)))
+           (examples (mapcar (lambda (ex)
+                               (lexdb-example-create
+                                :text (nth 0 ex)
+                                :metadata (when (and show-chinese (lexdb--non-empty-string-p (nth 1 ex)))
+                                            `((zh . ,(nth 1 ex))))
+                                :audio (nth 2 ex)))
+                             ex-rows))
+           ;; Get grammar patterns
+           (gp-rows (sqlite-select db
+                     "SELECT id, pattern, gloss FROM grammar_patterns WHERE sense_id = ? ORDER BY sort_order"
+                     (list id)))
+           (grammar-patterns (mapcar (lambda (gp)
+                                       (pcase-let ((`(,gp-id ,pattern ,gloss) gp))
+                                         (let ((gp-ex-rows (sqlite-select db
+                                                            "SELECT text FROM grammar_pattern_examples WHERE pattern_id = ? ORDER BY sort_order"
+                                                            (list gp-id))))
+                                           (lexdb-grammar-pattern-create
+                                            :pattern pattern
+                                            :gloss gloss
+                                            :examples (mapcar (lambda (e) (lexdb-example-create :text (car e)))
+                                                              gp-ex-rows)))))
+                                     gp-rows))
+           ;; Get labels
+           (label-rows (sqlite-select db
+                        "SELECT label_type, label_value FROM labels WHERE sense_id = ? ORDER BY sort_order"
+                        (list id)))
+           (labels (mapcar (lambda (l)
+                             (lexdb-label-create :type (intern (car l)) :value (cadr l)))
+                           label-rows)))
+      (lexdb-sense-create
+       :id id
+       :number sense-num
+       :signpost signpost
+       :definition definition
+       :examples examples
+       :grammar-patterns grammar-patterns
+       :labels labels
+       :metadata (when (and show-chinese (lexdb--non-empty-string-p definition-zh))
+                   `((zh . ,definition-zh)))))))
+
+(defun lexdb-generic--row-to-entry (entry-row db dict-id show-chinese)
+  "Convert ENTRY-ROW to lexdb-entry using DB.
+DICT-ID is used for querying related data.
+SHOW-CHINESE controls whether to include Chinese translations."
+  (pcase-let ((`(,id ,_dict ,headword ,_hw-lower ,hw-display) entry-row))
+    (let* (;; Get senses
+           (sense-rows (sqlite-select db
+                        "SELECT id, sense_number, signpost, definition, definition_zh, sort_order
+                         FROM senses WHERE entry_id = ? ORDER BY sort_order"
+                        (list id)))
+           (senses (mapcar (lambda (s) (lexdb-generic--row-to-sense s db show-chinese))
+                           sense-rows))
+           ;; Get pronunciations
+           (pron-rows (sqlite-select db
+                       "SELECT ipa, variant, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
+                       (list id)))
+           (pronunciations (mapcar (lambda (p)
+                                     (lexdb-pronunciation-create
+                                      :ipa (nth 0 p)
+                                      :variant (when (nth 1 p) (intern (nth 1 p)))
+                                      :audio (nth 2 p)))
+                                   pron-rows))
+           ;; Get entry-level labels (POS etc)
+           (entry-labels (sqlite-select db
+                          "SELECT label_type, label_value FROM labels WHERE entry_id = ? AND sense_id IS NULL ORDER BY sort_order"
+                          (list id)))
+           ;; Get metadata from entry_attributes
+           (attr-rows (sqlite-select db
+                       "SELECT attr_key, attr_value FROM entry_attributes WHERE entry_id = ?"
+                       (list id)))
+           (metadata (mapcar (lambda (a) (cons (intern (car a)) (cadr a))) attr-rows)))
+      ;; Add entry-level labels to metadata
+      (dolist (l entry-labels)
+        (push (cons (intern (format "label/%s" (car l))) (cadr l)) metadata))
+      (lexdb-entry-create
+       :id id
+       :headword headword
+       :headword-display hw-display
+       :senses senses
+       :pronunciations pronunciations
+       :metadata metadata))))
+
+(defun lexdb-generic--lookup (word db-file dict-id show-chinese)
+  "Look up WORD in database at DB-FILE with DICT-ID.
+SHOW-CHINESE controls whether to include Chinese translations."
+  (let* ((db (lexdb-generic--ensure-db db-file))
+         (word-lower (downcase word))
+         ;; First try exact match
+         (rows (sqlite-select db
+                "SELECT id, dict_id, headword, headword_lower, headword_display
+                 FROM entries WHERE headword_lower = ? AND dict_id = ?"
+                (list word-lower dict-id))))
+    ;; If no results, try prefix match
+    (unless rows
+      (setq rows (sqlite-select db
+                  "SELECT id, dict_id, headword, headword_lower, headword_display
+                   FROM entries WHERE headword_lower LIKE ? AND dict_id = ? LIMIT 20"
+                  (list (concat word-lower "%") dict-id))))
+    (mapcar (lambda (r) (lexdb-generic--row-to-entry r db dict-id show-chinese)) rows)))
+
+(defun lexdb-generic--find-lemma (word db-file dict-id)
+  "Try to find lemma/base form for WORD using DB-FILE with DICT-ID."
+  (let ((db (lexdb-generic--ensure-db db-file))
+        (word-lower (downcase word)))
+    ;; Check lemmas table if exists
+    (when-let ((row (car (sqlite-select db
+                          "SELECT lemma FROM lemmas WHERE inflected = ? AND dict_id = ?"
+                          (list word-lower dict-id)))))
+      (car row))))
+
+(defun lexdb-generic--get-collocations (entry-id db-file adapter-id)
+  "Get collocations for ENTRY-ID from DB-FILE."
+  (let ((cache (lexdb-generic--get-cache adapter-id)))
+    (or (gethash (cons entry-id 'collocations) cache)
+        (let* ((db (lexdb-generic--ensure-db db-file))
+               (rows (sqlite-select db
+                      "SELECT id, category, text, gloss FROM collocations WHERE entry_id = ? ORDER BY sort_order"
+                      (list entry-id)))
+               (colls (mapcar (lambda (row)
+                                (pcase-let ((`(,coll-id ,cat ,coll ,gloss) row))
+                                  (let ((ex-rows (sqlite-select db
+                                                  "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
+                                                  (list coll-id))))
+                                    (lexdb-collocation-create
+                                     :category cat :text coll :gloss gloss
+                                     :examples (mapcar #'car ex-rows)))))
+                              rows)))
+          (puthash (cons entry-id 'collocations) colls cache)
+          colls))))
+
+(defun lexdb-generic--get-relations (entry-id type db-file adapter-id)
+  "Get relations of TYPE for ENTRY-ID from DB-FILE."
+  (let* ((db (lexdb-generic--ensure-db db-file))
+         (rows (sqlite-select db
+                "SELECT target_text, target_link FROM relations WHERE entry_id = ? AND relation_type = ? ORDER BY sort_order"
+                (list entry-id (symbol-name type)))))
+    (mapcar (lambda (row)
+              (pcase-let ((`(,target ,link) row))
+                (lexdb-relation-create
+                 :type type
+                 :target target
+                 :target-link (when (lexdb--non-empty-string-p link) link))))
+            rows)))
+
+(defun lexdb-generic--detect-capabilities (db-file dict-id)
+  "Detect capabilities by checking database content for DICT-ID in DB-FILE."
+  (let ((db (lexdb-generic--ensure-db db-file))
+        (caps '(lookup definition)))
+    ;; Check for pronunciations
+    (when (car (sqlite-select db
+                "SELECT 1 FROM pronunciations p JOIN entries e ON p.entry_id = e.id
+                 WHERE e.dict_id = ? LIMIT 1" (list dict-id)))
+      (push 'pronunciation caps))
+    ;; Check for audio
+    (when (car (sqlite-select db
+                "SELECT 1 FROM pronunciations p JOIN entries e ON p.entry_id = e.id
+                 WHERE e.dict_id = ? AND p.audio_path IS NOT NULL AND p.variant = 'uk' LIMIT 1"
+                (list dict-id)))
+      (push 'audio-uk caps))
+    (when (car (sqlite-select db
+                "SELECT 1 FROM pronunciations p JOIN entries e ON p.entry_id = e.id
+                 WHERE e.dict_id = ? AND p.audio_path IS NOT NULL AND p.variant = 'us' LIMIT 1"
+                (list dict-id)))
+      (push 'audio-us caps))
+    ;; Check for examples
+    (when (car (sqlite-select db
+                "SELECT 1 FROM examples ex JOIN senses s ON ex.sense_id = s.id
+                 JOIN entries e ON s.entry_id = e.id WHERE e.dict_id = ? LIMIT 1"
+                (list dict-id)))
+      (push 'examples caps))
+    ;; Check for collocations
+    (when (car (sqlite-select db
+                "SELECT 1 FROM collocations c JOIN entries e ON c.entry_id = e.id
+                 WHERE e.dict_id = ? LIMIT 1" (list dict-id)))
+      (push 'collocations caps))
+    ;; Check for lemmas
+    (when (car (sqlite-select db
+                "SELECT 1 FROM lemmas WHERE dict_id = ? LIMIT 1" (list dict-id)))
+      (push 'lemmatization caps))
+    ;; Check for Chinese translations
+    (when (car (sqlite-select db
+                "SELECT 1 FROM senses s JOIN entries e ON s.entry_id = e.id
+                 WHERE e.dict_id = ? AND s.definition_zh IS NOT NULL LIMIT 1"
+                (list dict-id)))
+      (push 'chinese caps))
+    (nreverse caps)))
+
+(defun lexdb-generic--register-from-config (config)
+  "Register generic adapter from CONFIG plist.
+CONFIG should contain:
+  :id        - Adapter ID (required)
+  :name      - Display name (optional)
+  :db-file   - Path to SQLite database (required)
+  :dict-id   - Dictionary ID in database (optional, defaults to adapter id)
+  :audio-dir - Audio directory (optional)
+  :show-chinese - Whether to show Chinese translations (default t)"
+  (let* ((id (plist-get config :id))
+         (name (or (plist-get config :name) (symbol-name id)))
+         (db-file (expand-file-name (plist-get config :db-file)))
+         (dict-id (or (plist-get config :dict-id) (symbol-name id)))
+         (audio-dir (when-let ((dir (plist-get config :audio-dir)))
+                      (expand-file-name dir)))
+         (show-chinese (if (plist-member config :show-chinese)
+                           (plist-get config :show-chinese)
+                         t))
+         (caps (lexdb-generic--detect-capabilities db-file dict-id)))
+    (unless db-file
+      (error "Generic adapter config missing :db-file"))
+    (unless (file-exists-p db-file)
+      (error "Database file not found: %s" db-file))
+    (lexdb-register-adapter
+     (lexdb-adapter-create
+      :id id
+      :name name
+      :capabilities caps
+      :db-file db-file
+      :audio-dir audio-dir
+      :lookup-fn (lambda (word)
+                   (lexdb-generic--lookup word db-file dict-id show-chinese))
+      :close-fn (lambda ()
+                  (lexdb-generic--close-db db-file id))
+      :collocations-fn (when (memq 'collocations caps)
+                         (lambda (entry-id)
+                           (lexdb-generic--get-collocations entry-id db-file id)))
+      :relations-fn (lambda (entry-id type)
+                      (lexdb-generic--get-relations entry-id type db-file id))
+      :lemma-fn (when (memq 'lemmatization caps)
+                  (lambda (word)
+                    (lexdb-generic--find-lemma word db-file dict-id)))))))
+
+;; Register 'generic adapter type
+(lexdb-register-adapter-type 'generic #'lexdb-generic--register-from-config)
+
+;;;; ============================================================
 ;;;; External API (for integration with other packages)
 ;;;; ============================================================
 
