@@ -3,15 +3,19 @@
 ;; Copyright (C) 2025
 
 ;; Author: Your Name
-;; Version: 0.2.0
+;; Version: 0.3.0
 ;; Package-Requires: ((emacs "29.1") (lexdb "0.1.0"))
 
 ;;; Commentary:
 
 ;; Adapter for Longman Dictionary of Contemporary English (LDOCE).
-;; Supports both legacy schema (v1) and new LexDB schema (v2).
+;; Reuses generic adapter functions where possible, adds LDOCE-specific features:
+;; - Apostrophe normalization for lookup
+;; - Custom frequency rendering
+;; - Fragment-based relations (prefix + clickable + suffix)
+;; - Subsenses support
 ;;
-;; Usage (recommended - unified config):
+;; Usage:
 ;;   (require 'lexdb-ldoce)
 ;;   (setq lexdb-dictionaries
 ;;         '((:id ldoce
@@ -21,23 +25,10 @@
 ;;            :audio-dir "~/dicts/ldoce-audio/"
 ;;            :priority 1)))
 ;;   (lexdb-init)
-;;
-;; Usage (legacy - still supported):
-;;   (require 'lexdb-ldoce)
-;;   (setq lexdb-ldoce-db-file "~/path/to/ldoce.db")
-;;   (setq lexdb-ldoce-audio-directory "~/path/to/audio/")
-;;   (lexdb-ldoce-register)
 
 ;;; Code:
 
 (require 'lexdb)
-(require 'sqlite)
-
-;;;; ============================================================
-;;;; Utility Functions
-;;;; ============================================================
-
-;; Note: Uses lexdb--non-empty-string-p from lexdb.el
 
 ;;;; ============================================================
 ;;;; Configuration
@@ -59,38 +50,21 @@
   :group 'lexdb-ldoce)
 
 ;;;; ============================================================
-;;;; Database Connection
+;;;; LDOCE-specific: Apostrophe Normalization
 ;;;; ============================================================
 
-(defvar lexdb-ldoce--db nil
-  "Database connection for LDOCE.")
-
-(defvar lexdb-ldoce--cache (make-hash-table :test 'eql)
-  "Cache for prefetched data.")
-
-(defun lexdb-ldoce--ensure-db ()
-  "Ensure database connection is open."
-  (unless lexdb-ldoce-db-file
-    (error "Please set `lexdb-ldoce-db-file'"))
-  (unless (file-exists-p lexdb-ldoce-db-file)
-    (error "Database file not found: %s" lexdb-ldoce-db-file))
-  (unless (and lexdb-ldoce--db (sqlitep lexdb-ldoce--db))
-    (setq lexdb-ldoce--db (sqlite-open lexdb-ldoce-db-file)))
-  lexdb-ldoce--db)
-
-(defun lexdb-ldoce--close ()
-  "Close database connection and clear cache."
-  (when (and lexdb-ldoce--db (sqlitep lexdb-ldoce--db))
-    (sqlite-close lexdb-ldoce--db)
-    (setq lexdb-ldoce--db nil))
-  (clrhash lexdb-ldoce--cache))
+(defun lexdb-ldoce--normalize-apostrophe (str)
+  "Normalize various apostrophe characters in STR to standard ASCII apostrophe."
+  (when str
+    (replace-regexp-in-string "[''ʼ′`]" "'" str)))
 
 ;;;; ============================================================
-;;;; Schema V2 (New LexDB Schema)
+;;;; LDOCE-specific: Sense Conversion (with subsenses, fragments)
 ;;;; ============================================================
 
-(defun lexdb-ldoce--v2-row-to-sense (sense-row db)
-  "Convert V2 SENSE-ROW to lexdb-sense."
+(defun lexdb-ldoce--row-to-sense (sense-row db)
+  "Convert SENSE-ROW to lexdb-sense using DB.
+Handles LDOCE-specific features: grammar patterns, fragment relations."
   (pcase-let ((`(,id ,sense-num ,signpost ,definition ,_sort) sense-row))
     (let* ((ex-rows (sqlite-select db
                      "SELECT text, audio_path, position FROM examples WHERE sense_id = ? ORDER BY position, sort_order"
@@ -108,8 +82,8 @@
            (labels (mapcar (lambda (l)
                              (lexdb-label-create :type (intern (nth 0 l)) :value (nth 1 l)))
                            label-rows))
-           (gram-patterns (lexdb-ldoce--v2-fetch-grammar-patterns id db))
-           (sense-relations (lexdb-ldoce--v2-fetch-sense-relations id db)))
+           (gram-patterns (lexdb-ldoce--fetch-grammar-patterns id db))
+           (sense-relations (lexdb-ldoce--fetch-sense-relations id db)))
       (lexdb-sense-create
        :id id
        :number (when (lexdb--non-empty-string-p sense-num) sense-num)
@@ -120,8 +94,8 @@
        :labels labels
        :relations sense-relations))))
 
-(defun lexdb-ldoce--v2-fetch-grammar-patterns (sense-id db)
-  "Fetch grammar patterns for SENSE-ID from V2 schema."
+(defun lexdb-ldoce--fetch-grammar-patterns (sense-id db)
+  "Fetch grammar patterns for SENSE-ID from DB."
   (let ((rows (sqlite-select db
                "SELECT id, pattern, gloss FROM grammar_patterns WHERE sense_id = ? ORDER BY sort_order"
                (list sense-id))))
@@ -141,47 +115,8 @@
                                      ex-rows)))))
             rows)))
 
-(defun lexdb-ldoce--v2-build-pronunciations (entry-id db)
-  "Build pronunciations for ENTRY-ID from V2 schema."
-  (let ((rows (sqlite-select db
-               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
-               (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (or (lexdb--non-empty-string-p ipa)
-                                (lexdb--non-empty-string-p audio))
-                        (lexdb-pronunciation-create
-                         :ipa ipa
-                         :variant (when variant (intern variant))
-                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
-                  rows))))
-
-(defun lexdb-ldoce--v2-fetch-relations (entry-id db)
-  "Fetch entry-level relations for ENTRY-ID from V2 schema.
-Only returns relations where sense_id IS NULL.
-Uses fragment storage format: prefix + clickable + suffix."
-  (let ((rows (sqlite-select db
-               "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE entry_id = ? AND sense_id IS NULL ORDER BY sort_order"
-               (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
-                      (when (lexdb--non-empty-string-p clickable)
-                        (lexdb-relation-create
-                         :type (intern rel-type)
-                         :prefix prefix
-                         :clickable clickable
-                         :suffix suffix
-                         :target-word target-word
-                         :target-sense target-sense
-                         ;; Legacy fields for compatibility
-                         :target (concat (or prefix "") clickable (or suffix ""))))))
-                  rows))))
-
-(defun lexdb-ldoce--v2-fetch-sense-relations (sense-id db)
-  "Fetch sense-level relations for SENSE-ID from V2 schema.
-Uses fragment storage format: prefix + clickable + suffix."
+(defun lexdb-ldoce--fetch-sense-relations (sense-id db)
+  "Fetch sense-level relations for SENSE-ID using fragment format."
   (let ((rows (sqlite-select db
                "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE sense_id = ? ORDER BY sort_order"
                (list sense-id))))
@@ -196,9 +131,12 @@ Uses fragment storage format: prefix + clickable + suffix."
                          :suffix suffix
                          :target-word target-word
                          :target-sense target-sense
-                         ;; Legacy fields for compatibility
                          :target (concat (or prefix "") clickable (or suffix ""))))))
                   rows))))
+
+;;;; ============================================================
+;;;; LDOCE-specific: Entry Conversion (with metadata, subsenses)
+;;;; ============================================================
 
 (defun lexdb-ldoce--decompress-json (compressed-data)
   "Decompress zlib-compressed JSON data."
@@ -210,8 +148,27 @@ Uses fragment storage format: prefix + clickable + suffix."
            (buffer-string))))
     (json-read-from-string (decode-coding-string decompressed 'utf-8))))
 
-(defun lexdb-ldoce--v2-fetch-attributes (entry-id db)
-  "Fetch EAV attributes for ENTRY-ID from V2 schema."
+(defun lexdb-ldoce--fetch-entry-relations (entry-id db)
+  "Fetch entry-level relations for ENTRY-ID using fragment format."
+  (let ((rows (sqlite-select db
+               "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE entry_id = ? AND sense_id IS NULL ORDER BY sort_order"
+               (list entry-id))))
+    (delq nil
+          (mapcar (lambda (row)
+                    (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
+                      (when (lexdb--non-empty-string-p clickable)
+                        (lexdb-relation-create
+                         :type (intern rel-type)
+                         :prefix prefix
+                         :clickable clickable
+                         :suffix suffix
+                         :target-word target-word
+                         :target-sense target-sense
+                         :target (concat (or prefix "") clickable (or suffix ""))))))
+                  rows))))
+
+(defun lexdb-ldoce--fetch-attributes (entry-id db)
+  "Fetch EAV attributes for ENTRY-ID."
   (let ((rows (sqlite-select db
                "SELECT attr_key, attr_value, attr_type FROM entry_attributes WHERE entry_id = ?"
                (list entry-id))))
@@ -226,17 +183,29 @@ Uses fragment storage format: prefix + clickable + suffix."
                         (_ value)))))
             rows)))
 
-(defun lexdb-ldoce--v2-row-to-entry (row)
-  "Convert V2 database ROW to lexdb-entry."
+(defun lexdb-ldoce--row-to-entry (row db)
+  "Convert database ROW to lexdb-entry using DB."
   (pcase-let ((`(,id ,_dict-id ,word ,_word-lower ,hyph) row))
-    (let* ((db (lexdb-ldoce--ensure-db))
-           (sense-rows (sqlite-select db
+    (let* ((sense-rows (sqlite-select db
                         "SELECT id, sense_number, signpost, definition, sort_order FROM senses WHERE entry_id = ? ORDER BY sort_order"
                         (list id)))
-           (senses (mapcar (lambda (r) (lexdb-ldoce--v2-row-to-sense r db)) sense-rows))
-           (prons (lexdb-ldoce--v2-build-pronunciations id db))
-           (relations (lexdb-ldoce--v2-fetch-relations id db))
-           (metadata (lexdb-ldoce--v2-fetch-attributes id db))
+           (senses (mapcar (lambda (r) (lexdb-ldoce--row-to-sense r db)) sense-rows))
+           ;; Pronunciations - reuse generic pattern
+           (pron-rows (sqlite-select db
+                       "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
+                       (list id)))
+           (prons (delq nil
+                        (mapcar (lambda (row)
+                                  (pcase-let ((`(,variant ,ipa ,audio) row))
+                                    (when (or (lexdb--non-empty-string-p ipa)
+                                              (lexdb--non-empty-string-p audio))
+                                      (lexdb-pronunciation-create
+                                       :ipa ipa
+                                       :variant (when variant (intern variant))
+                                       :audio (when (lexdb--non-empty-string-p audio) audio)))))
+                                pron-rows)))
+           (relations (lexdb-ldoce--fetch-entry-relations id db))
+           (metadata (lexdb-ldoce--fetch-attributes id db))
            (label-rows (sqlite-select db
                         "SELECT label_type, label_value FROM labels WHERE entry_id = ? AND sense_id IS NULL"
                         (list id))))
@@ -269,99 +238,33 @@ Uses fragment storage format: prefix + clickable + suffix."
        :senses senses :pronunciations prons :relations relations :metadata metadata))))
 
 ;;;; ============================================================
-;;;; Adapter Functions
+;;;; Lookup (with apostrophe normalization)
 ;;;; ============================================================
 
-(defun lexdb-ldoce--normalize-apostrophe (str)
-  "Normalize various apostrophe characters in STR to standard ASCII apostrophe."
-  (when str
-    ;; Replace curly/smart apostrophes with straight apostrophe
-    (replace-regexp-in-string "[''ʼ′`]" "'" str)))
-
 (defun lexdb-ldoce--lookup (word)
-  "Look up WORD in LDOCE database.
-First tries exact match, then tries fuzzy match (LIKE) as fallback."
-  (let* ((db (lexdb-ldoce--ensure-db))
-         ;; Normalize apostrophes before searching
+  "Look up WORD in LDOCE database with apostrophe normalization."
+  (let* ((db (lexdb-generic--ensure-db lexdb-ldoce-db-file))
          (word-normalized (lexdb-ldoce--normalize-apostrophe word))
          (word-lower (downcase word-normalized))
-         ;; First try exact match
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
                  FROM entries WHERE headword_lower = ? AND dict_id = 'ldoce'"
                 (list word-lower))))
-    ;; If no results, try fuzzy match (word at start, handles "Big Apple" -> "Big Apple, the")
+    ;; Fuzzy match fallbacks
     (unless rows
       (setq rows (sqlite-select db
                   "SELECT id, dict_id, headword, headword_lower, headword_display
                    FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ldoce'"
                   (list (concat word-lower "%")))))
-    ;; If still no results, try word anywhere
     (unless rows
       (setq rows (sqlite-select db
                   "SELECT id, dict_id, headword, headword_lower, headword_display
                    FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ldoce'"
                   (list (concat "%" word-lower "%")))))
-    (mapcar #'lexdb-ldoce--v2-row-to-entry rows)))
-
-(defun lexdb-ldoce--get-collocations (entry-id)
-  "Get collocations for ENTRY-ID."
-  (or (gethash (cons entry-id 'collocations) lexdb-ldoce--cache)
-      (let* ((db (lexdb-ldoce--ensure-db))
-             (rows (sqlite-select db
-                    "SELECT id, category, text, gloss FROM collocations WHERE entry_id = ? ORDER BY sort_order"
-                    (list entry-id)))
-             (colls (mapcar (lambda (row)
-                              (pcase-let ((`(,coll-id ,cat ,coll ,gloss) row))
-                                (let ((ex-rows (sqlite-select db
-                                                "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
-                                                (list coll-id))))
-                                  (lexdb-collocation-create
-                                   :category cat :text coll :gloss gloss
-                                   :examples (mapcar #'car ex-rows)))))
-                            rows)))
-        (puthash (cons entry-id 'collocations) colls lexdb-ldoce--cache)
-        colls)))
-
-(defun lexdb-ldoce--get-relations (entry-id type)
-  "Get relations of TYPE for ENTRY-ID."
-  (let* ((db (lexdb-ldoce--ensure-db))
-         (rows (sqlite-select db
-                "SELECT target_text, target_link FROM relations WHERE entry_id = ? AND relation_type = ? ORDER BY sort_order"
-                (list entry-id (symbol-name type)))))
-    (mapcar (lambda (row)
-              (pcase-let ((`(,target ,link) row))
-                (lexdb-relation-create
-                 :type type
-                 :target target
-                 :target-link (when (lexdb--non-empty-string-p link) link))))
-            rows)))
-
-(defun lexdb-ldoce--prefetch (entry-ids)
-  "Prefetch data for ENTRY-IDS."
-  (when entry-ids
-    (let* ((db (lexdb-ldoce--ensure-db))
-           (ph (mapconcat (lambda (_) "?") entry-ids ","))
-           (coll-rows (sqlite-select db
-                       (format "SELECT id, entry_id, category, text, gloss FROM collocations WHERE entry_id IN (%s) ORDER BY entry_id, sort_order" ph)
-                       entry-ids))
-           (entry-colls (make-hash-table :test 'eql)))
-      (dolist (row coll-rows) (push row (gethash (nth 1 row) entry-colls)))
-      (maphash (lambda (entry-id rows)
-                 (puthash (cons entry-id 'collocations)
-                          (mapcar (lambda (row)
-                                    (pcase-let ((`(,coll-id ,_ ,cat ,coll ,gloss) row))
-                                      (lexdb-collocation-create
-                                       :category cat :text coll :gloss gloss
-                                       :examples (mapcar #'car (sqlite-select db
-                                                                "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
-                                                                (list coll-id))))))
-                                  (nreverse rows))
-                          lexdb-ldoce--cache))
-               entry-colls))))
+    (mapcar (lambda (r) (lexdb-ldoce--row-to-entry r db)) rows)))
 
 ;;;; ============================================================
-;;;; Lemmatization
+;;;; Lemmatization (LDOCE-specific rules)
 ;;;; ============================================================
 
 (defun lexdb-ldoce--try-lemma (word suffix replacement)
@@ -371,7 +274,7 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
       (when (and (> (length candidate) 1) (lexdb-ldoce--lookup candidate)) candidate))))
 
 (defun lexdb-ldoce--find-lemma (word)
-  "Find base form of WORD."
+  "Find base form of WORD using LDOCE-specific rules."
   (let ((w (downcase word)))
     (if (lexdb-ldoce--lookup w) w
       (or (lexdb-ldoce--try-lemma w "ing" "") (lexdb-ldoce--try-lemma w "ing" "e")
@@ -392,12 +295,11 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
           (lexdb-ldoce--try-lemma w "'s" "") w))))
 
 ;;;; ============================================================
-;;;; Frequency Rendering
+;;;; Frequency Rendering (LDOCE-specific)
 ;;;; ============================================================
 
 (defun lexdb-ldoce--render-frequency (freq)
-  "Render LDOCE frequency with dots.
-FREQ is the S1/W1 etc level text."
+  "Render LDOCE frequency indicator."
   (when (lexdb--non-empty-string-p freq)
     (propertize freq 'face 'lexdb-frequency-face)))
 
@@ -405,9 +307,12 @@ FREQ is the S1/W1 etc level text."
 ;;;; Registration
 ;;;; ============================================================
 
+(defun lexdb-ldoce--close ()
+  "Close LDOCE database connection."
+  (lexdb-generic--close-db lexdb-ldoce-db-file 'ldoce))
+
 (defun lexdb-ldoce--register-from-config (config)
-  "Register LDOCE adapter from CONFIG plist.
-Called by `lexdb-init' for unified configuration."
+  "Register LDOCE adapter from CONFIG plist."
   (let ((id (plist-get config :id))
         (name (or (plist-get config :name)
                   "Longman Dictionary of Contemporary English"))
@@ -415,11 +320,9 @@ Called by `lexdb-init' for unified configuration."
         (audio-dir (plist-get config :audio-dir)))
     (unless db-file
       (error "LDOCE config missing :db-file"))
-    ;; Set legacy variables for compatibility
     (setq lexdb-ldoce-db-file (expand-file-name db-file))
     (when audio-dir
       (setq lexdb-ldoce-audio-directory (expand-file-name audio-dir)))
-    ;; Register adapter
     (lexdb-register-adapter
      (lexdb-adapter-create
       :id id
@@ -432,16 +335,15 @@ Called by `lexdb-init' for unified configuration."
       :audio-dir lexdb-ldoce-audio-directory
       :lookup-fn #'lexdb-ldoce--lookup
       :close-fn #'lexdb-ldoce--close
-      :collocations-fn #'lexdb-ldoce--get-collocations
-      :relations-fn #'lexdb-ldoce--get-relations
+      ;; Reuse generic collocations
+      :collocations-fn (lambda (entry-id)
+                         (lexdb-generic--get-collocations entry-id lexdb-ldoce-db-file 'ldoce))
       :lemma-fn #'lexdb-ldoce--find-lemma
-      :prefetch-fn #'lexdb-ldoce--prefetch
       :render-frequency-fn #'lexdb-ldoce--render-frequency))))
 
 ;;;###autoload
 (defun lexdb-ldoce-register ()
-  "Register LDOCE adapter using legacy configuration variables.
-For new setups, prefer using `lexdb-dictionaries' and `lexdb-init'."
+  "Register LDOCE adapter using legacy configuration variables."
   (interactive)
   (lexdb-ldoce--register-from-config
    (list :id 'ldoce
@@ -449,7 +351,6 @@ For new setups, prefer using `lexdb-dictionaries' and `lexdb-init'."
          :db-file lexdb-ldoce-db-file
          :audio-dir lexdb-ldoce-audio-directory)))
 
-;; Register adapter type for unified config system
 (lexdb-register-adapter-type 'ldoce #'lexdb-ldoce--register-from-config)
 
 (provide 'lexdb-ldoce)
