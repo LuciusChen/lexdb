@@ -165,25 +165,26 @@ def extract_highlighted_example(element):
 
     # Convert <viz> (example gloss/explanation) to "eg: ..." format
     # OALD uses <span class="viz"> for inline explanations in examples
+    # Note: viz is usually already inside parentheses, so don't add more
     for viz in elem_copy.find_all('span', class_='viz'):
         text = viz.get_text().strip()
-        viz.replace_with(f' (eg: {text})')
+        viz.replace_with(f'eg: {text}')
     for viz in elem_copy.find_all('viz'):
         text = viz.get_text().strip()
-        viz.replace_with(f' (eg: {text})')
+        viz.replace_with(f'eg: {text}')
     # Also try other possible tag names
     for eg in elem_copy.find_all('eg'):
         text = eg.get_text().strip()
-        eg.replace_with(f' (eg: {text})')
+        eg.replace_with(f'eg: {text}')
     for gl in elem_copy.find_all('gl'):
         text = gl.get_text().strip()
-        gl.replace_with(f' (eg: {text})')
+        gl.replace_with(f'eg: {text}')
     # Check class='eg' but skip div containers
     for eg in elem_copy.find_all(class_='eg'):
         if eg.name == 'div':
             continue
         text = eg.get_text().strip()
-        eg.replace_with(f' (eg: {text})')
+        eg.replace_with(f'eg: {text}')
 
     return clean_text(elem_copy.get_text())
 
