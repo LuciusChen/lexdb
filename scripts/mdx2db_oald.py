@@ -147,13 +147,21 @@ def extract_highlighted_example(element):
         zh.decompose()
 
     # Convert <ie> (implicit explanation) to "ie: ..." format
+    # Try both tag name 'ie' and class='ie'
+    for ie in elem_copy.find_all('ie'):
+        text = ie.get_text().strip()
+        ie.replace_with(f' (ie: {text})')
     for ie in elem_copy.find_all(class_='ie'):
         text = ie.get_text().strip()
         ie.replace_with(f' (ie: {text})')
 
     # Convert <eg> (example explanation) to "eg: ..." format
+    # Try tag name 'eg' first (not div.eg which is the container)
+    for eg in elem_copy.find_all('eg'):
+        text = eg.get_text().strip()
+        eg.replace_with(f' (eg: {text})')
+    # Also check class='eg' but skip div containers
     for eg in elem_copy.find_all(class_='eg'):
-        # Skip if this is the container div itself
         if eg.name == 'div':
             continue
         text = eg.get_text().strip()
