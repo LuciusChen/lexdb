@@ -73,7 +73,7 @@ def extract_highlighted_example(element):
     Args:
         element: Can be <span class="ex"> or <div class="eg">
 
-    Returns text with <ie> content in parentheses.
+    Returns text with <ie> as 'ie: ...' and <eg> as 'eg: ...' format.
     """
     if not element:
         return ""
@@ -85,11 +85,18 @@ def extract_highlighted_example(element):
     for zh in elem_copy.find_all('zh'):
         zh.decompose()
 
-    # Convert <ie> (implicit explanation) to parenthesized text
+    # Convert <ie> (implicit explanation) to "ie: ..." format
     for ie in elem_copy.find_all(class_='ie'):
         text = ie.get_text().strip()
-        # Wrap in parentheses for display
-        ie.replace_with(f' ({text})')
+        ie.replace_with(f' (ie: {text})')
+
+    # Convert <eg> (example explanation) to "eg: ..." format
+    for eg in elem_copy.find_all(class_='eg'):
+        # Skip if this is the container div itself
+        if eg.name == 'div':
+            continue
+        text = eg.get_text().strip()
+        eg.replace_with(f' (eg: {text})')
 
     return clean_text(elem_copy.get_text())
 
