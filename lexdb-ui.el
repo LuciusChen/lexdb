@@ -651,9 +651,9 @@ Format markers:
           (insert (propertize content 'face
                               (pcase marker-type
                                 ("l" 'lexdb-def-variant-face)
-                                ("reg" 'lexdb-grammar-code-face)
-                                ("gram" 'lexdb-grammar-code-face)
-                                ("pr" 'lexdb-pronunciation-face)
+                                ("reg" 'lexdb-grammar-face)
+                                ("gram" 'lexdb-grammar-face)
+                                ("pr" 'lexdb-phonetic-face)
                                 (_ default-face))))
           (setq start (match-end 0))))
       ;; Insert remaining text
