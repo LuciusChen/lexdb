@@ -70,6 +70,9 @@ def extract_zh(element):
 def extract_highlighted_example(element):
     """Extract example text with highlight markers.
 
+    Args:
+        element: Can be <span class="ex"> or <div class="eg">
+
     Returns text with markers for <ie> (implicit explanation).
     """
     if not element:
@@ -443,15 +446,14 @@ def _parse_standalone_entry(soup, headword_hint=None):
         if not entry['senses']:
             examples_only = []
             for eg in standalone_deriv.find_all('div', class_='eg'):
-                ex_elem = eg.find('span', class_='ex')
-                if ex_elem:
-                    ex_text = extract_highlighted_example(ex_elem)
-                    ex_zh = extract_zh(eg)
-                    if ex_text:
-                        examples_only.append({
-                            'text': ex_text,
-                            'text_zh': ex_zh
-                        })
+                # Pass entire eg div to include <ie> siblings
+                ex_text = extract_highlighted_example(eg)
+                ex_zh = extract_zh(eg)
+                if ex_text:
+                    examples_only.append({
+                        'text': ex_text,
+                        'text_zh': ex_zh
+                    })
             if examples_only:
                 entry['attributes']['oald/examples'] = examples_only
 
@@ -663,17 +665,16 @@ def parse_oald4_idiom(idiom_div):
         # Examples
         ex_order = 0
         for eg in se.find_all('div', class_='eg'):
-            ex_elem = eg.find('span', class_='ex')
-            if ex_elem:
-                ex_text = extract_highlighted_example(ex_elem)
-                ex_zh = extract_zh(eg)
-                if ex_text:
-                    idiom['examples'].append({
-                        'text': ex_text,
-                        'text_zh': ex_zh,
-                        'sort_order': ex_order
-                    })
-                    ex_order += 1
+            # Pass entire eg div to include <ie> siblings
+            ex_text = extract_highlighted_example(eg)
+            ex_zh = extract_zh(eg)
+            if ex_text:
+                idiom['examples'].append({
+                    'text': ex_text,
+                    'text_zh': ex_zh,
+                    'sort_order': ex_order
+                })
+                ex_order += 1
 
     if idiom['text']:
         # Check if definition is a cross-reference (→word.)
@@ -820,18 +821,17 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
         if parent_se3 and parent_se3 != sense_elem:
             continue
 
-        ex_elem = eg.find('span', class_='ex')
-        if ex_elem:
-            ex_text = extract_highlighted_example(ex_elem)
-            ex_zh = extract_zh(eg)
+        # Pass entire eg div to include <ie> siblings
+        ex_text = extract_highlighted_example(eg)
+        ex_zh = extract_zh(eg)
 
-            if ex_text:
-                sense['examples'].append({
-                    'text': ex_text,
-                    'text_zh': ex_zh,
-                    'sort_order': ex_order
-                })
-                ex_order += 1
+        if ex_text:
+            sense['examples'].append({
+                'text': ex_text,
+                'text_zh': ex_zh,
+                'sort_order': ex_order
+            })
+            ex_order += 1
 
     # === Subsenses (se3) - only if this sense has its own definition ===
     if sense['definition']:
@@ -883,18 +883,17 @@ def parse_oald4_subsense(se3_elem, order=0):
     # === Examples ===
     ex_order = 0
     for eg in se3_elem.find_all('div', class_='eg', recursive=False):
-        ex_elem = eg.find('span', class_='ex')
-        if ex_elem:
-            ex_text = extract_highlighted_example(ex_elem)
-            ex_zh = extract_zh(eg)
+        # Pass entire eg div to include <ie> siblings
+        ex_text = extract_highlighted_example(eg)
+        ex_zh = extract_zh(eg)
 
-            if ex_text:
-                subsense['examples'].append({
-                    'text': ex_text,
-                    'text_zh': ex_zh,
-                    'sort_order': ex_order
-                })
-                ex_order += 1
+        if ex_text:
+            subsense['examples'].append({
+                'text': ex_text,
+                'text_zh': ex_zh,
+                'sort_order': ex_order
+            })
+            ex_order += 1
 
     if subsense['definition']:
         return subsense
