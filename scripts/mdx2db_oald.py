@@ -56,6 +56,75 @@ def extract_text_without_zh(element):
     return clean_text(elem_copy.get_text())
 
 
+def extract_definition_with_format(element):
+    """Extract definition text preserving format markers for UI rendering.
+
+    Preserves:
+    - Variant words (<span class="bd">, <span class="l">, <l>) as <<l>>...<</l>>
+    - Register labels (<span class="reg">) as <<reg>>...<</reg>>
+    - Pronunciations (<span class="pr">) as <<pr>>...<</pr>>
+    - Grammar labels (<span class="nac">, <span class="vps">) as <<gram>>...<</gram>>
+    """
+    if not element:
+        return ""
+
+    # Make a copy
+    elem_copy = BeautifulSoup(str(element), 'html.parser')
+
+    # Remove all <zh> tags
+    for zh in elem_copy.find_all('zh'):
+        zh.decompose()
+
+    # Format variant words - <span class="bd"> (bold), <span class="l">, <l>
+    for bd in elem_copy.find_all('span', class_='bd'):
+        text = bd.get_text().strip()
+        if text:
+            bd.replace_with(f' <<l>>{text}<</l>> ')
+    for l_elem in elem_copy.find_all('span', class_='l'):
+        text = l_elem.get_text().strip()
+        if text:
+            l_elem.replace_with(f' <<l>>{text}<</l>> ')
+    for l_elem in elem_copy.find_all('l'):
+        text = l_elem.get_text().strip()
+        if text:
+            l_elem.replace_with(f' <<l>>{text}<</l>> ')
+
+    # Format register labels (Brit, US, infml, fml, etc.)
+    for reg in elem_copy.find_all('span', class_='reg'):
+        text = clean_text(reg.get_text())
+        if text:
+            reg.replace_with(f' <<reg>>{text}<</reg>> ')
+
+    # Format pronunciations - mark for UI rendering
+    for pr in elem_copy.find_all('span', class_='pr'):
+        text = pr.get_text().strip()
+        if text:
+            # Add slashes if not already present
+            if not text.startswith('/'):
+                text = f'/{text}/'
+            pr.replace_with(f' <<pr>>{text}<</pr>> ')
+
+    # Format grammar labels with markers for UI
+    for nac in elem_copy.find_all('span', class_='nac'):
+        # Prefer English text over Chinese value attribute
+        text = clean_text(nac.get_text()) or nac.get('value', '')
+        if text:
+            # Add brackets if not already present
+            if not text.startswith('['):
+                text = f'[{text}]'
+            nac.replace_with(f' <<gram>>{text}<</gram>> ')
+
+    for vps in elem_copy.find_all('span', class_='vps'):
+        # Prefer English text over Chinese value attribute
+        text = clean_text(vps.get_text()) or vps.get('value', '')
+        if text:
+            if not text.startswith('['):
+                text = f'[{text}]'
+            vps.replace_with(f' <<gram>>{text}<</gram>> ')
+
+    return clean_text(elem_copy.get_text())
+
+
 def extract_zh(element):
     """Extract Chinese text from <zh> tag."""
     if not element:
@@ -70,7 +139,10 @@ def extract_zh(element):
 def extract_highlighted_example(element):
     """Extract example text with highlight markers.
 
-    Returns text with markers for <ie> (implicit explanation).
+    Args:
+        element: Can be <span class="ex"> or <div class="eg">
+
+    Returns text with <ie> as 'ie: ...' and <eg/gl> as 'eg: ...' format.
     """
     if not element:
         return ""
@@ -82,10 +154,37 @@ def extract_highlighted_example(element):
     for zh in elem_copy.find_all('zh'):
         zh.decompose()
 
-    # Mark <ie> (implicit explanation) with markers
+    # Convert <ie> (implicit explanation) to "ie: ..." format
+    # Try tag name 'ie', class='ie', and <span class="ie">
+    for ie in elem_copy.find_all('ie'):
+        text = ie.get_text().strip()
+        ie.replace_with(f' (ie: {text})')
     for ie in elem_copy.find_all(class_='ie'):
-        text = ie.get_text()
-        ie.replace_with(f'<<ie>>{text}<</ie>>')
+        text = ie.get_text().strip()
+        ie.replace_with(f' (ie: {text})')
+
+    # Convert <viz> (example gloss/explanation) to "eg: ..." format
+    # OALD uses <span class="viz"> for inline explanations in examples
+    # Note: viz is usually already inside parentheses, so don't add more
+    for viz in elem_copy.find_all('span', class_='viz'):
+        text = viz.get_text().strip()
+        viz.replace_with(f'eg: {text}')
+    for viz in elem_copy.find_all('viz'):
+        text = viz.get_text().strip()
+        viz.replace_with(f'eg: {text}')
+    # Also try other possible tag names
+    for eg in elem_copy.find_all('eg'):
+        text = eg.get_text().strip()
+        eg.replace_with(f'eg: {text}')
+    for gl in elem_copy.find_all('gl'):
+        text = gl.get_text().strip()
+        gl.replace_with(f'eg: {text}')
+    # Check class='eg' but skip div containers
+    for eg in elem_copy.find_all(class_='eg'):
+        if eg.name == 'div':
+            continue
+        text = eg.get_text().strip()
+        eg.replace_with(f'eg: {text}')
 
     return clean_text(elem_copy.get_text())
 
@@ -252,32 +351,36 @@ def _parse_hw2_entry(hw2_elem, headword_hint=None):
                 })
 
     # === Grammar (vps-w at hw2 level applies to all senses) ===
+    # Note: value attribute is Chinese, text content is English - prefer English text
     entry_grammar = []
     for vps_w in hw2_elem.find_all('vps-w', recursive=False):
         vps_span = vps_w.find('span', class_='vps')
         if vps_span:
-            vps_code = vps_span.get('value', '')
-            # Only use short codes
+            # Prefer English text content over Chinese value attribute
+            vps_code = clean_text(vps_span.get_text()) or vps_span.get('value', '')
+            # Only use short codes without Chinese characters
             if vps_code and len(vps_code) <= 8 and not re.search(r'[\u4e00-\u9fff]', vps_code):
                 entry_grammar.append(vps_code)
 
     # === Senses ===
     sense_order = 0
+    sense_num = 1  # 1-indexed display number
     for se2 in hw2_elem.find_all('div', class_='se2', recursive=False):
-        sense_data = parse_oald4_sense(se2, sense_order)
+        sense_data = parse_oald4_sense(se2, sense_order, sense_number=str(sense_num))
         if sense_data:
             # Add entry-level grammar if sense has none
             if entry_grammar and not sense_data.get('grammar'):
                 sense_data['grammar'] = entry_grammar.copy()
             entry['senses'].append(sense_data)
             sense_order += 1
+            sense_num += 1
         else:
             # se2 has no direct content, process its se3 children
             for se3 in se2.find_all('div', class_='se3', recursive=False):
                 subsense_data = parse_oald4_subsense(se3, sense_order)
                 if subsense_data:
                     sense = {
-                        'number': '',
+                        'number': str(sense_num),
                         'signpost': subsense_data.get('signpost', ''),
                         'definition': subsense_data.get('definition', ''),
                         'definition_zh': subsense_data.get('definition_zh', ''),
@@ -289,16 +392,18 @@ def _parse_hw2_entry(hw2_elem, headword_hint=None):
                     }
                     entry['senses'].append(sense)
                     sense_order += 1
+                    sense_num += 1
 
     # If no se2, try se directly
     if not entry['senses']:
         for se in hw2_elem.find_all('div', class_='se', recursive=False):
-            sense_data = parse_oald4_sense(se, sense_order)
+            sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
             if sense_data:
                 if entry_grammar and not sense_data.get('grammar'):
                     sense_data['grammar'] = entry_grammar.copy()
                 entry['senses'].append(sense_data)
                 sense_order += 1
+                sense_num += 1
 
     return entry if entry['senses'] or entry.get('pos') else None
 
@@ -362,11 +467,13 @@ def _parse_standalone_entry(soup, headword_hint=None):
             entry['headword'] = clean_text(l_elem.get_text())
 
         sense_order = 0
+        sense_num = 1
         for se in standalone_phrase.find_all('div', class_=['se', 'se3']):
-            sense_data = parse_oald4_sense(se, sense_order)
+            sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
             if sense_data:
                 entry['senses'].append(sense_data)
                 sense_order += 1
+                sense_num += 1
 
         refmentry = soup.find('div', class_='refmentry')
         if refmentry:
@@ -400,19 +507,21 @@ def _parse_standalone_entry(soup, headword_hint=None):
             entry['pos'] = pos_elem.get('value', '') or clean_text(pos_elem.get_text())
 
         sense_order = 0
+        sense_num = 1
         se2_list = standalone_deriv.find_all('div', class_='se2')
         if se2_list:
             for se2 in se2_list:
-                sense_data = parse_oald4_sense(se2, sense_order)
+                sense_data = parse_oald4_sense(se2, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
                 else:
                     for se3 in se2.find_all('div', class_='se3', recursive=False):
                         subsense_data = parse_oald4_subsense(se3, sense_order)
                         if subsense_data:
                             entry['senses'].append({
-                                'number': '',
+                                'number': str(sense_num),
                                 'signpost': subsense_data.get('signpost', ''),
                                 'definition': subsense_data.get('definition', ''),
                                 'definition_zh': subsense_data.get('definition_zh', ''),
@@ -423,25 +532,26 @@ def _parse_standalone_entry(soup, headword_hint=None):
                                 'sort_order': sense_order
                             })
                             sense_order += 1
+                            sense_num += 1
         else:
             for se in standalone_deriv.find_all('div', class_='se'):
-                sense_data = parse_oald4_sense(se, sense_order)
+                sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
 
         if not entry['senses']:
             examples_only = []
             for eg in standalone_deriv.find_all('div', class_='eg'):
-                ex_elem = eg.find('span', class_='ex')
-                if ex_elem:
-                    ex_text = extract_highlighted_example(ex_elem)
-                    ex_zh = extract_zh(eg)
-                    if ex_text:
-                        examples_only.append({
-                            'text': ex_text,
-                            'text_zh': ex_zh
-                        })
+                # Pass entire eg div to include <ie> siblings
+                ex_text = extract_highlighted_example(eg)
+                ex_zh = extract_zh(eg)
+                if ex_text:
+                    examples_only.append({
+                        'text': ex_text,
+                        'text_zh': ex_zh
+                    })
             if examples_only:
                 entry['attributes']['oald/examples'] = examples_only
 
@@ -530,20 +640,23 @@ def _parse_mainentry(main_entry, headword_hint=None):
 
     # === Senses from mainentry ===
     sense_order = 0
+    sense_num = 1  # 1-indexed display number
     se2_list = main_entry.find_all('div', class_='se2', recursive=True)
 
     if se2_list:
         for se2 in se2_list:
-            sense_data = parse_oald4_sense(se2, sense_order)
+            sense_data = parse_oald4_sense(se2, sense_order, sense_number=str(sense_num))
             if sense_data:
                 entry['senses'].append(sense_data)
                 sense_order += 1
+                sense_num += 1
             else:
+                # se2 has no direct content, process its se3 children
                 for se3 in se2.find_all('div', class_='se3', recursive=False):
                     subsense_data = parse_oald4_subsense(se3, sense_order)
                     if subsense_data:
                         entry['senses'].append({
-                            'number': '',
+                            'number': str(sense_num),
                             'signpost': subsense_data.get('signpost', ''),
                             'definition': subsense_data.get('definition', ''),
                             'definition_zh': subsense_data.get('definition_zh', ''),
@@ -554,21 +667,24 @@ def _parse_mainentry(main_entry, headword_hint=None):
                             'sort_order': sense_order
                         })
                         sense_order += 1
+                        sense_num += 1
     else:
         sg = main_entry.find('div', class_='sg')
         if sg:
             for se in sg.find_all('div', class_='se', recursive=False):
-                sense_data = parse_oald4_sense(se, sense_order)
+                sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
 
         if not entry['senses']:
             for se in main_entry.find_all('div', class_='se', recursive=True):
-                sense_data = parse_oald4_sense(se, sense_order)
+                sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
 
     # === Topic headings ===
     topics = []
@@ -604,13 +720,13 @@ def parse_oald4_idiom(idiom_div):
         # First try df element
         df = se.find(['span', 'div'], class_='df')
         if df:
-            idiom['definition'] = extract_text_without_zh(df)
+            idiom['definition'] = extract_definition_with_format(df)
             idiom['definition_zh'] = extract_zh(df)
         else:
             # Check for xrg (cross-reference) first
             xrg = se.find('span', class_='xrg')
             if xrg:
-                idiom['definition'] = extract_text_without_zh(xrg)
+                idiom['definition'] = extract_definition_with_format(xrg)
                 idiom['definition_zh'] = extract_zh(xrg)
             else:
                 # No df or xrg - definition might be directly in se
@@ -647,17 +763,16 @@ def parse_oald4_idiom(idiom_div):
         # Examples
         ex_order = 0
         for eg in se.find_all('div', class_='eg'):
-            ex_elem = eg.find('span', class_='ex')
-            if ex_elem:
-                ex_text = extract_highlighted_example(ex_elem)
-                ex_zh = extract_zh(eg)
-                if ex_text:
-                    idiom['examples'].append({
-                        'text': ex_text,
-                        'text_zh': ex_zh,
-                        'sort_order': ex_order
-                    })
-                    ex_order += 1
+            # Pass entire eg div to include <ie> siblings
+            ex_text = extract_highlighted_example(eg)
+            ex_zh = extract_zh(eg)
+            if ex_text:
+                idiom['examples'].append({
+                    'text': ex_text,
+                    'text_zh': ex_zh,
+                    'sort_order': ex_order
+                })
+                ex_order += 1
 
     if idiom['text']:
         # Check if definition is a cross-reference (→word.)
@@ -686,7 +801,7 @@ def parse_oald4_phrase(phrase_div):
     if se:
         df = se.find('span', class_='df')
         if df:
-            phrase['definition'] = extract_text_without_zh(df)
+            phrase['definition'] = extract_definition_with_format(df)
             phrase['definition_zh'] = extract_zh(df)
 
     if phrase['text']:
@@ -694,18 +809,19 @@ def parse_oald4_phrase(phrase_div):
     return None
 
 
-def parse_oald4_sense(sense_elem, order=0):
+def parse_oald4_sense(sense_elem, order=0, sense_number=None):
     """Parse a single sense element (se, se2 or se3).
 
     Args:
         sense_elem: BeautifulSoup element for the sense
         order: Sort order
+        sense_number: Display number for this sense (e.g., "1", "2", "3")
 
     Returns:
         Dictionary with sense data, or None if no meaningful content
     """
     sense = {
-        'number': '',
+        'number': sense_number or '',
         'signpost': '',
         'definition': '',
         'definition_zh': '',
@@ -727,22 +843,28 @@ def parse_oald4_sense(sense_elem, order=0):
         return None
 
     # === Grammar labels (nac = noun countability, vps = verb pattern) ===
+    # Note: value attribute is Chinese, text content is English - prefer English text
     for nac in sense_elem.find_all('span', class_='nac'):
-        # Skip if inside a nested se3 or eg
+        # Skip if inside a nested se3, eg, or df (definition)
+        # Grammar inside definitions belongs to variant words, not the sense
         parent_se3 = nac.find_parent('div', class_='se3')
         parent_eg = nac.find_parent('div', class_='eg')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_eg:
+        parent_df = nac.find_parent(['span', 'div'], class_='df')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df:
             continue
-        nac_value = nac.get('value', '') or clean_text(nac.get_text())
+        # Prefer English text content over Chinese value attribute
+        nac_value = clean_text(nac.get_text()) or nac.get('value', '')
         if nac_value and nac_value not in sense['grammar']:
             sense['grammar'].append(nac_value)
 
     for vps in sense_elem.find_all('span', class_='vps'):
-        # Skip if inside a nested se3
+        # Skip if inside a nested se3 or df (definition)
         parent_se3 = vps.find_parent('div', class_='se3')
-        if parent_se3 and parent_se3 != sense_elem:
+        parent_df = vps.find_parent(['span', 'div'], class_='df')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_df:
             continue
-        vps_value = vps.get('value', '') or clean_text(vps.get_text())
+        # Prefer English text content over Chinese value attribute
+        vps_value = clean_text(vps.get_text()) or vps.get('value', '')
         if vps_value and vps_value not in sense['grammar']:
             sense['grammar'].append(vps_value)
 
@@ -750,10 +872,12 @@ def parse_oald4_sense(sense_elem, order=0):
     # Structure: <span class="reg" value="文">fml</span>
     # value attribute is Chinese, text content is English - use English text
     for reg in sense_elem.find_all('span', class_='reg'):
-        # Skip if inside a nested se3 or eg
+        # Skip if inside a nested se3, eg, or df (definition)
+        # Labels inside definitions belong to variant words, not the sense
         parent_se3 = reg.find_parent('div', class_='se3')
         parent_eg = reg.find_parent('div', class_='eg')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_eg:
+        parent_df = reg.find_parent(['span', 'div'], class_='df')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df:
             continue
         reg_text = clean_text(reg.get_text())  # English label (e.g., "fml", "infml")
         if reg_text:
@@ -771,7 +895,7 @@ def parse_oald4_sense(sense_elem, order=0):
                 break
 
     if df:
-        sense['definition'] = extract_text_without_zh(df)
+        sense['definition'] = extract_definition_with_format(df)
         sense['definition_zh'] = extract_zh(df)
     else:
         # Check for xrg (cross-reference) which sometimes serves as definition
@@ -784,7 +908,7 @@ def parse_oald4_sense(sense_elem, order=0):
                     break
 
         if xrg:
-            sense['definition'] = extract_text_without_zh(xrg)
+            sense['definition'] = extract_definition_with_format(xrg)
             sense['definition_zh'] = extract_zh(xrg)
 
     # === Bold phrases (bd) as signpost ===
@@ -803,18 +927,17 @@ def parse_oald4_sense(sense_elem, order=0):
         if parent_se3 and parent_se3 != sense_elem:
             continue
 
-        ex_elem = eg.find('span', class_='ex')
-        if ex_elem:
-            ex_text = extract_highlighted_example(ex_elem)
-            ex_zh = extract_zh(eg)
+        # Pass entire eg div to include <ie> siblings
+        ex_text = extract_highlighted_example(eg)
+        ex_zh = extract_zh(eg)
 
-            if ex_text:
-                sense['examples'].append({
-                    'text': ex_text,
-                    'text_zh': ex_zh,
-                    'sort_order': ex_order
-                })
-                ex_order += 1
+        if ex_text:
+            sense['examples'].append({
+                'text': ex_text,
+                'text_zh': ex_zh,
+                'sort_order': ex_order
+            })
+            ex_order += 1
 
     # === Subsenses (se3) - only if this sense has its own definition ===
     if sense['definition']:
@@ -843,41 +966,43 @@ def parse_oald4_subsense(se3_elem, order=0):
     }
 
     # === Grammar ===
+    # Note: value attribute is Chinese, text content is English - prefer English text
     for nac_w in se3_elem.find_all('nac-w', recursive=False):
         nac = nac_w.find('span', class_='nac')
         if nac:
-            nac_value = nac.get('value', '') or clean_text(nac.get_text())
+            # Prefer English text content over Chinese value attribute
+            nac_value = clean_text(nac.get_text()) or nac.get('value', '')
             if nac_value:
                 subsense['grammar'].append(nac_value)
 
     for vps_w in se3_elem.find_all('vps-w', recursive=False):
         vps = vps_w.find('span', class_='vps')
         if vps:
-            vps_value = vps.get('value', '') or clean_text(vps.get_text())
+            # Prefer English text content over Chinese value attribute
+            vps_value = clean_text(vps.get_text()) or vps.get('value', '')
             if vps_value:
                 subsense['grammar'].append(vps_value)
 
     # === Definition ===
     df = se3_elem.find('span', class_='df', recursive=False)
     if df:
-        subsense['definition'] = extract_text_without_zh(df)
+        subsense['definition'] = extract_definition_with_format(df)
         subsense['definition_zh'] = extract_zh(df)
 
     # === Examples ===
     ex_order = 0
     for eg in se3_elem.find_all('div', class_='eg', recursive=False):
-        ex_elem = eg.find('span', class_='ex')
-        if ex_elem:
-            ex_text = extract_highlighted_example(ex_elem)
-            ex_zh = extract_zh(eg)
+        # Pass entire eg div to include <ie> siblings
+        ex_text = extract_highlighted_example(eg)
+        ex_zh = extract_zh(eg)
 
-            if ex_text:
-                subsense['examples'].append({
-                    'text': ex_text,
-                    'text_zh': ex_zh,
-                    'sort_order': ex_order
-                })
-                ex_order += 1
+        if ex_text:
+            subsense['examples'].append({
+                'text': ex_text,
+                'text_zh': ex_zh,
+                'sort_order': ex_order
+            })
+            ex_order += 1
 
     if subsense['definition']:
         return subsense
