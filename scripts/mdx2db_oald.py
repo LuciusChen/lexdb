@@ -56,6 +56,67 @@ def extract_text_without_zh(element):
     return clean_text(elem_copy.get_text())
 
 
+def extract_definition_with_format(element):
+    """Extract definition text preserving format markers for UI rendering.
+
+    Preserves:
+    - Variant words (<span class="l">) as <<l>>...<</l>>
+    - Register labels (<span class="reg">) as <<reg>>...<</reg>>
+    - Pronunciations (<span class="pr">) with /.../ format
+    - Grammar labels (<span class="nac">, <span class="vps">) with [...] format
+    """
+    if not element:
+        return ""
+
+    # Make a copy
+    elem_copy = BeautifulSoup(str(element), 'html.parser')
+
+    # Remove all <zh> tags
+    for zh in elem_copy.find_all('zh'):
+        zh.decompose()
+
+    # Format variant words (l = lemma/variant)
+    for l_elem in elem_copy.find_all('span', class_='l'):
+        text = l_elem.get_text().strip()
+        if text:
+            l_elem.replace_with(f'<<l>>{text}<</l>>')
+
+    # Format register labels (Brit, US, infml, fml, etc.)
+    for reg in elem_copy.find_all('span', class_='reg'):
+        text = clean_text(reg.get_text())
+        if text:
+            reg.replace_with(f'<<reg>>{text}<</reg>>')
+
+    # Format pronunciations with slashes
+    for pr in elem_copy.find_all('span', class_='pr'):
+        text = pr.get_text().strip()
+        if text:
+            # Add slashes if not already present
+            if not text.startswith('/'):
+                text = f'/{text}/'
+            pr.replace_with(f' {text} ')
+
+    # Format grammar labels with brackets
+    for nac in elem_copy.find_all('span', class_='nac'):
+        # Prefer English text over Chinese value attribute
+        text = clean_text(nac.get_text()) or nac.get('value', '')
+        if text:
+            # Add brackets if not already present
+            if not text.startswith('['):
+                text = f'[{text}]'
+            nac.replace_with(f' {text}')
+
+    for vps in elem_copy.find_all('span', class_='vps'):
+        # Prefer English text over Chinese value attribute
+        text = clean_text(vps.get_text()) or vps.get('value', '')
+        if text:
+            if not text.startswith('['):
+                text = f'[{text}]'
+            vps.replace_with(f' {text}')
+
+    return clean_text(elem_copy.get_text())
+
+
 def extract_zh(element):
     """Extract Chinese text from <zh> tag."""
     if not element:
@@ -632,13 +693,13 @@ def parse_oald4_idiom(idiom_div):
         # First try df element
         df = se.find(['span', 'div'], class_='df')
         if df:
-            idiom['definition'] = extract_text_without_zh(df)
+            idiom['definition'] = extract_definition_with_format(df)
             idiom['definition_zh'] = extract_zh(df)
         else:
             # Check for xrg (cross-reference) first
             xrg = se.find('span', class_='xrg')
             if xrg:
-                idiom['definition'] = extract_text_without_zh(xrg)
+                idiom['definition'] = extract_definition_with_format(xrg)
                 idiom['definition_zh'] = extract_zh(xrg)
             else:
                 # No df or xrg - definition might be directly in se
@@ -713,7 +774,7 @@ def parse_oald4_phrase(phrase_div):
     if se:
         df = se.find('span', class_='df')
         if df:
-            phrase['definition'] = extract_text_without_zh(df)
+            phrase['definition'] = extract_definition_with_format(df)
             phrase['definition_zh'] = extract_zh(df)
 
     if phrase['text']:
@@ -807,7 +868,7 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
                 break
 
     if df:
-        sense['definition'] = extract_text_without_zh(df)
+        sense['definition'] = extract_definition_with_format(df)
         sense['definition_zh'] = extract_zh(df)
     else:
         # Check for xrg (cross-reference) which sometimes serves as definition
@@ -820,7 +881,7 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
                     break
 
         if xrg:
-            sense['definition'] = extract_text_without_zh(xrg)
+            sense['definition'] = extract_definition_with_format(xrg)
             sense['definition_zh'] = extract_zh(xrg)
 
     # === Bold phrases (bd) as signpost ===
@@ -898,7 +959,7 @@ def parse_oald4_subsense(se3_elem, order=0):
     # === Definition ===
     df = se3_elem.find('span', class_='df', recursive=False)
     if df:
-        subsense['definition'] = extract_text_without_zh(df)
+        subsense['definition'] = extract_definition_with_format(df)
         subsense['definition_zh'] = extract_zh(df)
 
     # === Examples ===
