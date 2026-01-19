@@ -76,7 +76,7 @@
                                 :text (nth 0 ex)
                                 :metadata (when (and lexdb-oald-show-chinese
                                                      (lexdb--non-empty-string-p (nth 1 ex)))
-                                            (list (cons 'zh (nth 1 ex))))))
+                                            (list (cons 'oald/text-zh (nth 1 ex))))))
                              ex-rows))
            (gram-rows (sqlite-select db
                        "SELECT pattern FROM grammar_patterns WHERE sense_id = ? ORDER BY sort_order"
@@ -100,7 +100,7 @@
        :labels labels
        :metadata (when (and lexdb-oald-show-chinese
                             (lexdb--non-empty-string-p definition-zh))
-                   (list (cons 'zh definition-zh)))))))
+                   (list (cons 'oald/definition-zh definition-zh)))))))
 
 ;;;; ============================================================
 ;;;; OALD-specific: Entry with idioms and Chinese
