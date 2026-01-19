@@ -487,6 +487,25 @@ Same color as definition but bold."
 Same color as example-highlight-face for consistency."
   :group 'lexdb)
 
+;; Definition inline formatting (for OALD variant words, register labels, etc.)
+(defface lexdb-def-variant-face
+  '((((background dark))  :foreground "#7CB8FF" :weight bold)
+    (((background light)) :foreground "#0066CC" :weight bold))
+  "Face for variant words in definitions (e.g., maths, math)."
+  :group 'lexdb)
+
+(defface lexdb-def-register-face
+  '((((background dark))  :foreground "#E0A040")
+    (((background light)) :foreground "#996600"))
+  "Face for register labels in definitions (e.g., Brit, US, infml)."
+  :group 'lexdb)
+
+(defface lexdb-def-pronunciation-face
+  '((((background dark))  :foreground "#A0A0A0")
+    (((background light)) :foreground "#666666"))
+  "Face for pronunciations in definitions."
+  :group 'lexdb)
+
 ;; Collocations
 (defface lexdb-collocation-header-face
   '((((background dark))  :foreground "#B8B8B8" :weight bold :underline t)
@@ -609,6 +628,38 @@ Set to nil to disable translation indicators."
   :group 'lexdb)
 
 ;;;; ============================================================
+;;;; Definition Format Rendering
+;;;; ============================================================
+
+(defun lexdb-ui--insert-formatted-definition (text default-face)
+  "Insert definition TEXT with format markers, using DEFAULT-FACE for plain text.
+Format markers:
+  <<l>>...<</l>>     - variant words (blue bold)
+  <<reg>>...<</reg>> - register labels (same as grammar codes)
+  <<gram>>...<</gram>> - grammar labels (same as grammar codes)
+  <<pr>>...<</pr>>   - pronunciations (same as entry pronunciation)"
+  (when (and text (not (string-empty-p text)))
+    (let ((start 0))
+      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\)>>\\([^<]*\\)<</\\1>>" text start)
+        (let ((before-match (substring text start (match-beginning 0)))
+              (marker-type (match-string 1 text))
+              (content (match-string 2 text)))
+          ;; Insert text before marker with default face
+          (when (> (length before-match) 0)
+            (insert (propertize before-match 'face default-face)))
+          ;; Insert marked content with appropriate face
+          (insert (propertize content 'face
+                              (pcase marker-type
+                                ("l" 'lexdb-def-variant-face)
+                                ("reg" 'lexdb-grammar-face)
+                                ("gram" 'lexdb-grammar-face)
+                                ("pr" 'lexdb-phonetic-face)
+                                (_ default-face))))
+          (setq start (match-end 0))))
+      ;; Insert remaining text
+      (when (< start (length text))
+        (insert (propertize (substring text start) 'face default-face))))))
+
 ;;;; ============================================================
 ;;;; Audio Playback
 ;;;; ============================================================
@@ -1093,7 +1144,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (setq formatted (replace-regexp-in-string " +(" "(" formatted))
             (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
           (insert (propertize formatted 'face 'lexdb-signpost-face) " "))))
-    ;; OALD grammar codes inline (e.g., "[Tn] [I]") - before definition
+    ;; OALD grammar codes inline (e.g., "[Tn] [I]", "[sing or pl v]") - before definition
     (when (eq (lexdb-adapter-id adapter) 'oald)
       (let ((gps (lexdb-sense-grammar-patterns sense)))
         (when gps
@@ -1102,18 +1153,24 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                                   (let ((pattern (lexdb-grammar-pattern-pattern gp)))
                                     ;; Handle various formats:
                                     ;; 1. Already bracketed: "[I]", "[Tn.p]"
-                                    ;; 2. Short code: "I", "Tn", "Tn.p", "Dn.n"
-                                    ;; 3. Full text with Chinese: "Transitive verb 及物动词" - skip these
-                                    ;; 4. English text only: "Intransitive verb" - skip these
+                                    ;; 2. Short code: "C", "U", "I", "Tn", "Tn.p"
+                                    ;; 3. OALD4 long format: "sing or pl v", "sing v"
+                                    ;; 4. Skip Chinese text
                                     (cond
                                      ;; Already bracketed - use as-is
-                                     ((string-match "^\\[\\([A-Za-z.]+\\)\\]$" pattern)
+                                     ((string-match "^\\[.+\\]$" pattern)
                                       pattern)
-                                     ;; Short code (all caps/dots, ≤8 chars) - add brackets
-                                     ((and (string-match "^[A-Za-z.]+$" pattern)
+                                     ;; Contains Chinese - skip
+                                     ((string-match "[\u4e00-\u9fff]" pattern)
+                                      nil)
+                                     ;; Short code (no space, ≤8 chars) - add brackets
+                                     ((and (not (string-match " " pattern))
                                            (<= (length pattern) 8))
                                       (format "[%s]" pattern))
-                                     ;; Skip full text (contains space or Chinese)
+                                     ;; OALD4 long format (e.g., "sing or pl v") - add brackets
+                                     ((string-match "^[a-z or]+$" pattern)
+                                      (format "[%s]" pattern))
+                                     ;; Other patterns - skip
                                      (t nil))))
                                 gps))))
             (when codes
@@ -1169,7 +1226,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
     ;; Definition (English) - this may be just the lexunit for senses with subsenses
     (let ((def (lexdb-sense-definition sense)))
       (when (lexdb--non-empty-string-p def)
-        (insert (propertize def 'face 'lexdb-definition-face))))
+        (lexdb-ui--insert-formatted-definition def 'lexdb-definition-face)))
     ;; SYN/OPP labels after definition (not clickable)
     (let ((labels (lexdb-sense-labels sense)))
       (when labels
@@ -1203,7 +1260,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                         (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
               ;; Definition
               (when sub-def
-                (insert (propertize sub-def 'face 'lexdb-definition-face)))
+                (lexdb-ui--insert-formatted-definition sub-def 'lexdb-definition-face))
               (insert "\n")
               ;; Examples
               (when sub-examples
