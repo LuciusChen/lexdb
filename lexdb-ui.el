@@ -631,68 +631,34 @@ Set to nil to disable translation indicators."
 ;;;; Definition Format Rendering
 ;;;; ============================================================
 
-(defun lexdb-ui--render-formatted-definition (text)
-  "Render definition TEXT with format markers.
-Parses markers like <<l>>...<</l>> for variants, <<reg>>...<</reg>> for
-register labels, and applies appropriate faces.
-Returns the propertized string."
-  (if (or (null text) (string-empty-p text))
-      ""
-    (with-temp-buffer
-      (insert text)
-      (goto-char (point-min))
-      ;; Process variant words: <<l>>...<</l>>
-      (while (re-search-forward "<<l>>\\([^<]*\\)<</l>>" nil t)
-        (let ((content (match-string 1)))
-          (replace-match (propertize content 'face 'lexdb-def-variant-face) t t)))
-      ;; Process register labels: <<reg>>...<</reg>>
-      (goto-char (point-min))
-      (while (re-search-forward "<<reg>>\\([^<]*\\)<</reg>>" nil t)
-        (let ((content (match-string 1)))
-          (replace-match (propertize content 'face 'lexdb-def-register-face) t t)))
-      (buffer-string))))
-
 (defun lexdb-ui--insert-formatted-definition (text default-face)
   "Insert definition TEXT with format markers, using DEFAULT-FACE for plain text.
-Format markers are replaced with propertized text."
+Format markers:
+  <<l>>...<</l>>     - variant words (blue bold)
+  <<reg>>...<</reg>> - register labels (same as grammar codes)
+  <<gram>>...<</gram>> - grammar labels (same as grammar codes)
+  <<pr>>...<</pr>>   - pronunciations (same as entry pronunciation)"
   (when (and text (not (string-empty-p text)))
-    (let ((pos 0)
-          (len (length text)))
-      (while (< pos len)
-        (cond
-         ;; Match <<l>>...<</l>> for variant words
-         ((and (< (+ pos 4) len)
-               (string= (substring text pos (+ pos 5)) "<<l>>"))
-          (let ((end-pos (string-match-p "<</l>>" text pos)))
-            (if end-pos
-                (let ((content (substring text (+ pos 5) end-pos)))
-                  (insert (propertize content 'face 'lexdb-def-variant-face))
-                  (setq pos (+ end-pos 6)))
-              (insert (propertize (substring text pos (+ pos 1)) 'face default-face))
-              (setq pos (1+ pos)))))
-         ;; Match <<reg>>...<</reg>> for register labels
-         ((and (< (+ pos 6) len)
-               (string= (substring text pos (+ pos 7)) "<<reg>>"))
-          (let ((end-pos (string-match-p "<</reg>>" text pos)))
-            (if end-pos
-                (let ((content (substring text (+ pos 7) end-pos)))
-                  (insert (propertize content 'face 'lexdb-def-register-face))
-                  (setq pos (+ end-pos 8)))
-              (insert (propertize (substring text pos (+ pos 1)) 'face default-face))
-              (setq pos (1+ pos)))))
-         ;; Plain text
-         (t
-          ;; Find next marker or end of string
-          (let* ((next-l (string-match-p "<<l>>" text pos))
-                 (next-reg (string-match-p "<<reg>>" text pos))
-                 (next-marker (cond
-                               ((and next-l next-reg) (min next-l next-reg))
-                               (next-l next-l)
-                               (next-reg next-reg)
-                               (t len))))
-            (when (< pos next-marker)
-              (insert (propertize (substring text pos next-marker) 'face default-face)))
-            (setq pos next-marker))))))))
+    (let ((start 0))
+      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\)>>\\([^<]*\\)<</\\1>>" text start)
+        (let ((before-match (substring text start (match-beginning 0)))
+              (marker-type (match-string 1 text))
+              (content (match-string 2 text)))
+          ;; Insert text before marker with default face
+          (when (> (length before-match) 0)
+            (insert (propertize before-match 'face default-face)))
+          ;; Insert marked content with appropriate face
+          (insert (propertize content 'face
+                              (pcase marker-type
+                                ("l" 'lexdb-def-variant-face)
+                                ("reg" 'lexdb-grammar-code-face)
+                                ("gram" 'lexdb-grammar-code-face)
+                                ("pr" 'lexdb-pronunciation-face)
+                                (_ default-face))))
+          (setq start (match-end 0))))
+      ;; Insert remaining text
+      (when (< start (length text))
+        (insert (propertize (substring text start) 'face default-face))))))
 
 ;;;; ============================================================
 ;;;; Audio Playback

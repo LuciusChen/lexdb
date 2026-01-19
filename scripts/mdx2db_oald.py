@@ -60,10 +60,10 @@ def extract_definition_with_format(element):
     """Extract definition text preserving format markers for UI rendering.
 
     Preserves:
-    - Variant words (<span class="l"> or <l>) as <<l>>...<</l>>
+    - Variant words (<span class="bd">, <span class="l">, <l>) as <<l>>...<</l>>
     - Register labels (<span class="reg">) as <<reg>>...<</reg>>
-    - Pronunciations (<span class="pr">) with /.../ format
-    - Grammar labels (<span class="nac">, <span class="vps">) with [...] format
+    - Pronunciations (<span class="pr">) as <<pr>>...<</pr>>
+    - Grammar labels (<span class="nac">, <span class="vps">) as <<gram>>...<</gram>>
     """
     if not element:
         return ""
@@ -75,7 +75,11 @@ def extract_definition_with_format(element):
     for zh in elem_copy.find_all('zh'):
         zh.decompose()
 
-    # Format variant words - try both <span class="l"> and <l> tag
+    # Format variant words - <span class="bd"> (bold), <span class="l">, <l>
+    for bd in elem_copy.find_all('span', class_='bd'):
+        text = bd.get_text().strip()
+        if text:
+            bd.replace_with(f' <<l>>{text}<</l>> ')
     for l_elem in elem_copy.find_all('span', class_='l'):
         text = l_elem.get_text().strip()
         if text:
@@ -85,22 +89,22 @@ def extract_definition_with_format(element):
         if text:
             l_elem.replace_with(f' <<l>>{text}<</l>> ')
 
-    # Format register labels (Brit, US, infml, fml, etc.) - add space after
+    # Format register labels (Brit, US, infml, fml, etc.)
     for reg in elem_copy.find_all('span', class_='reg'):
         text = clean_text(reg.get_text())
         if text:
             reg.replace_with(f' <<reg>>{text}<</reg>> ')
 
-    # Format pronunciations with slashes
+    # Format pronunciations - mark for UI rendering
     for pr in elem_copy.find_all('span', class_='pr'):
         text = pr.get_text().strip()
         if text:
             # Add slashes if not already present
             if not text.startswith('/'):
                 text = f'/{text}/'
-            pr.replace_with(f' {text} ')
+            pr.replace_with(f' <<pr>>{text}<</pr>> ')
 
-    # Format grammar labels with brackets
+    # Format grammar labels with markers for UI
     for nac in elem_copy.find_all('span', class_='nac'):
         # Prefer English text over Chinese value attribute
         text = clean_text(nac.get_text()) or nac.get('value', '')
@@ -108,7 +112,7 @@ def extract_definition_with_format(element):
             # Add brackets if not already present
             if not text.startswith('['):
                 text = f'[{text}]'
-            nac.replace_with(f' {text} ')
+            nac.replace_with(f' <<gram>>{text}<</gram>> ')
 
     for vps in elem_copy.find_all('span', class_='vps'):
         # Prefer English text over Chinese value attribute
@@ -116,7 +120,7 @@ def extract_definition_with_format(element):
         if text:
             if not text.startswith('['):
                 text = f'[{text}]'
-            vps.replace_with(f' {text} ')
+            vps.replace_with(f' <<gram>>{text}<</gram>> ')
 
     return clean_text(elem_copy.get_text())
 
@@ -159,29 +163,27 @@ def extract_highlighted_example(element):
         text = ie.get_text().strip()
         ie.replace_with(f' (ie: {text})')
 
-    # Convert <eg>/<gl> (example gloss/explanation) to "eg: ..." format
-    # Try various tag names and classes
+    # Convert <viz> (example gloss/explanation) to "eg: ..." format
+    # OALD uses <span class="viz"> for inline explanations in examples
+    for viz in elem_copy.find_all('span', class_='viz'):
+        text = viz.get_text().strip()
+        viz.replace_with(f' (eg: {text})')
+    for viz in elem_copy.find_all('viz'):
+        text = viz.get_text().strip()
+        viz.replace_with(f' (eg: {text})')
+    # Also try other possible tag names
     for eg in elem_copy.find_all('eg'):
         text = eg.get_text().strip()
         eg.replace_with(f' (eg: {text})')
     for gl in elem_copy.find_all('gl'):
         text = gl.get_text().strip()
         gl.replace_with(f' (eg: {text})')
-    for gl in elem_copy.find_all('gloss'):
-        text = gl.get_text().strip()
-        gl.replace_with(f' (eg: {text})')
-    # Check class='eg' or class='gl' but skip div containers
+    # Check class='eg' but skip div containers
     for eg in elem_copy.find_all(class_='eg'):
         if eg.name == 'div':
             continue
         text = eg.get_text().strip()
         eg.replace_with(f' (eg: {text})')
-    for gl in elem_copy.find_all(class_='gl'):
-        text = gl.get_text().strip()
-        gl.replace_with(f' (eg: {text})')
-    for gl in elem_copy.find_all(class_='gloss'):
-        text = gl.get_text().strip()
-        gl.replace_with(f' (eg: {text})')
 
     return clean_text(elem_copy.get_text())
 
