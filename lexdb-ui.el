@@ -1093,7 +1093,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (setq formatted (replace-regexp-in-string " +(" "(" formatted))
             (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
           (insert (propertize formatted 'face 'lexdb-signpost-face) " "))))
-    ;; OALD grammar codes inline (e.g., "[Tn] [I]") - before definition
+    ;; OALD grammar codes inline (e.g., "[Tn] [I]", "[sing or pl v]") - before definition
     (when (eq (lexdb-adapter-id adapter) 'oald)
       (let ((gps (lexdb-sense-grammar-patterns sense)))
         (when gps
@@ -1102,18 +1102,24 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                                   (let ((pattern (lexdb-grammar-pattern-pattern gp)))
                                     ;; Handle various formats:
                                     ;; 1. Already bracketed: "[I]", "[Tn.p]"
-                                    ;; 2. Short code: "I", "Tn", "Tn.p", "Dn.n"
-                                    ;; 3. Full text with Chinese: "Transitive verb 及物动词" - skip these
-                                    ;; 4. English text only: "Intransitive verb" - skip these
+                                    ;; 2. Short code: "C", "U", "I", "Tn", "Tn.p"
+                                    ;; 3. OALD4 long format: "sing or pl v", "sing v"
+                                    ;; 4. Skip Chinese text
                                     (cond
                                      ;; Already bracketed - use as-is
-                                     ((string-match "^\\[\\([A-Za-z.]+\\)\\]$" pattern)
+                                     ((string-match "^\\[.+\\]$" pattern)
                                       pattern)
-                                     ;; Short code (all caps/dots, ≤8 chars) - add brackets
-                                     ((and (string-match "^[A-Za-z.]+$" pattern)
+                                     ;; Contains Chinese - skip
+                                     ((string-match "[\u4e00-\u9fff]" pattern)
+                                      nil)
+                                     ;; Short code (no space, ≤8 chars) - add brackets
+                                     ((and (not (string-match " " pattern))
                                            (<= (length pattern) 8))
                                       (format "[%s]" pattern))
-                                     ;; Skip full text (contains space or Chinese)
+                                     ;; OALD4 long format (e.g., "sing or pl v") - add brackets
+                                     ((string-match "^[a-z or]+$" pattern)
+                                      (format "[%s]" pattern))
+                                     ;; Other patterns - skip
                                      (t nil))))
                                 gps))))
             (when codes
