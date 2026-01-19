@@ -2405,12 +2405,24 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                                       'help-echo "Press t to peek translation")
                           " ")
                 (insert "  "))
-              ;; Idiom text
+              ;; Idiom text (bold)
               (when idiom-text
-                (insert (propertize idiom-text 'face 'lexdb-phrase-face)))
+                (insert (propertize idiom-text 'face '(:inherit lexdb-phrase-face :weight bold))))
+              (insert "\n")
+              ;; Second line: labels and definition
+              (insert "  ")
+              ;; Labels (fml, infml, etc.) before definition
+              (let ((idiom-labels (alist-get 'labels idiom)))
+                (when idiom-labels
+                  (let ((label-list (cond ((vectorp idiom-labels) (append idiom-labels nil))
+                                          ((listp idiom-labels) idiom-labels)
+                                          (t nil))))
+                    (dolist (label label-list)
+                      (let ((lvalue (alist-get 'value label)))
+                        (when lvalue
+                          (insert (propertize lvalue 'face 'lexdb-grammar-face) " ")))))))
               ;; Definition - check for pre-parsed crossref first, then fallback to regex
               (when (and idiom-def (stringp idiom-def) (not (string-empty-p idiom-def)))
-                (insert " ")
                 (let ((crossref (alist-get 'crossref idiom)))
                   (if crossref
                       ;; Pre-parsed crossref from database (new format)
@@ -2439,8 +2451,8 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                                                         (lexdb-search-and-goto-sense
                                                          search-word nil jump-adapter))
                                               'help-echo (format "Look up: %s [%s]" search-word jump-adapter)))
-                      ;; Regular definition
-                      (insert (propertize idiom-def 'face 'lexdb-definition-face))))))
+                      ;; Regular definition with format markers
+                      (lexdb-ui--insert-formatted-definition idiom-def 'lexdb-definition-face)))))
               (insert "\n")
               (when idiom-examples
                 (let ((ex-list (cond ((vectorp idiom-examples) (append idiom-examples nil))
