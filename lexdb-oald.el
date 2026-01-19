@@ -87,9 +87,8 @@
 ;;;; Schema Queries
 ;;;; ============================================================
 
-(defun lexdb-oald--row-to-sense (sense-row db &optional sense-index)
-  "Convert SENSE-ROW to lexdb-sense using DB connection.
-SENSE-INDEX is the 1-based index used when sense_number is empty."
+(defun lexdb-oald--row-to-sense (sense-row db)
+  "Convert SENSE-ROW to lexdb-sense using DB connection."
   (pcase-let ((`(,id ,sense-num ,signpost ,definition ,definition-zh ,_sort) sense-row))
     (let* ((ex-rows (sqlite-select db
                      "SELECT text, text_zh FROM examples WHERE sense_id = ? ORDER BY sort_order"
@@ -118,10 +117,7 @@ SENSE-INDEX is the 1-based index used when sense_number is empty."
                            label-rows)))
       (lexdb-sense-create
        :id id
-       :number (if (lexdb--non-empty-string-p sense-num)
-                   sense-num
-                 ;; Auto-generate number from index when DB value is empty
-                 (when sense-index (number-to-string sense-index)))
+       :number (when (lexdb--non-empty-string-p sense-num) sense-num)
        :signpost (when (lexdb--non-empty-string-p signpost) signpost)
        :definition definition
        :examples examples
@@ -166,12 +162,7 @@ SENSE-INDEX is the 1-based index used when sense_number is empty."
                         "SELECT id, sense_number, signpost, definition, definition_zh, sort_order
                          FROM senses WHERE entry_id = ? ORDER BY sort_order"
                         (list id)))
-           ;; Use counter for auto-numbering when sense_number is empty
-           (sense-index 0)
-           (senses (mapcar (lambda (sr)
-                             (setq sense-index (1+ sense-index))
-                             (lexdb-oald--row-to-sense sr db sense-index))
-                           sense-rows))
+           (senses (mapcar (lambda (sr) (lexdb-oald--row-to-sense sr db)) sense-rows))
            (prons (lexdb-oald--build-pronunciations id db))
            (label-rows (sqlite-select db
                         "SELECT label_type, label_value FROM labels WHERE entry_id = ? ORDER BY sort_order"

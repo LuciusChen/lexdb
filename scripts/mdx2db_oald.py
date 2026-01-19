@@ -263,21 +263,23 @@ def _parse_hw2_entry(hw2_elem, headword_hint=None):
 
     # === Senses ===
     sense_order = 0
+    sense_num = 1  # 1-indexed display number
     for se2 in hw2_elem.find_all('div', class_='se2', recursive=False):
-        sense_data = parse_oald4_sense(se2, sense_order)
+        sense_data = parse_oald4_sense(se2, sense_order, sense_number=str(sense_num))
         if sense_data:
             # Add entry-level grammar if sense has none
             if entry_grammar and not sense_data.get('grammar'):
                 sense_data['grammar'] = entry_grammar.copy()
             entry['senses'].append(sense_data)
             sense_order += 1
+            sense_num += 1
         else:
             # se2 has no direct content, process its se3 children
             for se3 in se2.find_all('div', class_='se3', recursive=False):
                 subsense_data = parse_oald4_subsense(se3, sense_order)
                 if subsense_data:
                     sense = {
-                        'number': '',
+                        'number': str(sense_num),
                         'signpost': subsense_data.get('signpost', ''),
                         'definition': subsense_data.get('definition', ''),
                         'definition_zh': subsense_data.get('definition_zh', ''),
@@ -289,16 +291,18 @@ def _parse_hw2_entry(hw2_elem, headword_hint=None):
                     }
                     entry['senses'].append(sense)
                     sense_order += 1
+                    sense_num += 1
 
     # If no se2, try se directly
     if not entry['senses']:
         for se in hw2_elem.find_all('div', class_='se', recursive=False):
-            sense_data = parse_oald4_sense(se, sense_order)
+            sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
             if sense_data:
                 if entry_grammar and not sense_data.get('grammar'):
                     sense_data['grammar'] = entry_grammar.copy()
                 entry['senses'].append(sense_data)
                 sense_order += 1
+                sense_num += 1
 
     return entry if entry['senses'] or entry.get('pos') else None
 
@@ -362,11 +366,13 @@ def _parse_standalone_entry(soup, headword_hint=None):
             entry['headword'] = clean_text(l_elem.get_text())
 
         sense_order = 0
+        sense_num = 1
         for se in standalone_phrase.find_all('div', class_=['se', 'se3']):
-            sense_data = parse_oald4_sense(se, sense_order)
+            sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
             if sense_data:
                 entry['senses'].append(sense_data)
                 sense_order += 1
+                sense_num += 1
 
         refmentry = soup.find('div', class_='refmentry')
         if refmentry:
@@ -400,19 +406,21 @@ def _parse_standalone_entry(soup, headword_hint=None):
             entry['pos'] = pos_elem.get('value', '') or clean_text(pos_elem.get_text())
 
         sense_order = 0
+        sense_num = 1
         se2_list = standalone_deriv.find_all('div', class_='se2')
         if se2_list:
             for se2 in se2_list:
-                sense_data = parse_oald4_sense(se2, sense_order)
+                sense_data = parse_oald4_sense(se2, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
                 else:
                     for se3 in se2.find_all('div', class_='se3', recursive=False):
                         subsense_data = parse_oald4_subsense(se3, sense_order)
                         if subsense_data:
                             entry['senses'].append({
-                                'number': '',
+                                'number': str(sense_num),
                                 'signpost': subsense_data.get('signpost', ''),
                                 'definition': subsense_data.get('definition', ''),
                                 'definition_zh': subsense_data.get('definition_zh', ''),
@@ -423,12 +431,14 @@ def _parse_standalone_entry(soup, headword_hint=None):
                                 'sort_order': sense_order
                             })
                             sense_order += 1
+                            sense_num += 1
         else:
             for se in standalone_deriv.find_all('div', class_='se'):
-                sense_data = parse_oald4_sense(se, sense_order)
+                sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
 
         if not entry['senses']:
             examples_only = []
@@ -530,20 +540,23 @@ def _parse_mainentry(main_entry, headword_hint=None):
 
     # === Senses from mainentry ===
     sense_order = 0
+    sense_num = 1  # 1-indexed display number
     se2_list = main_entry.find_all('div', class_='se2', recursive=True)
 
     if se2_list:
         for se2 in se2_list:
-            sense_data = parse_oald4_sense(se2, sense_order)
+            sense_data = parse_oald4_sense(se2, sense_order, sense_number=str(sense_num))
             if sense_data:
                 entry['senses'].append(sense_data)
                 sense_order += 1
+                sense_num += 1
             else:
+                # se2 has no direct content, process its se3 children
                 for se3 in se2.find_all('div', class_='se3', recursive=False):
                     subsense_data = parse_oald4_subsense(se3, sense_order)
                     if subsense_data:
                         entry['senses'].append({
-                            'number': '',
+                            'number': str(sense_num),
                             'signpost': subsense_data.get('signpost', ''),
                             'definition': subsense_data.get('definition', ''),
                             'definition_zh': subsense_data.get('definition_zh', ''),
@@ -554,21 +567,24 @@ def _parse_mainentry(main_entry, headword_hint=None):
                             'sort_order': sense_order
                         })
                         sense_order += 1
+                        sense_num += 1
     else:
         sg = main_entry.find('div', class_='sg')
         if sg:
             for se in sg.find_all('div', class_='se', recursive=False):
-                sense_data = parse_oald4_sense(se, sense_order)
+                sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
 
         if not entry['senses']:
             for se in main_entry.find_all('div', class_='se', recursive=True):
-                sense_data = parse_oald4_sense(se, sense_order)
+                sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
                 if sense_data:
                     entry['senses'].append(sense_data)
                     sense_order += 1
+                    sense_num += 1
 
     # === Topic headings ===
     topics = []
@@ -694,18 +710,19 @@ def parse_oald4_phrase(phrase_div):
     return None
 
 
-def parse_oald4_sense(sense_elem, order=0):
+def parse_oald4_sense(sense_elem, order=0, sense_number=None):
     """Parse a single sense element (se, se2 or se3).
 
     Args:
         sense_elem: BeautifulSoup element for the sense
         order: Sort order
+        sense_number: Display number for this sense (e.g., "1", "2", "3")
 
     Returns:
         Dictionary with sense data, or None if no meaningful content
     """
     sense = {
-        'number': '',
+        'number': sense_number or '',
         'signpost': '',
         'definition': '',
         'definition_zh': '',
