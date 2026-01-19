@@ -487,6 +487,25 @@ Same color as definition but bold."
 Same color as example-highlight-face for consistency."
   :group 'lexdb)
 
+;; Definition inline formatting (for OALD variant words, register labels, etc.)
+(defface lexdb-def-variant-face
+  '((((background dark))  :foreground "#7CB8FF" :weight bold)
+    (((background light)) :foreground "#0066CC" :weight bold))
+  "Face for variant words in definitions (e.g., maths, math)."
+  :group 'lexdb)
+
+(defface lexdb-def-register-face
+  '((((background dark))  :foreground "#E0A040")
+    (((background light)) :foreground "#996600"))
+  "Face for register labels in definitions (e.g., Brit, US, infml)."
+  :group 'lexdb)
+
+(defface lexdb-def-pronunciation-face
+  '((((background dark))  :foreground "#A0A0A0")
+    (((background light)) :foreground "#666666"))
+  "Face for pronunciations in definitions."
+  :group 'lexdb)
+
 ;; Collocations
 (defface lexdb-collocation-header-face
   '((((background dark))  :foreground "#B8B8B8" :weight bold :underline t)
@@ -609,6 +628,72 @@ Set to nil to disable translation indicators."
   :group 'lexdb)
 
 ;;;; ============================================================
+;;;; Definition Format Rendering
+;;;; ============================================================
+
+(defun lexdb-ui--render-formatted-definition (text)
+  "Render definition TEXT with format markers.
+Parses markers like <<l>>...<</l>> for variants, <<reg>>...<</reg>> for
+register labels, and applies appropriate faces.
+Returns the propertized string."
+  (if (or (null text) (string-empty-p text))
+      ""
+    (with-temp-buffer
+      (insert text)
+      (goto-char (point-min))
+      ;; Process variant words: <<l>>...<</l>>
+      (while (re-search-forward "<<l>>\\([^<]*\\)<</l>>" nil t)
+        (let ((content (match-string 1)))
+          (replace-match (propertize content 'face 'lexdb-def-variant-face) t t)))
+      ;; Process register labels: <<reg>>...<</reg>>
+      (goto-char (point-min))
+      (while (re-search-forward "<<reg>>\\([^<]*\\)<</reg>>" nil t)
+        (let ((content (match-string 1)))
+          (replace-match (propertize content 'face 'lexdb-def-register-face) t t)))
+      (buffer-string))))
+
+(defun lexdb-ui--insert-formatted-definition (text default-face)
+  "Insert definition TEXT with format markers, using DEFAULT-FACE for plain text.
+Format markers are replaced with propertized text."
+  (when (and text (not (string-empty-p text)))
+    (let ((pos 0)
+          (len (length text)))
+      (while (< pos len)
+        (cond
+         ;; Match <<l>>...<</l>> for variant words
+         ((and (< (+ pos 4) len)
+               (string= (substring text pos (+ pos 5)) "<<l>>"))
+          (let ((end-pos (string-match-p "<</l>>" text pos)))
+            (if end-pos
+                (let ((content (substring text (+ pos 5) end-pos)))
+                  (insert (propertize content 'face 'lexdb-def-variant-face))
+                  (setq pos (+ end-pos 6)))
+              (insert (propertize (substring text pos (+ pos 1)) 'face default-face))
+              (setq pos (1+ pos)))))
+         ;; Match <<reg>>...<</reg>> for register labels
+         ((and (< (+ pos 6) len)
+               (string= (substring text pos (+ pos 7)) "<<reg>>"))
+          (let ((end-pos (string-match-p "<</reg>>" text pos)))
+            (if end-pos
+                (let ((content (substring text (+ pos 7) end-pos)))
+                  (insert (propertize content 'face 'lexdb-def-register-face))
+                  (setq pos (+ end-pos 8)))
+              (insert (propertize (substring text pos (+ pos 1)) 'face default-face))
+              (setq pos (1+ pos)))))
+         ;; Plain text
+         (t
+          ;; Find next marker or end of string
+          (let* ((next-l (string-match-p "<<l>>" text pos))
+                 (next-reg (string-match-p "<<reg>>" text pos))
+                 (next-marker (cond
+                               ((and next-l next-reg) (min next-l next-reg))
+                               (next-l next-l)
+                               (next-reg next-reg)
+                               (t len))))
+            (when (< pos next-marker)
+              (insert (propertize (substring text pos next-marker) 'face default-face)))
+            (setq pos next-marker))))))))
+
 ;;;; ============================================================
 ;;;; Audio Playback
 ;;;; ============================================================
@@ -1175,7 +1260,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
     ;; Definition (English) - this may be just the lexunit for senses with subsenses
     (let ((def (lexdb-sense-definition sense)))
       (when (lexdb--non-empty-string-p def)
-        (insert (propertize def 'face 'lexdb-definition-face))))
+        (lexdb-ui--insert-formatted-definition def 'lexdb-definition-face)))
     ;; SYN/OPP labels after definition (not clickable)
     (let ((labels (lexdb-sense-labels sense)))
       (when labels
@@ -1209,7 +1294,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                         (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
               ;; Definition
               (when sub-def
-                (insert (propertize sub-def 'face 'lexdb-definition-face)))
+                (lexdb-ui--insert-formatted-definition sub-def 'lexdb-definition-face))
               (insert "\n")
               ;; Examples
               (when sub-examples
