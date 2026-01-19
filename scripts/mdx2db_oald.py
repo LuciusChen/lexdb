@@ -706,6 +706,7 @@ def parse_oald4_idiom(idiom_div):
         'text': '',
         'definition': '',
         'definition_zh': '',
+        'labels': [],  # Register labels like fml, infml
         'examples': []
     }
 
@@ -717,6 +718,12 @@ def parse_oald4_idiom(idiom_div):
     # Find sense (se or se3)
     se = idiom_div.find('div', class_=['se', 'se3'])
     if se:
+        # Extract register labels (fml, infml, etc.) - they are outside df
+        for reg in se.find_all('span', class_='reg', recursive=False):
+            reg_text = clean_text(reg.get_text())
+            if reg_text:
+                idiom['labels'].append({'type': 'register', 'value': reg_text})
+
         # First try df element
         df = se.find(['span', 'div'], class_='df')
         if df:
