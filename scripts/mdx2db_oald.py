@@ -60,7 +60,7 @@ def extract_definition_with_format(element):
     """Extract definition text preserving format markers for UI rendering.
 
     Preserves:
-    - Variant words (<span class="l">) as <<l>>...<</l>>
+    - Variant words (<span class="l"> or <l>) as <<l>>...<</l>>
     - Register labels (<span class="reg">) as <<reg>>...<</reg>>
     - Pronunciations (<span class="pr">) with /.../ format
     - Grammar labels (<span class="nac">, <span class="vps">) with [...] format
@@ -75,17 +75,21 @@ def extract_definition_with_format(element):
     for zh in elem_copy.find_all('zh'):
         zh.decompose()
 
-    # Format variant words (l = lemma/variant)
+    # Format variant words - try both <span class="l"> and <l> tag
     for l_elem in elem_copy.find_all('span', class_='l'):
         text = l_elem.get_text().strip()
         if text:
-            l_elem.replace_with(f'<<l>>{text}<</l>>')
+            l_elem.replace_with(f' <<l>>{text}<</l>> ')
+    for l_elem in elem_copy.find_all('l'):
+        text = l_elem.get_text().strip()
+        if text:
+            l_elem.replace_with(f' <<l>>{text}<</l>> ')
 
-    # Format register labels (Brit, US, infml, fml, etc.)
+    # Format register labels (Brit, US, infml, fml, etc.) - add space after
     for reg in elem_copy.find_all('span', class_='reg'):
         text = clean_text(reg.get_text())
         if text:
-            reg.replace_with(f'<<reg>>{text}<</reg>>')
+            reg.replace_with(f' <<reg>>{text}<</reg>> ')
 
     # Format pronunciations with slashes
     for pr in elem_copy.find_all('span', class_='pr'):
@@ -104,7 +108,7 @@ def extract_definition_with_format(element):
             # Add brackets if not already present
             if not text.startswith('['):
                 text = f'[{text}]'
-            nac.replace_with(f' {text}')
+            nac.replace_with(f' {text} ')
 
     for vps in elem_copy.find_all('span', class_='vps'):
         # Prefer English text over Chinese value attribute
@@ -112,7 +116,7 @@ def extract_definition_with_format(element):
         if text:
             if not text.startswith('['):
                 text = f'[{text}]'
-            vps.replace_with(f' {text}')
+            vps.replace_with(f' {text} ')
 
     return clean_text(elem_copy.get_text())
 
@@ -134,7 +138,7 @@ def extract_highlighted_example(element):
     Args:
         element: Can be <span class="ex"> or <div class="eg">
 
-    Returns text with <ie> as 'ie: ...' and <eg> as 'eg: ...' format.
+    Returns text with <ie> as 'ie: ...' and <eg/gl> as 'eg: ...' format.
     """
     if not element:
         return ""
@@ -147,7 +151,7 @@ def extract_highlighted_example(element):
         zh.decompose()
 
     # Convert <ie> (implicit explanation) to "ie: ..." format
-    # Try both tag name 'ie' and class='ie'
+    # Try tag name 'ie', class='ie', and <span class="ie">
     for ie in elem_copy.find_all('ie'):
         text = ie.get_text().strip()
         ie.replace_with(f' (ie: {text})')
@@ -155,17 +159,29 @@ def extract_highlighted_example(element):
         text = ie.get_text().strip()
         ie.replace_with(f' (ie: {text})')
 
-    # Convert <eg> (example explanation) to "eg: ..." format
-    # Try tag name 'eg' first (not div.eg which is the container)
+    # Convert <eg>/<gl> (example gloss/explanation) to "eg: ..." format
+    # Try various tag names and classes
     for eg in elem_copy.find_all('eg'):
         text = eg.get_text().strip()
         eg.replace_with(f' (eg: {text})')
-    # Also check class='eg' but skip div containers
+    for gl in elem_copy.find_all('gl'):
+        text = gl.get_text().strip()
+        gl.replace_with(f' (eg: {text})')
+    for gl in elem_copy.find_all('gloss'):
+        text = gl.get_text().strip()
+        gl.replace_with(f' (eg: {text})')
+    # Check class='eg' or class='gl' but skip div containers
     for eg in elem_copy.find_all(class_='eg'):
         if eg.name == 'div':
             continue
         text = eg.get_text().strip()
         eg.replace_with(f' (eg: {text})')
+    for gl in elem_copy.find_all(class_='gl'):
+        text = gl.get_text().strip()
+        gl.replace_with(f' (eg: {text})')
+    for gl in elem_copy.find_all(class_='gloss'):
+        text = gl.get_text().strip()
+        gl.replace_with(f' (eg: {text})')
 
     return clean_text(elem_copy.get_text())
 
