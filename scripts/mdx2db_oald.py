@@ -750,10 +750,12 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
     # === Grammar labels (nac = noun countability, vps = verb pattern) ===
     # Note: value attribute is Chinese, text content is English - prefer English text
     for nac in sense_elem.find_all('span', class_='nac'):
-        # Skip if inside a nested se3 or eg
+        # Skip if inside a nested se3, eg, or df (definition)
+        # Grammar inside definitions belongs to variant words, not the sense
         parent_se3 = nac.find_parent('div', class_='se3')
         parent_eg = nac.find_parent('div', class_='eg')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_eg:
+        parent_df = nac.find_parent(['span', 'div'], class_='df')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df:
             continue
         # Prefer English text content over Chinese value attribute
         nac_value = clean_text(nac.get_text()) or nac.get('value', '')
@@ -761,9 +763,10 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
             sense['grammar'].append(nac_value)
 
     for vps in sense_elem.find_all('span', class_='vps'):
-        # Skip if inside a nested se3
+        # Skip if inside a nested se3 or df (definition)
         parent_se3 = vps.find_parent('div', class_='se3')
-        if parent_se3 and parent_se3 != sense_elem:
+        parent_df = vps.find_parent(['span', 'div'], class_='df')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_df:
             continue
         # Prefer English text content over Chinese value attribute
         vps_value = clean_text(vps.get_text()) or vps.get('value', '')
@@ -774,10 +777,12 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
     # Structure: <span class="reg" value="文">fml</span>
     # value attribute is Chinese, text content is English - use English text
     for reg in sense_elem.find_all('span', class_='reg'):
-        # Skip if inside a nested se3 or eg
+        # Skip if inside a nested se3, eg, or df (definition)
+        # Labels inside definitions belong to variant words, not the sense
         parent_se3 = reg.find_parent('div', class_='se3')
         parent_eg = reg.find_parent('div', class_='eg')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_eg:
+        parent_df = reg.find_parent(['span', 'div'], class_='df')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df:
             continue
         reg_text = clean_text(reg.get_text())  # English label (e.g., "fml", "infml")
         if reg_text:
