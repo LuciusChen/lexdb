@@ -255,12 +255,14 @@ def _parse_hw2_entry(hw2_elem, headword_hint=None):
                 })
 
     # === Grammar (vps-w at hw2 level applies to all senses) ===
+    # Note: value attribute is Chinese, text content is English - prefer English text
     entry_grammar = []
     for vps_w in hw2_elem.find_all('vps-w', recursive=False):
         vps_span = vps_w.find('span', class_='vps')
         if vps_span:
-            vps_code = vps_span.get('value', '')
-            # Only use short codes
+            # Prefer English text content over Chinese value attribute
+            vps_code = clean_text(vps_span.get_text()) or vps_span.get('value', '')
+            # Only use short codes without Chinese characters
             if vps_code and len(vps_code) <= 8 and not re.search(r'[\u4e00-\u9fff]', vps_code):
                 entry_grammar.append(vps_code)
 
@@ -745,13 +747,15 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
         return None
 
     # === Grammar labels (nac = noun countability, vps = verb pattern) ===
+    # Note: value attribute is Chinese, text content is English - prefer English text
     for nac in sense_elem.find_all('span', class_='nac'):
         # Skip if inside a nested se3 or eg
         parent_se3 = nac.find_parent('div', class_='se3')
         parent_eg = nac.find_parent('div', class_='eg')
         if (parent_se3 and parent_se3 != sense_elem) or parent_eg:
             continue
-        nac_value = nac.get('value', '') or clean_text(nac.get_text())
+        # Prefer English text content over Chinese value attribute
+        nac_value = clean_text(nac.get_text()) or nac.get('value', '')
         if nac_value and nac_value not in sense['grammar']:
             sense['grammar'].append(nac_value)
 
@@ -760,7 +764,8 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
         parent_se3 = vps.find_parent('div', class_='se3')
         if parent_se3 and parent_se3 != sense_elem:
             continue
-        vps_value = vps.get('value', '') or clean_text(vps.get_text())
+        # Prefer English text content over Chinese value attribute
+        vps_value = clean_text(vps.get_text()) or vps.get('value', '')
         if vps_value and vps_value not in sense['grammar']:
             sense['grammar'].append(vps_value)
 
@@ -860,17 +865,20 @@ def parse_oald4_subsense(se3_elem, order=0):
     }
 
     # === Grammar ===
+    # Note: value attribute is Chinese, text content is English - prefer English text
     for nac_w in se3_elem.find_all('nac-w', recursive=False):
         nac = nac_w.find('span', class_='nac')
         if nac:
-            nac_value = nac.get('value', '') or clean_text(nac.get_text())
+            # Prefer English text content over Chinese value attribute
+            nac_value = clean_text(nac.get_text()) or nac.get('value', '')
             if nac_value:
                 subsense['grammar'].append(nac_value)
 
     for vps_w in se3_elem.find_all('vps-w', recursive=False):
         vps = vps_w.find('span', class_='vps')
         if vps:
-            vps_value = vps.get('value', '') or clean_text(vps.get_text())
+            # Prefer English text content over Chinese value attribute
+            vps_value = clean_text(vps.get_text()) or vps.get('value', '')
             if vps_value:
                 subsense['grammar'].append(vps_value)
 
