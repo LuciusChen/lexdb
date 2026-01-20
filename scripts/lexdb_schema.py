@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS senses (
     entry_id INTEGER NOT NULL,
     sense_number TEXT,                    -- "1", "2", "2a", etc.
     signpost TEXT,                        -- LDOCE: "PARENT", "LIQUID"
+    plural TEXT,                          -- OALD: "(pl manifestos or manifestoes)"
     definition TEXT NOT NULL,             -- English definition
     definition_zh TEXT,                   -- Chinese definition (bilingual)
     sort_order INTEGER DEFAULT 0,
