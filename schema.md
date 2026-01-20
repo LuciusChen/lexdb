@@ -429,8 +429,11 @@ CREATE TABLE entry_attributes (
 | `ldoce/frequency` | text | 词频 "S1 W2" |
 | `ldoce/homograph` | text | 同形词号 |
 | `ldoce/runons` | json | 派生词（如 relevantly adverb） |
-| `idioms` | json | 习语列表 |
-| `phrasal_verbs` | json | 短语动词 |
+| `oald4/usage` | json | 用法说明 NOTE OF USAGE |
+| `oald/idioms` | json | OALD 习语列表 |
+| `oald/phrasal-verbs` | json | OALD 短语动词 (PHR V) |
+| `idioms` | json | 习语列表（通用） |
+| `phrasal_verbs` | json | 短语动词（通用） |
 | `entry_grammar_boxes` | json | 词条级语法框 |
 
 **义项级（以 sense_number 为 key 的 JSON 对象）：**
@@ -463,6 +466,10 @@ CREATE TABLE entry_attributes (
 
 ### idioms（习语）
 
+习语支持两种结构：单定义和多子义项。
+
+**单定义习语：**
+
 ```json
 [
   {
@@ -479,7 +486,153 @@ CREATE TABLE entry_attributes (
 ]
 ```
 
-**labels 字段说明：** 习语的语域标签（如 `fml`、`infml`），显示在习语标题下方、定义之前。
+**带交叉引用的习语：**
+
+```json
+{
+  "text": "one's (elders and) betters",
+  "definition": "= one's betters",
+  "crossref": {
+    "prefix": "→ ",
+    "clickable": "better³",
+    "target_word": "better"
+  }
+}
+```
+
+**多子义项习语（如 "part company"）：**
+
+```json
+{
+  "text": "part company (with sb)",
+  "senses": [
+    {
+      "number": "1",
+      "definition": "to leave sb; to end a relationship with sb",
+      "definition_zh": "与某人分手",
+      "examples": [
+        {
+          "text": "We parted company at the bus stop.",
+          "text_zh": "我们在公共汽车站分手。",
+          "label": "joc"
+        }
+      ]
+    },
+    {
+      "number": "2",
+      "definition": "to disagree with sb about sth",
+      "definition_zh": "与某人意见不合",
+      "examples": [
+        {
+          "text": "I'm afraid I have to part company with you on that point.",
+          "text_zh": "恐怕在那一点上我不能同意你的意见。",
+          "label": "fig"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `text` | 习语文本 |
+| `definition` | 释义（单定义时） |
+| `definition_zh` | 中文释义 |
+| `labels` | 语域标签数组 `[{type, value}]` |
+| `examples` | 例句数组 |
+| `examples[].label` | 例句语域标签（如 `joc`, `fig`） |
+| `senses` | 子义项数组（多义项时） |
+| `senses[].number` | 子义项编号 |
+| `crossref` | 交叉引用结构 |
+| `crossref.prefix` | 前缀（如 `→ `） |
+| `crossref.clickable` | 可点击文本 |
+| `crossref.target_word` | 跳转目标词（规范化） |
+
+### usage（用法说明）
+
+OALD4 特有的 "NOTE OF USAGE 用法" 结构，支持嵌套层级。
+
+```json
+[
+  {
+    "text": "<<l>>Old<</l>> and <<l>>
+
+
+<</l>> are both used...",
+    "text_zh": "Old 和 elder 都可用于...",
+    "examples": [
+      {
+        "text": "He is <<ex>>older<</ex>> than me.",
+        "text_zh": "他比我年龄大。"
+      }
+    ],
+    "children": [
+      {
+        "text": "<<l>>Elderly<</l>> is a polite word for <<l>>old<</l>>...",
+        "text_zh": "Elderly 是 old 的委婉说法...",
+        "examples": [...]
+      }
+    ]
+  }
+]
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `text` | 说明文本，支持格式标记 |
+| `text_zh` | 中文翻译 |
+| `examples` | 例句数组 |
+| `children` | 嵌套子项（递归结构） |
+
+**格式标记：**
+
+| 标记 | 说明 |
+|------|------|
+| `<<l>>...<</l>>` | 高亮词汇（蓝色粗体） |
+| `<<ex>>...<</ex>>` | 例句中高亮词（斜体） |
+
+### phrasal-verbs（短语动词）
+
+OALD4 的 "PHR V 动词短语" 结构。
+
+```json
+[
+  {
+    "headword": "part with sth",
+    "senses": [
+      {
+        "definition": "give away or relinquish sth",
+        "definition_zh": "放弃或出让某物",
+        "examples": [
+          {
+            "text": "Despite his poverty, he refused to part with the family jewels.",
+            "text_zh": "他尽管贫穷，却不肯变卖家中的珠宝。"
+          },
+          {
+            "text": "He hates parting with <<ie>>(=spending)<</ie>> his money.",
+            "text_zh": "他很不喜欢花钱。"
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `headword` | 短语动词文本 |
+| `senses` | 义项数组 |
+| `senses[].definition` | 英文释义 |
+| `senses[].definition_zh` | 中文释义 |
+| `senses[].examples` | 例句数组 |
 
 ### runons（派生词）
 
@@ -606,6 +759,7 @@ INSERT INTO _lexdb_meta VALUES ('schema_version', '2.1');
 | `signpost` | 导航词 |
 | `grammar-box` | 语法框 |
 | `register-box` | 语域框 |
+| `usage-notes` | 用法说明 (OALD4) |
 
 ---
 

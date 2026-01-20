@@ -277,15 +277,15 @@ def parse_oald4_entry(html, headword_hint=None):
         if idioms:
             entries[0]['attributes']['oald/idioms'] = idioms
 
-        # Phrases
-        phrases = []
+        # Phrasal verbs (phrsubentry)
+        phrasal_verbs = []
         for phr_sub in oald4ec.find_all('div', class_='phrsubentry'):
             for phrase_div in phr_sub.find_all('div', class_='phrase'):
                 phrase_data = parse_oald4_phrase(phrase_div)
                 if phrase_data:
-                    phrases.append(phrase_data)
-        if phrases:
-            entries[0]['attributes']['oald/phrases'] = phrases
+                    phrasal_verbs.append(phrase_data)
+        if phrasal_verbs:
+            entries[0]['attributes']['oald/phrasal-verbs'] = phrasal_verbs
 
         # Derivatives (standalone ones at oald4ec level)
         derivatives = []
@@ -850,8 +850,32 @@ def parse_oald4_usage(usage_div):
     return usage_data if usage_data else None
 
 
+def parse_idiom_example(eg_elem):
+    """Parse an idiom example, extracting register labels (joc, fig, etc.)."""
+    ex_text = extract_highlighted_example(eg_elem)
+    ex_zh = extract_zh(eg_elem)
+
+    if not ex_text:
+        return None
+
+    # Check for register label at start of example
+    reg_elem = eg_elem.find('span', class_='reg', recursive=False)
+    label = ''
+    if reg_elem:
+        label = clean_text(reg_elem.get_text())
+
+    return {
+        'text': ex_text,
+        'text_zh': ex_zh,
+        'label': label  # joc, fig, etc.
+    }
+
+
 def parse_oald4_idiom(idiom_div):
-    """Parse an idiom element."""
+    """Parse an idiom element.
+
+    Supports idioms with multiple subsenses (se3 elements).
+    """
     from bs4 import NavigableString
 
     idiom = {
@@ -859,7 +883,8 @@ def parse_oald4_idiom(idiom_div):
         'definition': '',
         'definition_zh': '',
         'labels': [],  # Register labels like fml, infml
-        'examples': []
+        'examples': [],
+        'senses': []  # Subsenses for idioms with multiple meanings
     }
 
     # Idiom text
@@ -867,88 +892,116 @@ def parse_oald4_idiom(idiom_div):
     if l_elem:
         idiom['text'] = clean_text(l_elem.get_text())
 
-    # Find sense (se or se3)
-    se = idiom_div.find('div', class_=['se', 'se3'])
-    if se:
-        # Extract register labels (fml, infml, etc.) - they are outside df
-        for reg in se.find_all('span', class_='reg', recursive=False):
-            reg_text = clean_text(reg.get_text())
-            if reg_text:
-                idiom['labels'].append({'type': 'register', 'value': reg_text})
+    # Check for multiple se3 subsenses first
+    se3_list = idiom_div.find_all('div', class_='se3', recursive=False)
+    if not se3_list:
+        # Try finding se3 inside se
+        se = idiom_div.find('div', class_='se')
+        if se:
+            se3_list = se.find_all('div', class_='se3', recursive=False)
 
-        # First try df element
-        df = se.find(['span', 'div'], class_='df')
-        if df:
-            idiom['definition'] = extract_definition_with_format(df)
-            idiom['definition_zh'] = extract_zh(df)
-        else:
-            # Check for xrg (cross-reference) first
-            xrg = se.find('span', class_='xrg')
-            if xrg:
-                idiom['definition'] = extract_definition_with_format(xrg)
-                idiom['definition_zh'] = extract_zh(xrg)
-                # Extract cross-reference target from <a class="xr"> link
-                xr_link = xrg.find('a', class_='xr')
-                if xr_link:
-                    href = xr_link.get('href', '')
-                    link_text = xr_link.get_text().strip()
-                    raw_target = href.replace('entry://', '') if href.startswith('entry://') else link_text
-                    # Normalize target_word: remove superscripts, numbers, spaces
-                    # "better³ 3" -> "better"
-                    target_word = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹0-9\s]+', '', raw_target).lower()
-                    idiom['crossref'] = {
-                        'is_crossref': True,
-                        'prefix': '→',
-                        'clickable': link_text,
-                        'suffix': None,
-                        'target_word': target_word,
-                        'target_sense': None
-                    }
+    if len(se3_list) > 1:
+        # Multiple subsenses - parse each one
+        for idx, se3 in enumerate(se3_list):
+            subsense = {
+                'number': str(idx + 1),
+                'definition': '',
+                'definition_zh': '',
+                'labels': [],
+                'examples': []
+            }
+
+            # Definition
+            df = se3.find('span', class_='df')
+            if df:
+                subsense['definition'] = extract_definition_with_format(df)
+                subsense['definition_zh'] = extract_zh(df)
+
+            # Examples with register labels
+            for eg in se3.find_all('div', class_='eg', recursive=False):
+                ex_data = parse_idiom_example(eg)
+                if ex_data:
+                    subsense['examples'].append(ex_data)
+
+            idiom['senses'].append(subsense)
+    else:
+        # Single sense or no se3 - use original logic
+        se = idiom_div.find('div', class_=['se', 'se3'])
+        if se:
+            # Extract register labels (fml, infml, etc.) - they are outside df
+            for reg in se.find_all('span', class_='reg', recursive=False):
+                reg_text = clean_text(reg.get_text())
+                if reg_text:
+                    idiom['labels'].append({'type': 'register', 'value': reg_text})
+
+            # First try df element
+            df = se.find(['span', 'div'], class_='df')
+            if df:
+                idiom['definition'] = extract_definition_with_format(df)
+                idiom['definition_zh'] = extract_zh(df)
             else:
-                # No df or xrg - definition might be directly in se
-                # Extract text excluding nested elements like eg
-                def_text_parts = []
-                def_zh_parts = []
+                # Check for xrg (cross-reference) first
+                xrg = se.find('span', class_='xrg')
+                if xrg:
+                    idiom['definition'] = extract_definition_with_format(xrg)
+                    idiom['definition_zh'] = extract_zh(xrg)
+                    # Extract cross-reference target from <a class="xr"> link
+                    xr_link = xrg.find('a', class_='xr')
+                    if xr_link:
+                        href = xr_link.get('href', '')
+                        link_text = xr_link.get_text().strip()
+                        raw_target = href.replace('entry://', '') if href.startswith('entry://') else link_text
+                        # Normalize target_word: remove superscripts, numbers, spaces
+                        # "better³ 3" -> "better"
+                        target_word = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹0-9\s]+', '', raw_target).lower()
+                        idiom['crossref'] = {
+                            'is_crossref': True,
+                            'prefix': '→',
+                            'clickable': link_text,
+                            'suffix': None,
+                            'target_word': target_word,
+                            'target_sense': None
+                        }
+                else:
+                    # No df or xrg - definition might be directly in se
+                    # Extract text excluding nested elements like eg
+                    def_text_parts = []
+                    def_zh_parts = []
 
-                for child in se.children:
-                    if isinstance(child, NavigableString):
-                        text = str(child).strip()
-                        if text:
-                            def_text_parts.append(text)
-                    elif child.name == 'zh':
-                        zh_text = clean_text(child.get_text())
-                        def_zh_parts.append(zh_text)
-                    elif child.name == 'div' and 'eg' in child.get('class', []):
-                        # Skip example divs
-                        continue
-                    elif child.name == 'span' and 'xrg' in child.get('class', []):
-                        # Skip cross-references (already handled above)
-                        continue
-                    else:
-                        # Get text from other elements (like span with reg)
-                        text = extract_text_without_zh(child)
-                        if text:
-                            def_text_parts.append(text)
+                    for child in se.children:
+                        if isinstance(child, NavigableString):
+                            text = str(child).strip()
+                            if text:
+                                def_text_parts.append(text)
+                        elif child.name == 'zh':
+                            zh_text = clean_text(child.get_text())
+                            def_zh_parts.append(zh_text)
+                        elif child.name == 'div' and 'eg' in child.get('class', []):
+                            # Skip example divs
+                            continue
+                        elif child.name == 'span' and 'xrg' in child.get('class', []):
+                            # Skip cross-references (already handled above)
+                            continue
+                        else:
+                            # Get text from other elements (like span with reg)
+                            text = extract_text_without_zh(child)
+                            if text:
+                                def_text_parts.append(text)
 
-                if def_text_parts:
-                    idiom['definition'] = ' '.join(def_text_parts)
-                if def_zh_parts:
-                    # Use the last/main Chinese definition (skip parenthetical ones)
-                    idiom['definition_zh'] = def_zh_parts[-1] if def_zh_parts else ''
+                    if def_text_parts:
+                        idiom['definition'] = ' '.join(def_text_parts)
+                    if def_zh_parts:
+                        # Use the last/main Chinese definition (skip parenthetical ones)
+                        idiom['definition_zh'] = def_zh_parts[-1] if def_zh_parts else ''
 
-        # Examples
-        ex_order = 0
-        for eg in se.find_all('div', class_='eg'):
-            # Pass entire eg div to include <ie> siblings
-            ex_text = extract_highlighted_example(eg)
-            ex_zh = extract_zh(eg)
-            if ex_text:
-                idiom['examples'].append({
-                    'text': ex_text,
-                    'text_zh': ex_zh,
-                    'sort_order': ex_order
-                })
-                ex_order += 1
+            # Examples
+            ex_order = 0
+            for eg in se.find_all('div', class_='eg'):
+                ex_data = parse_idiom_example(eg)
+                if ex_data:
+                    ex_data['sort_order'] = ex_order
+                    idiom['examples'].append(ex_data)
+                    ex_order += 1
 
     if idiom['text']:
         # Check if definition is a cross-reference (→word.)
@@ -960,29 +1013,55 @@ def parse_oald4_idiom(idiom_div):
 
 
 def parse_oald4_phrase(phrase_div):
-    """Parse a phrase element."""
-    phrase = {
-        'text': '',
-        'definition': '',
-        'definition_zh': ''
-    }
+    """Parse a phrase element (phrasal verb).
 
+    Returns a structure compatible with lexdb-ui--render-phrasal-verbs:
+    {
+        'headword': 'part with sth',
+        'senses': [{
+            'definition': '...',
+            'definition_zh': '...',
+            'examples': [{'text': '...', 'text_zh': '...'}]
+        }]
+    }
+    """
     # Phrase text
     l_elem = phrase_div.find('span', class_='l')
-    if l_elem:
-        phrase['text'] = clean_text(l_elem.get_text())
+    if not l_elem:
+        return None
 
-    # Find sense
+    headword = clean_text(l_elem.get_text())
+    if not headword:
+        return None
+
+    # Build sense
+    sense = {
+        'definition': '',
+        'definition_zh': '',
+        'examples': []
+    }
+
     se = phrase_div.find('div', class_='se')
     if se:
         df = se.find('span', class_='df')
         if df:
-            phrase['definition'] = extract_definition_with_format(df)
-            phrase['definition_zh'] = extract_zh(df)
+            sense['definition'] = extract_definition_with_format(df)
+            sense['definition_zh'] = extract_zh(df)
 
-    if phrase['text']:
-        return phrase
-    return None
+        # Extract examples
+        for eg in se.find_all('div', class_='eg', recursive=False):
+            ex_text = extract_highlighted_example(eg)
+            ex_zh = extract_zh(eg)
+            if ex_text:
+                sense['examples'].append({
+                    'text': ex_text,
+                    'text_zh': ex_zh
+                })
+
+    return {
+        'headword': headword,
+        'senses': [sense] if sense['definition'] else []
+    }
 
 
 def parse_oald4_sense(sense_elem, order=0, sense_number=None):
@@ -1009,36 +1088,46 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
         'sort_order': order
     }
 
-    # === Check if this is a container (se2) with only subsenses (se3) ===
-    # In this case, we should process the se3 elements directly
-    has_direct_df = sense_elem.find('span', class_='df', recursive=False)
-    has_se3 = sense_elem.find('div', class_='se3', recursive=False)
-
-    # If se2 has no direct definition but has se3, don't create empty parent sense
-    if not has_direct_df and has_se3:
-        # Return None - the caller should process se3 directly
-        return None
-
     # === Grammar labels (nac = noun countability, vps = verb pattern) ===
     # Note: value attribute is Chinese, text content is English - prefer English text
+
+    # First, check for nac-w wrappers at sense level (direct children)
+    for nac_w in sense_elem.find_all('nac-w', recursive=False):
+        nac = nac_w.find('span', class_='nac')
+        if nac:
+            nac_value = clean_text(nac.get_text()) or nac.get('value', '')
+            if nac_value and nac_value not in sense['grammar']:
+                sense['grammar'].append(nac_value)
+
+    # Also check for span.nac not in wrappers
     for nac in sense_elem.find_all('span', class_='nac'):
-        # Skip if inside a nested se3, eg, or df (definition)
+        # Skip if inside a nested se3, eg, df, or nac-w (already handled above)
         # Grammar inside definitions belongs to variant words, not the sense
         parent_se3 = nac.find_parent('div', class_='se3')
         parent_eg = nac.find_parent('div', class_='eg')
         parent_df = nac.find_parent(['span', 'div'], class_='df')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df:
+        parent_nac_w = nac.find_parent('nac-w')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df or parent_nac_w:
             continue
         # Prefer English text content over Chinese value attribute
         nac_value = clean_text(nac.get_text()) or nac.get('value', '')
         if nac_value and nac_value not in sense['grammar']:
             sense['grammar'].append(nac_value)
 
+    # Check for vps-w wrappers at sense level (direct children)
+    for vps_w in sense_elem.find_all('vps-w', recursive=False):
+        vps = vps_w.find('span', class_='vps')
+        if vps:
+            vps_value = clean_text(vps.get_text()) or vps.get('value', '')
+            if vps_value and vps_value not in sense['grammar']:
+                sense['grammar'].append(vps_value)
+
     for vps in sense_elem.find_all('span', class_='vps'):
-        # Skip if inside a nested se3 or df (definition)
+        # Skip if inside a nested se3, df, or vps-w (already handled above)
         parent_se3 = vps.find_parent('div', class_='se3')
         parent_df = vps.find_parent(['span', 'div'], class_='df')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_df:
+        parent_vps_w = vps.find_parent('vps-w')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_df or parent_vps_w:
             continue
         # Prefer English text content over Chinese value attribute
         vps_value = clean_text(vps.get_text()) or vps.get('value', '')
