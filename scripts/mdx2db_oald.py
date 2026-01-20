@@ -916,7 +916,8 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
                         # Mark plural words with <<l>> for blue variant face
                         plural_parts.append('<<l>>' + child.get_text() + '<</l>>')
                     elif 'gr' in classes:
-                        plural_parts.append(child.get_text())
+                        # Mark grammar label with <<gram>> for grammar face
+                        plural_parts.append('<<gram>>' + child.get_text() + '<</gram>>')
 
             if plural_parts:
                 plural_text = ''.join(plural_parts).strip()
