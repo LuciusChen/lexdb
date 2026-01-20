@@ -1094,7 +1094,10 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
 
 def parse_oald4_subsense(se3_elem, order=0):
     """Parse a subsense element (se3)."""
+    # Generate letter number: 0 -> "a)", 1 -> "b)", etc.
+    letter = chr(ord('a') + order)
     subsense = {
+        'number': f'{letter})',
         'definition': '',
         'definition_zh': '',
         'grammar': [],
