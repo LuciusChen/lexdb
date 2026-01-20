@@ -804,7 +804,7 @@ def parse_oald4_usage(usage_div):
                 text_zh = clean_text(child.get_text())
             elif child.name == 'span':
                 classes = child.get('class', [])
-                text_content = child.get_text()
+                text_content = child.get_text().strip()  # Strip inner whitespace from prettified HTML
                 if 'bd' in classes or 'ex' in classes:
                     # Bold/highlighted word or example word - use same marker
                     # Add trailing space - clean_text normalizes multiple spaces
