@@ -67,7 +67,7 @@
 
 (defun lexdb-oald--row-to-sense (sense-row db)
   "Convert SENSE-ROW to lexdb-sense with Chinese support."
-  (pcase-let ((`(,id ,sense-num ,signpost ,definition ,definition-zh ,_sort) sense-row))
+  (pcase-let ((`(,id ,sense-num ,signpost ,plural ,definition ,definition-zh ,_sort) sense-row))
     (let* ((ex-rows (sqlite-select db
                      "SELECT text, text_zh FROM examples WHERE sense_id = ? ORDER BY sort_order"
                      (list id)))
@@ -90,17 +90,23 @@
            (labels (mapcar (lambda (l)
                              (lexdb-label-create :type (intern (nth 0 l)) :value (nth 1 l)))
                            label-rows)))
-      (lexdb-sense-create
-       :id id
-       :number (when (lexdb--non-empty-string-p sense-num) sense-num)
-       :signpost (when (lexdb--non-empty-string-p signpost) signpost)
-       :definition definition
-       :examples examples
-       :grammar-patterns gram-patterns
-       :labels labels
-       :metadata (when (and lexdb-oald-show-chinese
-                            (lexdb--non-empty-string-p definition-zh))
-                   (list (cons 'oald/definition-zh definition-zh)))))))
+      (let ((meta nil))
+        ;; Store Chinese definition in metadata
+        (when (and lexdb-oald-show-chinese
+                   (lexdb--non-empty-string-p definition-zh))
+          (push (cons 'oald/definition-zh definition-zh) meta))
+        ;; Store plural forms in metadata
+        (when (lexdb--non-empty-string-p plural)
+          (push (cons 'oald/plural plural) meta))
+        (lexdb-sense-create
+         :id id
+         :number (when (lexdb--non-empty-string-p sense-num) sense-num)
+         :signpost (when (lexdb--non-empty-string-p signpost) signpost)
+         :definition definition
+         :examples examples
+         :grammar-patterns gram-patterns
+         :labels labels
+         :metadata meta)))))
 
 ;;;; ============================================================
 ;;;; OALD-specific: Entry with idioms and Chinese
@@ -110,7 +116,7 @@
   "Convert database ROW to lexdb-entry using DB."
   (pcase-let ((`(,id ,_dict-id ,word ,_word-lower ,hyph) row))
     (let* ((sense-rows (sqlite-select db
-                        "SELECT id, sense_number, signpost, definition, definition_zh, sort_order
+                        "SELECT id, sense_number, signpost, plural, definition, definition_zh, sort_order
                          FROM senses WHERE entry_id = ? ORDER BY sort_order"
                         (list id)))
            (senses (mapcar (lambda (sr) (lexdb-oald--row-to-sense sr db)) sense-rows))

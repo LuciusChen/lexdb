@@ -707,6 +707,7 @@ def parse_oald4_sense(sense_elem, order=0):
     sense = {
         'number': '',
         'signpost': '',
+        'plural': '',  # Plural forms like "(pl manifestos or manifestoes)"
         'definition': '',
         'definition_zh': '',
         'grammar': [],
@@ -758,6 +759,36 @@ def parse_oald4_sense(sense_elem, order=0):
         reg_text = clean_text(reg.get_text())  # English label (e.g., "fml", "infml")
         if reg_text:
             sense['labels'].append({'type': 'register', 'value': reg_text})
+
+    # === Plural forms (pl) ===
+    # Structure: (<span class="gr">pl </span><span class="pl">manifestos</span> or <span class="pl">manifestoes</span>)
+    # These appear as direct content before the definition
+    pl_elems = sense_elem.find_all('span', class_='pl', recursive=False)
+    if pl_elems:
+        # Find the df element first
+        df_elem = sense_elem.find(['span', 'div'], class_='df', recursive=False)
+        if df_elem:
+            # Collect text/elements before df that form the plural notation
+            from bs4 import NavigableString
+            plural_parts = []
+            for child in sense_elem.children:
+                if child == df_elem:
+                    break
+                if isinstance(child, NavigableString):
+                    text = str(child)
+                    if text.strip():
+                        plural_parts.append(text)
+                elif hasattr(child, 'name'):
+                    classes = child.get('class', [])
+                    # Include gr, pl elements
+                    if any(c in ['gr', 'pl'] for c in classes):
+                        plural_parts.append(child.get_text())
+
+            if plural_parts:
+                plural_text = ''.join(plural_parts).strip()
+                plural_text = re.sub(r'\s+', ' ', plural_text)
+                if plural_text:
+                    sense['plural'] = plural_text
 
     # === Definition ===
     # df can be either span or div
@@ -940,9 +971,9 @@ def insert_entry(conn, dict_id, entry):
         signpost = sense.get('signpost', '')
 
         cursor.execute("""
-            INSERT INTO senses (entry_id, sense_number, signpost, definition, definition_zh, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (entry_id, sense.get('number', ''), signpost,
+            INSERT INTO senses (entry_id, sense_number, signpost, plural, definition, definition_zh, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (entry_id, sense.get('number', ''), signpost, sense.get('plural', ''),
               sense.get('definition', ''), sense.get('definition_zh', ''),
               sense.get('sort_order', 0)))
 
@@ -978,9 +1009,9 @@ def insert_entry(conn, dict_id, entry):
 
             sub_signpost = ' '.join(subsense.get('grammar', []))
             cursor.execute("""
-                INSERT INTO senses (entry_id, sense_number, signpost, definition, definition_zh, sort_order)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (entry_id, '', sub_signpost,
+                INSERT INTO senses (entry_id, sense_number, signpost, plural, definition, definition_zh, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (entry_id, '', sub_signpost, subsense.get('plural', ''),
                   subsense.get('definition', ''), subsense.get('definition_zh', ''),
                   sense.get('sort_order', 0) * 100 + subsense.get('sort_order', 0)))
 
