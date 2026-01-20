@@ -382,6 +382,7 @@ flowchart TB
         idioms["idioms (json)"]
         phrasal["phrasal_verbs (json)"]
         grammar_box["entry_grammar_boxes (json)"]
+        runons["runons (json)"]
     end
 
     subgraph sense_level["义项级属性 (以 sense_number 索引)"]
@@ -425,6 +426,7 @@ CREATE TABLE entry_attributes (
 |----------|------|------|
 | `ldoce/frequency` | text | 词频 "S1 W2" |
 | `ldoce/homograph` | text | 同形词号 |
+| `ldoce/runons` | json | 派生词（如 relevantly adverb） |
 | `idioms` | json | 习语列表 |
 | `phrasal_verbs` | json | 短语动词 |
 | `entry_grammar_boxes` | json | 词条级语法框 |
@@ -465,12 +467,30 @@ CREATE TABLE entry_attributes (
     "text": "necessity is the mother of invention",
     "definition": "used to say that when you are in difficulty...",
     "definition_zh": "需要是发明之母",
+    "labels": [
+      {"type": "register", "value": "fml"}
+    ],
     "examples": [
       {"text": "...", "text_zh": "..."}
     ]
   }
 ]
 ```
+
+**labels 字段说明：** 习语的语域标签（如 `fml`、`infml`），显示在习语标题下方、定义之前。
+
+### runons（派生词）
+
+```json
+[
+  {
+    "word": "relevantly",
+    "pos": "adverb"
+  }
+]
+```
+
+**说明：** 词条末尾的派生词（run-on entries），如 "—relevantly adverb"。
 
 ### sense_grammar_boxes（语法框）
 
