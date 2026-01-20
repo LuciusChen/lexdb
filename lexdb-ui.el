@@ -1251,14 +1251,38 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (insert " " (propertize (upcase (symbol-name ltype)) 'face 'lexdb-synonym-face)
                       " " (propertize lvalue 'face 'lexdb-synonym-face)))))))
     (insert "\n")
-    ;; Cross-references (Cf) on separate line
-    (let ((labels (lexdb-sense-labels sense)))
+    ;; Cross-references (Cf) on separate line with clickable links
+    ;; Format: Cf <<xr:target>>text<</xr>>suffix
+    (let ((labels (lexdb-sense-labels sense))
+          (jump-adapter (lexdb-adapter-id adapter)))
       (when labels
         (dolist (label labels)
           (let ((ltype (lexdb-label-type label))
                 (lvalue (lexdb-label-value label)))
             (when (and lvalue (eq ltype 'cf))
-              (insert "  " (propertize lvalue 'face 'lexdb-grammar-face) "\n"))))))
+              (insert "  ")
+              ;; Parse and render with clickable links
+              (let ((start 0)
+                    (text lvalue))
+                (while (string-match "<<xr:\\([^>]+\\)>>\\([^<]+\\)<</xr>>" text start)
+                  (let ((target (match-string 1 text))
+                        (link-text (match-string 2 text))
+                        (match-start (match-beginning 0))
+                        (match-end (match-end 0)))
+                    ;; Insert text before match
+                    (when (> match-start start)
+                      (insert (propertize (substring text start match-start) 'face 'lexdb-grammar-face)))
+                    ;; Insert clickable link
+                    (insert-text-button link-text
+                                        'face 'lexdb-inflection-link-face
+                                        'action (lambda (_)
+                                                  (lexdb-search-and-goto-sense target nil jump-adapter))
+                                        'help-echo (format "Look up: %s" target))
+                    (setq start match-end)))
+                ;; Insert remaining text
+                (when (< start (length text))
+                  (insert (propertize (substring text start) 'face 'lexdb-grammar-face))))
+              (insert "\n"))))))
 
     ;; Subsenses (a, b, c)
     (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))

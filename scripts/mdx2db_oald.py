@@ -1039,15 +1039,33 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
 
     # === Cross-references (cf) ===
     # Structure: <div class="cf">Cf <zh>参看</zh> <a class="xr" href="entry://old">old</a>2.</div>
+    # Use <<xr:target>>text<</xr>> format for clickable links
     for cf in sense_elem.find_all('div', class_='cf', recursive=False):
         # Skip if inside a nested se3
         parent_se3 = cf.find_parent('div', class_='se3')
         if parent_se3 and parent_se3 != sense_elem:
             continue
-        # Extract cf text without Chinese
-        cf_text = extract_text_without_zh(cf)
-        if cf_text:
-            sense['labels'].append({'type': 'cf', 'value': cf_text})
+        # Extract link info from <a class="xr">
+        xr_link = cf.find('a', class_='xr')
+        if xr_link:
+            href = xr_link.get('href', '')
+            link_text = clean_text(xr_link.get_text())
+            # Extract target word from href (entry://old -> old)
+            target_word = href.replace('entry://', '') if href.startswith('entry://') else link_text
+            # Get suffix after link (like "2." in "old2.")
+            suffix = ''
+            if xr_link.next_sibling:
+                from bs4 import NavigableString
+                if isinstance(xr_link.next_sibling, NavigableString):
+                    suffix = clean_text(str(xr_link.next_sibling))
+            # Format: Cf <<xr:old>>old<</xr>>2.
+            cf_value = f'Cf <<xr:{target_word}>>{link_text}<</xr>>{suffix}'
+            sense['labels'].append({'type': 'cf', 'value': cf_value})
+        else:
+            # Fallback: just extract text
+            cf_text = extract_text_without_zh(cf)
+            if cf_text:
+                sense['labels'].append({'type': 'cf', 'value': cf_text})
 
     # === Subsenses (se3) - only if this sense has its own definition ===
     if sense['definition']:
