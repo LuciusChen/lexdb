@@ -894,6 +894,7 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
     # === Plural forms (pl) ===
     # Structure: (<span class="gr">pl </span><span class="pl">manifestos</span> or <span class="pl">manifestoes</span>)
     # These appear as direct content before the definition
+    # Mark <span class="pl"> content with <<l>>...<</l>> for blue variant face
     pl_elems = sense_elem.find_all('span', class_='pl', recursive=False)
     if pl_elems:
         # Find the df element first
@@ -911,8 +912,10 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
                         plural_parts.append(text)
                 elif hasattr(child, 'name'):
                     classes = child.get('class', [])
-                    # Include gr, pl elements
-                    if any(c in ['gr', 'pl'] for c in classes):
+                    if 'pl' in classes:
+                        # Mark plural words with <<l>> for blue variant face
+                        plural_parts.append('<<l>>' + child.get_text() + '<</l>>')
+                    elif 'gr' in classes:
                         plural_parts.append(child.get_text())
 
             if plural_parts:

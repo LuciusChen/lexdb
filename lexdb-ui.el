@@ -1226,10 +1226,12 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (when (and lvalue (member ltype '(register geo)))
               (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
     ;; OALD plural forms (e.g., "(pl manifestos or manifestoes)") - before definition
+    ;; Uses <<l>>...<</l>> markers for plural words (blue variant face)
     (when (eq (lexdb-adapter-id adapter) 'oald)
       (when-let ((plural (lexdb-meta-get (lexdb-sense-metadata sense) ns "plural")))
         (when (lexdb--non-empty-string-p plural)
-          (insert (propertize plural 'face 'lexdb-grammar-face) " "))))
+          (lexdb-ui--insert-formatted-definition plural 'lexdb-grammar-face)
+          (insert " "))))
     ;; Definition (English) - this may be just the lexunit for senses with subsenses
     (let ((def (lexdb-sense-definition sense)))
       (when (lexdb--non-empty-string-p def)
