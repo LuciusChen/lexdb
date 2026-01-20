@@ -1291,15 +1291,25 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
       (when subsenses
         (let ((sub-list (if (vectorp subsenses) (append subsenses nil) subsenses)))
           (dolist (sub sub-list)
-            (let ((sub-num (cdr (assoc 'number sub)))
-                  (sub-def (cdr (assoc 'definition sub)))
-                  (sub-grammar (cdr (assoc 'grammar sub)))
-                  (sub-labels (cdr (assoc 'labels sub)))
-                  (sub-examples (cdr (assoc 'examples sub))))
+            (let ((sub-num (cdr (assoc "number" sub)))
+                  (sub-def (cdr (assoc "definition" sub)))
+                  (sub-def-zh (cdr (assoc "definition_zh" sub)))
+                  (sub-grammar (cdr (assoc "grammar" sub)))
+                  (sub-labels (cdr (assoc "labels" sub)))
+                  (sub-examples (cdr (assoc "examples" sub))))
               ;; Subsense number
               (insert "  ")
               (when sub-num
                 (insert (propertize sub-num 'face 'lexdb-sense-num-face) " "))
+              ;; Translation indicator (🌐) - after subsense number
+              (when (and (memq 'chinese-definition caps)
+                         (lexdb--non-empty-string-p sub-def-zh)
+                         lexdb-ui-translation-indicator)
+                (insert (propertize lexdb-ui-translation-indicator
+                                    'face 'lexdb-translation-indicator-face
+                                    'lexdb-translation sub-def-zh
+                                    'help-echo "Press t to peek translation")
+                        " "))
               ;; Grammar (e.g., [attrib], [pred])
               (when sub-grammar
                 (let ((gram-list (cond ((vectorp sub-grammar) (append sub-grammar nil))
@@ -1314,7 +1324,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (when sub-labels
                 (let ((labels-list (if (vectorp sub-labels) (append sub-labels nil) sub-labels)))
                   (dolist (label labels-list)
-                    (let ((lvalue (cdr (assoc 'value label))))
+                    (let ((lvalue (cdr (assoc "value" label))))
                       (when lvalue
                         (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
               ;; Definition
@@ -1325,17 +1335,39 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (when sub-examples
                 (let ((ex-list (if (vectorp sub-examples) (append sub-examples nil) sub-examples)))
                   (dolist (ex ex-list)
-                    (let ((ex-text (cdr (assoc 'text ex)))
-                          (ex-audio (cdr (assoc 'audio_path ex))))
+                    (let ((ex-text (cdr (assoc "text" ex)))
+                          (ex-zh (cdr (assoc "text_zh" ex)))
+                          (ex-audio (cdr (assoc "audio_path" ex))))
                       (when (and ex-text (not (string-empty-p ex-text)))
-                        ;; Audio indicator at start if audio available
-                        (if (and ex-audio (not (string-empty-p ex-audio)))
-                            (insert (propertize "    🔊 "
+                        (let ((has-audio (and ex-audio (not (string-empty-p ex-audio))))
+                              (has-translation (and (memq 'chinese-example caps)
+                                                    ex-zh (not (string-empty-p ex-zh))
+                                                    lexdb-ui-translation-indicator)))
+                          (cond
+                           ((and has-audio has-translation)
+                            (insert (propertize "    🔊"
                                                 'face 'lexdb-audio-indicator-face
                                                 'lexdb-audio-path ex-audio
                                                 'lexdb-audio-dir audio-dir
                                                 'help-echo "C-c C-c to play"))
-                          (insert "    "))
+                            (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                                'face 'lexdb-translation-indicator-face
+                                                'lexdb-translation ex-zh
+                                                'help-echo "Press t to peek translation")))
+                           (has-audio
+                            (insert (propertize "    🔊 "
+                                                'face 'lexdb-audio-indicator-face
+                                                'lexdb-audio-path ex-audio
+                                                'lexdb-audio-dir audio-dir
+                                                'help-echo "C-c C-c to play")))
+                           (has-translation
+                            (insert "    ")
+                            (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                                'face 'lexdb-translation-indicator-face
+                                                'lexdb-translation ex-zh
+                                                'help-echo "Press t to peek translation")))
+                           (t
+                            (insert "    "))))
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                         (insert "\n")))))))))))
 
