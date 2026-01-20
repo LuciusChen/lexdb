@@ -968,15 +968,17 @@ E.g., 'mother1' -> 'mother¹', 'swing2' -> 'swing²', '1(5)' -> '¹(5)'."
 
 (defun lexdb-ui--normalize-search-word (str)
   "Normalize STR for dictionary lookup.
-Removes trailing superscript numbers and other non-word characters.
-E.g., 'end¹' -> 'end', 'mother²' -> 'mother'."
+Removes superscript numbers, regular numbers, and spaces.
+E.g., 'end¹' -> 'end', 'better³ 3' -> 'better'."
   (when str
-    ;; Remove trailing superscript numbers
-    (let ((result (replace-regexp-in-string "[⁰¹²³⁴⁵⁶⁷⁸⁹]+$" "" str)))
-      ;; Also remove trailing regular numbers (for consistency)
-      (setq result (replace-regexp-in-string "[0-9]+$" "" result))
-      ;; Lowercase
-      (downcase result))))
+    ;; Remove all superscript numbers (anywhere in string)
+    (let ((result (replace-regexp-in-string "[⁰¹²³⁴⁵⁶⁷⁸⁹]+" "" str)))
+      ;; Remove all regular numbers
+      (setq result (replace-regexp-in-string "[0-9]+" "" result))
+      ;; Remove spaces
+      (setq result (replace-regexp-in-string "\\s-+" "" result))
+      ;; Lowercase and trim
+      (downcase (string-trim result)))))
 
 (defun lexdb-ui--render-headword (entry)
   "Render headword for ENTRY.
