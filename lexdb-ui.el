@@ -2635,8 +2635,8 @@ ADAPTER-ID is used for crossref navigation."
     (when idiom-list
       (insert "\n")
       (let ((idm-start (point)))
-        (insert (propertize "IDM " 'face 'lexdb-label-face))
         (lexdb-ui--insert-translation-indicator "习语")
+        (insert (propertize "IDM" 'face 'lexdb-label-face))
         (insert "\n")
         (dolist (idiom idiom-list)
           (lexdb-ui--render-idiom idiom adapter-id))
@@ -2654,8 +2654,8 @@ ADAPTER-ID is used for crossref navigation."
     (when usage-list
       (insert "\n")
       (let ((usage-start (point)))
-        (insert (propertize "NOTE OF USAGE " 'face 'lexdb-label-face))
         (lexdb-ui--insert-translation-indicator "用法")
+        (insert (propertize "NOTE OF USAGE" 'face 'lexdb-label-face))
         (insert "\n")
         (lexdb-ui--render-usage-items usage-list 0)
         ;; Create overlay for background
@@ -2699,8 +2699,8 @@ ADAPTER-ID is used for crossref navigation."
     (when (and phrasal-verbs (> (length phrasal-verbs) 0))
       (insert "\n")
       (let ((pv-start (point)))
-        (insert (propertize "PHR V " 'face 'lexdb-label-face))
         (lexdb-ui--insert-translation-indicator "动词短语")
+        (insert (propertize "PHR V" 'face 'lexdb-label-face))
         (insert "\n")
         (lexdb-ui--render-phrasal-verbs phrasal-verbs)
         ;; Create overlay for background
