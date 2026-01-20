@@ -51,6 +51,7 @@ erDiagram
         int entry_id FK
         text sense_number "1, 2a"
         text signpost "导航词"
+        text plural "复数形式"
         text definition
         text definition_zh "双解"
         int sort_order
@@ -82,6 +83,7 @@ CREATE TABLE senses (
     entry_id INTEGER NOT NULL REFERENCES entries(id),
     sense_number TEXT,               -- 义项编号，如 "1", "2a"
     signpost TEXT,                   -- 导航词，如 "PARENT", "LIQUID"
+    plural TEXT,                     -- 复数形式，含格式标记 <<gram>>pl<</gram>> <<l>>词<</l>>
     definition TEXT NOT NULL,        -- 英文释义
     definition_zh TEXT,              -- 中文释义（双解词典）
     sort_order INTEGER DEFAULT 0
