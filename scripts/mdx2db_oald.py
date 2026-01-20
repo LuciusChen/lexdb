@@ -887,6 +887,20 @@ def parse_oald4_idiom(idiom_div):
             if xrg:
                 idiom['definition'] = extract_definition_with_format(xrg)
                 idiom['definition_zh'] = extract_zh(xrg)
+                # Extract cross-reference target from <a class="xr"> link
+                xr_link = xrg.find('a', class_='xr')
+                if xr_link:
+                    href = xr_link.get('href', '')
+                    link_text = xr_link.get_text().strip()
+                    target_word = href.replace('entry://', '') if href.startswith('entry://') else link_text
+                    idiom['crossref'] = {
+                        'is_crossref': True,
+                        'prefix': '→',
+                        'clickable': link_text,
+                        'suffix': None,
+                        'target_word': target_word.lower(),
+                        'target_sense': None
+                    }
             else:
                 # No df or xrg - definition might be directly in se
                 # Extract text excluding nested elements like eg
