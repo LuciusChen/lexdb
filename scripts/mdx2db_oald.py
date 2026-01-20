@@ -1009,36 +1009,46 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
         'sort_order': order
     }
 
-    # === Check if this is a container (se2) with only subsenses (se3) ===
-    # In this case, we should process the se3 elements directly
-    has_direct_df = sense_elem.find('span', class_='df', recursive=False)
-    has_se3 = sense_elem.find('div', class_='se3', recursive=False)
-
-    # If se2 has no direct definition but has se3, don't create empty parent sense
-    if not has_direct_df and has_se3:
-        # Return None - the caller should process se3 directly
-        return None
-
     # === Grammar labels (nac = noun countability, vps = verb pattern) ===
     # Note: value attribute is Chinese, text content is English - prefer English text
+
+    # First, check for nac-w wrappers at sense level (direct children)
+    for nac_w in sense_elem.find_all('nac-w', recursive=False):
+        nac = nac_w.find('span', class_='nac')
+        if nac:
+            nac_value = clean_text(nac.get_text()) or nac.get('value', '')
+            if nac_value and nac_value not in sense['grammar']:
+                sense['grammar'].append(nac_value)
+
+    # Also check for span.nac not in wrappers
     for nac in sense_elem.find_all('span', class_='nac'):
-        # Skip if inside a nested se3, eg, or df (definition)
+        # Skip if inside a nested se3, eg, df, or nac-w (already handled above)
         # Grammar inside definitions belongs to variant words, not the sense
         parent_se3 = nac.find_parent('div', class_='se3')
         parent_eg = nac.find_parent('div', class_='eg')
         parent_df = nac.find_parent(['span', 'div'], class_='df')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df:
+        parent_nac_w = nac.find_parent('nac-w')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_eg or parent_df or parent_nac_w:
             continue
         # Prefer English text content over Chinese value attribute
         nac_value = clean_text(nac.get_text()) or nac.get('value', '')
         if nac_value and nac_value not in sense['grammar']:
             sense['grammar'].append(nac_value)
 
+    # Check for vps-w wrappers at sense level (direct children)
+    for vps_w in sense_elem.find_all('vps-w', recursive=False):
+        vps = vps_w.find('span', class_='vps')
+        if vps:
+            vps_value = clean_text(vps.get_text()) or vps.get('value', '')
+            if vps_value and vps_value not in sense['grammar']:
+                sense['grammar'].append(vps_value)
+
     for vps in sense_elem.find_all('span', class_='vps'):
-        # Skip if inside a nested se3 or df (definition)
+        # Skip if inside a nested se3, df, or vps-w (already handled above)
         parent_se3 = vps.find_parent('div', class_='se3')
         parent_df = vps.find_parent(['span', 'div'], class_='df')
-        if (parent_se3 and parent_se3 != sense_elem) or parent_df:
+        parent_vps_w = vps.find_parent('vps-w')
+        if (parent_se3 and parent_se3 != sense_elem) or parent_df or parent_vps_w:
             continue
         # Prefer English text content over Chinese value attribute
         vps_value = clean_text(vps.get_text()) or vps.get('value', '')
