@@ -638,10 +638,11 @@ Format markers:
   <<l>>...<</l>>     - variant words (blue bold)
   <<reg>>...<</reg>> - register labels (same as grammar codes)
   <<gram>>...<</gram>> - grammar labels (same as grammar codes)
-  <<pr>>...<</pr>>   - pronunciations (same as entry pronunciation)"
+  <<pr>>...<</pr>>   - pronunciations (same as entry pronunciation)
+  <<pos>>...<</pos>> - part of speech references (hot pink)"
   (when (and text (not (string-empty-p text)))
     (let ((start 0))
-      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\)>>\\([^<]*\\)<</\\1>>" text start)
+      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\|pos\\)>>\\([^<]*\\)<</\\1>>" text start)
         (let ((before-match (substring text start (match-beginning 0)))
               (marker-type (match-string 1 text))
               (content (match-string 2 text)))
@@ -655,6 +656,7 @@ Format markers:
                                 ("reg" 'lexdb-grammar-face)
                                 ("gram" 'lexdb-grammar-face)
                                 ("pr" 'lexdb-phonetic-face)
+                                ("pos" 'lexdb-pos-face)
                                 (_ default-face))))
           (setq start (match-end 0))))
       ;; Insert remaining text

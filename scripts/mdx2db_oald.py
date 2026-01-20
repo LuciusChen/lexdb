@@ -64,6 +64,7 @@ def extract_definition_with_format(element):
     - Register labels (<span class="reg">) as <<reg>>...<</reg>>
     - Pronunciations (<span class="pr">) as <<pr>>...<</pr>>
     - Grammar labels (<span class="nac">, <span class="vps">) as <<gram>>...<</gram>>
+    - Part of speech refs (<span class="gr">) as <<pos>>...<</pos>>
     """
     if not element:
         return ""
@@ -122,11 +123,13 @@ def extract_definition_with_format(element):
                 text = f'[{text}]'
             vps.replace_with(f' <<gram>>{text}<</gram>> ')
 
-    # Format inline grammar references (like "n" in definitions)
+    # Format inline part of speech references (like "n" in definitions)
+    # Uses <<pos>> marker for hot pink color (same as adj, n, v etc.)
     for gr in elem_copy.find_all('span', class_='gr'):
         text = clean_text(gr.get_text())
         if text:
-            gr.replace_with(f'<<gram>>{text}<</gram>>')
+            # Add space after to preserve word boundaries (clean_text normalizes extra spaces)
+            gr.replace_with(f'<<pos>>{text}<</pos>> ')
 
     return clean_text(elem_copy.get_text())
 
