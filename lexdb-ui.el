@@ -38,6 +38,7 @@
     (senses          . lexdb-ui--slot-senses)
     (entry-grammar-box   . lexdb-ui--slot-entry-grammar-box)
     (idioms          . lexdb-ui--slot-idioms)
+    (usage           . lexdb-ui--slot-usage)
     (phrasal-verbs   . lexdb-ui--slot-phrasal-verbs)
     (synonyms        . lexdb-ui--slot-synonyms)
     (runons          . lexdb-ui--slot-runons)
@@ -46,7 +47,7 @@
 Each function takes (entry adapter) and renders content at point.")
 
 (defcustom lexdb-ui-default-template
-  '(header tabs senses entry-grammar-box idioms phrasal-verbs synonyms runons separator)
+  '(header tabs senses entry-grammar-box idioms usage phrasal-verbs synonyms runons separator)
   "Default slot order for rendering entries.
 This is a list of slot names from `lexdb-ui-slot-functions'."
   :type '(repeat symbol)
@@ -638,10 +639,12 @@ Format markers:
   <<l>>...<</l>>     - variant words (blue bold)
   <<reg>>...<</reg>> - register labels (same as grammar codes)
   <<gram>>...<</gram>> - grammar labels (same as grammar codes)
-  <<pr>>...<</pr>>   - pronunciations (same as entry pronunciation)"
+  <<pr>>...<</pr>>   - pronunciations (same as entry pronunciation)
+  <<pos>>...<</pos>> - part of speech references (hot pink)
+  <<ex>>...<</ex>>   - example words in text (highlighted like examples)"
   (when (and text (not (string-empty-p text)))
     (let ((start 0))
-      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\)>>\\([^<]*\\)<</\\1>>" text start)
+      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\|pos\\|ex\\)>>\\([^<]*\\)<</\\1>>" text start)
         (let ((before-match (substring text start (match-beginning 0)))
               (marker-type (match-string 1 text))
               (content (match-string 2 text)))
@@ -655,6 +658,8 @@ Format markers:
                                 ("reg" 'lexdb-grammar-face)
                                 ("gram" 'lexdb-grammar-face)
                                 ("pr" 'lexdb-phonetic-face)
+                                ("pos" 'lexdb-pos-face)
+                                ("ex" 'lexdb-example-highlight-face)
                                 (_ default-face))))
           (setq start (match-end 0))))
       ;; Insert remaining text
@@ -963,15 +968,17 @@ E.g., 'mother1' -> 'mother¹', 'swing2' -> 'swing²', '1(5)' -> '¹(5)'."
 
 (defun lexdb-ui--normalize-search-word (str)
   "Normalize STR for dictionary lookup.
-Removes trailing superscript numbers and other non-word characters.
-E.g., 'end¹' -> 'end', 'mother²' -> 'mother'."
+Removes superscript numbers, regular numbers, and spaces.
+E.g., 'end¹' -> 'end', 'better³ 3' -> 'better'."
   (when str
-    ;; Remove trailing superscript numbers
-    (let ((result (replace-regexp-in-string "[⁰¹²³⁴⁵⁶⁷⁸⁹]+$" "" str)))
-      ;; Also remove trailing regular numbers (for consistency)
-      (setq result (replace-regexp-in-string "[0-9]+$" "" result))
-      ;; Lowercase
-      (downcase result))))
+    ;; Remove all superscript numbers (anywhere in string)
+    (let ((result (replace-regexp-in-string "[⁰¹²³⁴⁵⁶⁷⁸⁹]+" "" str)))
+      ;; Remove all regular numbers
+      (setq result (replace-regexp-in-string "[0-9]+" "" result))
+      ;; Remove spaces
+      (setq result (replace-regexp-in-string "\\s-+" "" result))
+      ;; Lowercase and trim
+      (downcase (string-trim result)))))
 
 (defun lexdb-ui--render-headword (entry)
   "Render headword for ENTRY.
@@ -1072,48 +1079,52 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     (when has-audio (insert "\n"))))
 
 (defun lexdb-ui--render-inflections (entry adapter)
-  "Render inflections (past tense, plural, etc.) for ENTRY."
+  "Render inflections (past tense, plural, comparative/superlative, etc.) for ENTRY."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (adapter-id (lexdb-adapter-id adapter))
          (meta (lexdb-entry-metadata entry))
          (infl-text (lexdb-meta-get meta ns "inflections"))
          (relations (lexdb-entry-relations entry))
          (inflections (seq-filter (lambda (r) (eq (lexdb-relation-type r) 'inflection)) relations)))
-    ;; Display full inflection text if available
+    ;; Display full inflection text if available (may contain format markers)
     (when (lexdb--non-empty-string-p infl-text)
       (insert " ")
-      ;; Make inflection words clickable within the text
-      (let ((text (concat "(" infl-text ")"))
-            (start 0))
-        ;; Try to make each inflection word clickable
-        (dolist (infl inflections)
-          (let* ((target (lexdb-relation-target infl))
-                 (raw-link (lexdb-relation-target-link infl))
-                 (link (when raw-link
-                         (if (string-match "\\`\\([^#]+\\)" raw-link)
-                             (match-string 1 raw-link)
-                           raw-link)))
-                 ;; Normalize search word for lookup
-                 (search-word (lexdb-ui--normalize-search-word (or link target)))
-                 (pos (string-match (regexp-quote target) text start))
-                 ;; Capture adapter-id for closure
-                 (jump-adapter adapter-id))
-            (when pos
-              ;; Insert text before the match
-              (when (> pos start)
-                (insert (propertize (substring text start pos) 'face 'lexdb-inflection-face)))
-              ;; Insert clickable word - use intra-dictionary jump
-              (if search-word
-                  (insert-text-button target
-                                      'face 'lexdb-inflection-link-face
-                                      'action (lambda (_)
-                                                (lexdb-search-and-goto-sense search-word nil jump-adapter))
-                                      'help-echo (format "Look up: %s [%s]" search-word jump-adapter))
-                (insert (propertize target 'face 'lexdb-inflection-face)))
-              (setq start (+ pos (length target))))))
-        ;; Insert remaining text
-        (when (< start (length text))
-          (insert (propertize (substring text start) 'face 'lexdb-inflection-face)))))))
+      ;; Check if text contains format markers
+      (if (string-match-p "<<[a-z]+>>" infl-text)
+          ;; Use formatted definition renderer for markers like <<l>>, <<pr>>
+          (lexdb-ui--insert-formatted-definition infl-text 'lexdb-inflection-face)
+        ;; Legacy: make inflection words clickable within the text
+        (let ((text (concat "(" infl-text ")"))
+              (start 0))
+          ;; Try to make each inflection word clickable
+          (dolist (infl inflections)
+            (let* ((target (lexdb-relation-target infl))
+                   (raw-link (lexdb-relation-target-link infl))
+                   (link (when raw-link
+                           (if (string-match "\\`\\([^#]+\\)" raw-link)
+                               (match-string 1 raw-link)
+                             raw-link)))
+                   ;; Normalize search word for lookup
+                   (search-word (lexdb-ui--normalize-search-word (or link target)))
+                   (pos (string-match (regexp-quote target) text start))
+                   ;; Capture adapter-id for closure
+                   (jump-adapter adapter-id))
+              (when pos
+                ;; Insert text before the match
+                (when (> pos start)
+                  (insert (propertize (substring text start pos) 'face 'lexdb-inflection-face)))
+                ;; Insert clickable word - use intra-dictionary jump
+                (if search-word
+                    (insert-text-button target
+                                        'face 'lexdb-inflection-link-face
+                                        'action (lambda (_)
+                                                  (lexdb-search-and-goto-sense search-word nil jump-adapter))
+                                        'help-echo (format "Look up: %s [%s]" search-word jump-adapter))
+                  (insert (propertize target 'face 'lexdb-inflection-face)))
+                (setq start (+ pos (length target))))))
+          ;; Insert remaining text
+          (when (< start (length text))
+            (insert (propertize (substring text start) 'face 'lexdb-inflection-face))))))))
 
 (defun lexdb-ui--render-sense (sense adapter &optional entry)
   "Render a single SENSE using ADAPTER.
@@ -1247,20 +1258,74 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (insert " " (propertize (upcase (symbol-name ltype)) 'face 'lexdb-synonym-face)
                       " " (propertize lvalue 'face 'lexdb-synonym-face)))))))
     (insert "\n")
+    ;; Cross-references (Cf) on separate line with clickable links
+    ;; Format: Cf <<xr:target>>text<</xr>>suffix
+    (let ((labels (lexdb-sense-labels sense))
+          (jump-adapter (lexdb-adapter-id adapter)))
+      (when labels
+        (dolist (label labels)
+          (let ((ltype (lexdb-label-type label))
+                (lvalue (lexdb-label-value label)))
+            (when (and lvalue (eq ltype 'cf))
+              (insert "  ")
+              ;; Parse and render with clickable links
+              (let ((start 0)
+                    (text lvalue))
+                (while (string-match "<<xr:\\([^>]+\\)>>\\([^<]+\\)<</xr>>" text start)
+                  (let ((target (match-string 1 text))
+                        (link-text (match-string 2 text))
+                        (match-start (match-beginning 0))
+                        (match-end (match-end 0)))
+                    ;; Insert text before match
+                    (when (> match-start start)
+                      (insert (propertize (substring text start match-start) 'face 'lexdb-grammar-face)))
+                    ;; Insert clickable link
+                    (insert-text-button link-text
+                                        'face 'lexdb-inflection-link-face
+                                        'action (lambda (_)
+                                                  (lexdb-search-and-goto-sense target nil jump-adapter))
+                                        'help-echo (format "Look up: %s" target))
+                    (setq start match-end)))
+                ;; Insert remaining text
+                (when (< start (length text))
+                  (insert (propertize (substring text start) 'face 'lexdb-grammar-face))))
+              (insert "\n"))))))
 
     ;; Subsenses (a, b, c)
     (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))
       (when subsenses
         (let ((sub-list (if (vectorp subsenses) (append subsenses nil) subsenses)))
           (dolist (sub sub-list)
+            ;; JSON parsing returns symbol keys, not string keys
             (let ((sub-num (cdr (assoc 'number sub)))
                   (sub-def (cdr (assoc 'definition sub)))
+                  (sub-def-zh (cdr (assoc 'definition_zh sub)))
+                  (sub-grammar (cdr (assoc 'grammar sub)))
                   (sub-labels (cdr (assoc 'labels sub)))
                   (sub-examples (cdr (assoc 'examples sub))))
-              ;; Subsense number and labels
+              ;; Subsense number
               (insert "  ")
               (when sub-num
                 (insert (propertize sub-num 'face 'lexdb-sense-num-face) " "))
+              ;; Translation indicator (🌐) - after subsense number
+              (when (and (memq 'chinese-definition caps)
+                         (lexdb--non-empty-string-p sub-def-zh)
+                         lexdb-ui-translation-indicator)
+                (insert (propertize lexdb-ui-translation-indicator
+                                    'face 'lexdb-translation-indicator-face
+                                    'lexdb-translation sub-def-zh
+                                    'help-echo "Press t to peek translation")
+                        " "))
+              ;; Grammar (e.g., [attrib], [pred])
+              (when sub-grammar
+                (let ((gram-list (cond ((vectorp sub-grammar) (append sub-grammar nil))
+                                       ((listp sub-grammar) sub-grammar)
+                                       ((stringp sub-grammar) (list sub-grammar))
+                                       (t nil))))
+                  (dolist (gram gram-list)
+                    (when (and gram (not (string-empty-p gram)))
+                      (insert (propertize (if (string-match-p "^\\[" gram) gram (format "[%s]" gram))
+                                          'face 'lexdb-grammar-face) " ")))))
               ;; Labels (register, etc.)
               (when sub-labels
                 (let ((labels-list (if (vectorp sub-labels) (append sub-labels nil) sub-labels)))
@@ -1277,16 +1342,38 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                 (let ((ex-list (if (vectorp sub-examples) (append sub-examples nil) sub-examples)))
                   (dolist (ex ex-list)
                     (let ((ex-text (cdr (assoc 'text ex)))
+                          (ex-zh (cdr (assoc 'text_zh ex)))
                           (ex-audio (cdr (assoc 'audio_path ex))))
                       (when (and ex-text (not (string-empty-p ex-text)))
-                        ;; Audio indicator at start if audio available
-                        (if (and ex-audio (not (string-empty-p ex-audio)))
-                            (insert (propertize "    🔊 "
+                        (let ((has-audio (and ex-audio (not (string-empty-p ex-audio))))
+                              (has-translation (and (memq 'chinese-example caps)
+                                                    ex-zh (not (string-empty-p ex-zh))
+                                                    lexdb-ui-translation-indicator)))
+                          (cond
+                           ((and has-audio has-translation)
+                            (insert (propertize "    🔊"
                                                 'face 'lexdb-audio-indicator-face
                                                 'lexdb-audio-path ex-audio
                                                 'lexdb-audio-dir audio-dir
                                                 'help-echo "C-c C-c to play"))
-                          (insert "    "))
+                            (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                                'face 'lexdb-translation-indicator-face
+                                                'lexdb-translation ex-zh
+                                                'help-echo "Press t to peek translation")))
+                           (has-audio
+                            (insert (propertize "    🔊 "
+                                                'face 'lexdb-audio-indicator-face
+                                                'lexdb-audio-path ex-audio
+                                                'lexdb-audio-dir audio-dir
+                                                'help-echo "C-c C-c to play")))
+                           (has-translation
+                            (insert "    ")
+                            (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                                'face 'lexdb-translation-indicator-face
+                                                'lexdb-translation ex-zh
+                                                'help-echo "Press t to peek translation")))
+                           (t
+                            (insert "    "))))
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                         (insert "\n")))))))))))
 
@@ -2489,6 +2576,77 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                           (insert "    "))
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                         (insert "\n")))))))))))))
+
+(defun lexdb-ui--slot-usage (entry adapter)
+  "Slot: Render usage notes section."
+  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+         (usage (lexdb-meta-get (lexdb-entry-metadata entry) ns "usage")))
+    (when usage
+      (let ((usage-list (cond ((vectorp usage) (append usage nil))
+                              ((listp usage) usage)
+                              (t nil))))
+        (when usage-list
+          (insert "\n")
+          (let ((usage-start (point)))
+            (insert (propertize "NOTE OF USAGE 用法:" 'face 'lexdb-label-face))
+            (insert "\n")
+            ;; Render each top-level usage item recursively
+            (lexdb-ui--render-usage-items usage-list 0)
+            ;; Create overlay for background (like grammar box)
+            (when (> (point) usage-start)
+              (let ((ov (make-overlay usage-start (point))))
+                (overlay-put ov 'face 'lexdb-grambox-background-face)
+                (overlay-put ov 'lexdb-usage t)))
+            (insert "\n")))))))
+
+(defun lexdb-ui--render-usage-items (items indent-level)
+  "Render list of usage ITEMS at INDENT-LEVEL."
+  (let ((indent (make-string (* indent-level 2) ?\s)))
+    (dolist (item items)
+      (let ((text (alist-get 'text item))
+            (text-zh (alist-get 'text_zh item))
+            (examples (alist-get 'examples item))
+            (children (alist-get 'children item)))
+        ;; Render the text line with translation indicator
+        (when (and text (stringp text) (not (string-empty-p text)))
+          ;; Translation indicator at start
+          (if (and text-zh (stringp text-zh) (not (string-empty-p text-zh))
+                   lexdb-ui-translation-indicator)
+              (insert indent (propertize lexdb-ui-translation-indicator
+                                         'face 'lexdb-translation-indicator-face
+                                         'lexdb-translation text-zh
+                                         'help-echo "Press t to peek translation")
+                      " ")
+            (insert indent "  "))
+          ;; Text with format markers
+          (lexdb-ui--insert-formatted-definition text 'lexdb-definition-face)
+          (insert "\n"))
+        ;; Render examples
+        (when examples
+          (let ((ex-list (cond ((vectorp examples) (append examples nil))
+                               ((listp examples) examples)
+                               (t nil))))
+            (dolist (ex ex-list)
+              (let ((ex-text (alist-get 'text ex))
+                    (ex-zh (alist-get 'text_zh ex)))
+                (when (and ex-text (stringp ex-text) (not (string-empty-p ex-text)))
+                  ;; Example line with translation indicator
+                  (if (and ex-zh (stringp ex-zh) (not (string-empty-p ex-zh))
+                           lexdb-ui-translation-indicator)
+                      (insert indent "  " (propertize lexdb-ui-translation-indicator
+                                                       'face 'lexdb-translation-indicator-face
+                                                       'lexdb-translation ex-zh
+                                                       'help-echo "Press t to peek translation")
+                              " ")
+                    (insert indent "    "))
+                  (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
+                  (insert "\n"))))))
+        ;; Recursively render children
+        (when children
+          (let ((child-list (cond ((vectorp children) (append children nil))
+                                  ((listp children) children)
+                                  (t nil))))
+            (lexdb-ui--render-usage-items child-list (1+ indent-level))))))))
 
 (defun lexdb-ui--slot-phrasal-verbs (entry adapter)
   "Slot: Render phrasal verbs."
