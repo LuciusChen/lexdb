@@ -805,14 +805,10 @@ def parse_oald4_usage(usage_div):
             elif child.name == 'span':
                 classes = child.get('class', [])
                 text_content = child.get_text()
-                if 'bd' in classes:
-                    # Bold/highlighted word - mark for rendering
-                    # Add space after to preserve word boundaries (clean_text normalizes extra spaces)
-                    text_parts.append(f'<<l>>{text_content}<</l>> ')
-                elif 'ex' in classes:
-                    # Example word inline - mark differently
-                    # Add space after to preserve word boundaries
-                    text_parts.append(f'<<ex>>{text_content}<</ex>> ')
+                if 'bd' in classes or 'ex' in classes:
+                    # Bold/highlighted word or example word - use same marker
+                    # Don't add trailing space - whitespace is preserved from HTML as string children
+                    text_parts.append(f'<<l>>{text_content}<</l>>')
                 else:
                     text_parts.append(text_content)
             elif child.name == 'div':
