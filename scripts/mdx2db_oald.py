@@ -892,13 +892,16 @@ def parse_oald4_idiom(idiom_div):
                 if xr_link:
                     href = xr_link.get('href', '')
                     link_text = xr_link.get_text().strip()
-                    target_word = href.replace('entry://', '') if href.startswith('entry://') else link_text
+                    raw_target = href.replace('entry://', '') if href.startswith('entry://') else link_text
+                    # Normalize target_word: remove superscripts, numbers, spaces
+                    # "better³ 3" -> "better"
+                    target_word = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹0-9\s]+', '', raw_target).lower()
                     idiom['crossref'] = {
                         'is_crossref': True,
                         'prefix': '→',
                         'clickable': link_text,
                         'suffix': None,
-                        'target_word': target_word.lower(),
+                        'target_word': target_word,
                         'target_sense': None
                     }
             else:
