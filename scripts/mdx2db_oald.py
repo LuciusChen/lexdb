@@ -298,6 +298,13 @@ def parse_oald4_entry(html, headword_hint=None):
         if derivatives:
             entries[0]['attributes']['oald/derivatives'] = derivatives
 
+        # Usage notes
+        usage_div = oald4ec.find('div', class_='usage')
+        if usage_div:
+            usage_data = parse_oald4_usage(usage_div)
+            if usage_data:
+                entries[0]['attributes']['oald/usage'] = usage_data
+
         # Image
         img = oald4ec.find('img')
         if img and img.get('src'):
@@ -761,6 +768,88 @@ def _parse_mainentry(main_entry, headword_hint=None):
         entry['attributes']['oald/topics'] = topics
 
     return entry
+
+
+def parse_oald4_usage(usage_div):
+    """Parse a usage notes section.
+
+    Structure: <div class="usage">
+      <div class="use1">text with <span class="bd">highlighted words</span>
+        <div class="eg">example</div>
+        <div class="use3">nested explanation
+          <div class="use4">deeper nested content
+            <div class="eg">example</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+    def parse_use_element(elem, level=0):
+        """Recursively parse a use element (use1, use3, use4)."""
+        result = {
+            'level': level,
+            'text': '',
+            'text_zh': '',
+            'examples': [],
+            'children': []
+        }
+
+        # Extract text content (before child elements)
+        text_parts = []
+        text_zh = ''
+        for child in elem.children:
+            if isinstance(child, str):
+                text_parts.append(child)
+            elif child.name == 'zh':
+                text_zh = clean_text(child.get_text())
+            elif child.name == 'span':
+                classes = child.get('class', [])
+                text_content = child.get_text()
+                if 'bd' in classes:
+                    # Bold/highlighted word - mark for rendering
+                    text_parts.append(f'<<l>>{text_content}<</l>>')
+                elif 'ex' in classes:
+                    # Example word inline - mark differently
+                    text_parts.append(f'<<ex>>{text_content}<</ex>>')
+                else:
+                    text_parts.append(text_content)
+            elif child.name == 'div':
+                # Stop at child divs - they're processed separately
+                break
+            else:
+                text_parts.append(child.get_text() if hasattr(child, 'get_text') else str(child))
+
+        result['text'] = clean_text(''.join(text_parts))
+        result['text_zh'] = text_zh
+
+        # Extract examples
+        for eg in elem.find_all('div', class_='eg', recursive=False):
+            ex_text = extract_highlighted_example(eg)
+            ex_zh = extract_zh(eg)
+            if ex_text:
+                result['examples'].append({
+                    'text': ex_text,
+                    'text_zh': ex_zh
+                })
+
+        # Recursively process nested use elements (use3, use4, etc.)
+        for use_class in ['use2', 'use3', 'use4', 'use5']:
+            for child_use in elem.find_all('div', class_=use_class, recursive=False):
+                child_data = parse_use_element(child_use, level + 1)
+                if child_data['text'] or child_data['examples'] or child_data['children']:
+                    result['children'].append(child_data)
+
+        return result
+
+    usage_data = []
+
+    # Process top-level use1 elements
+    for use1 in usage_div.find_all('div', class_='use1', recursive=False):
+        use_data = parse_use_element(use1, 0)
+        if use_data['text'] or use_data['examples'] or use_data['children']:
+            usage_data.append(use_data)
+
+    return usage_data if usage_data else None
 
 
 def parse_oald4_idiom(idiom_div):

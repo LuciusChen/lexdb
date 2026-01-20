@@ -38,6 +38,7 @@
     (senses          . lexdb-ui--slot-senses)
     (entry-grammar-box   . lexdb-ui--slot-entry-grammar-box)
     (idioms          . lexdb-ui--slot-idioms)
+    (usage           . lexdb-ui--slot-usage)
     (phrasal-verbs   . lexdb-ui--slot-phrasal-verbs)
     (synonyms        . lexdb-ui--slot-synonyms)
     (runons          . lexdb-ui--slot-runons)
@@ -46,7 +47,7 @@
 Each function takes (entry adapter) and renders content at point.")
 
 (defcustom lexdb-ui-default-template
-  '(header tabs senses entry-grammar-box idioms phrasal-verbs synonyms runons separator)
+  '(header tabs senses entry-grammar-box idioms usage phrasal-verbs synonyms runons separator)
   "Default slot order for rendering entries.
 This is a list of slot names from `lexdb-ui-slot-functions'."
   :type '(repeat symbol)
@@ -2571,6 +2572,70 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                           (insert "    "))
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                         (insert "\n")))))))))))))
+
+(defun lexdb-ui--slot-usage (entry adapter)
+  "Slot: Render usage notes section."
+  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+         (usage (lexdb-meta-get (lexdb-entry-metadata entry) ns "usage")))
+    (when usage
+      (let ((usage-list (cond ((vectorp usage) (append usage nil))
+                              ((listp usage) usage)
+                              (t nil))))
+        (when usage-list
+          (insert "\n")
+          (insert (propertize "NOTE OF USAGE 用法:" 'face 'lexdb-label-face))
+          (insert "\n")
+          ;; Render each top-level usage item recursively
+          (lexdb-ui--render-usage-items usage-list 0))))))
+
+(defun lexdb-ui--render-usage-items (items indent-level)
+  "Render list of usage ITEMS at INDENT-LEVEL."
+  (let ((indent (make-string (* indent-level 2) ?\s)))
+    (dolist (item items)
+      (let ((text (alist-get 'text item))
+            (text-zh (alist-get 'text_zh item))
+            (examples (alist-get 'examples item))
+            (children (alist-get 'children item)))
+        ;; Render the text line with translation indicator
+        (when (and text (stringp text) (not (string-empty-p text)))
+          ;; Translation indicator at start
+          (if (and text-zh (stringp text-zh) (not (string-empty-p text-zh))
+                   lexdb-ui-translation-indicator)
+              (insert indent (propertize lexdb-ui-translation-indicator
+                                         'face 'lexdb-translation-indicator-face
+                                         'lexdb-translation text-zh
+                                         'help-echo "Press t to peek translation")
+                      " ")
+            (insert indent "  "))
+          ;; Text with format markers
+          (lexdb-ui--insert-formatted-definition text 'lexdb-definition-face)
+          (insert "\n"))
+        ;; Render examples
+        (when examples
+          (let ((ex-list (cond ((vectorp examples) (append examples nil))
+                               ((listp examples) examples)
+                               (t nil))))
+            (dolist (ex ex-list)
+              (let ((ex-text (alist-get 'text ex))
+                    (ex-zh (alist-get 'text_zh ex)))
+                (when (and ex-text (stringp ex-text) (not (string-empty-p ex-text)))
+                  ;; Example line with translation indicator
+                  (if (and ex-zh (stringp ex-zh) (not (string-empty-p ex-zh))
+                           lexdb-ui-translation-indicator)
+                      (insert indent "  " (propertize lexdb-ui-translation-indicator
+                                                       'face 'lexdb-translation-indicator-face
+                                                       'lexdb-translation ex-zh
+                                                       'help-echo "Press t to peek translation")
+                              " ")
+                    (insert indent "    "))
+                  (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
+                  (insert "\n"))))))
+        ;; Recursively render children
+        (when children
+          (let ((child-list (cond ((vectorp children) (append children nil))
+                                  ((listp children) children)
+                                  (t nil))))
+            (lexdb-ui--render-usage-items child-list (1+ indent-level))))))))
 
 (defun lexdb-ui--slot-phrasal-verbs (entry adapter)
   "Slot: Render phrasal verbs."
