@@ -430,8 +430,10 @@ CREATE TABLE entry_attributes (
 | `ldoce/homograph` | text | 同形词号 |
 | `ldoce/runons` | json | 派生词（如 relevantly adverb） |
 | `oald4/usage` | json | 用法说明 NOTE OF USAGE |
-| `idioms` | json | 习语列表 |
-| `phrasal_verbs` | json | 短语动词 |
+| `oald/idioms` | json | OALD 习语列表 |
+| `oald/phrasal-verbs` | json | OALD 短语动词 (PHR V) |
+| `idioms` | json | 习语列表（通用） |
+| `phrasal_verbs` | json | 短语动词（通用） |
 | `entry_grammar_boxes` | json | 词条级语法框 |
 
 **义项级（以 sense_number 为 key 的 JSON 对象）：**
@@ -593,6 +595,44 @@ OALD4 特有的 "NOTE OF USAGE 用法" 结构，支持嵌套层级。
 |------|------|
 | `<<l>>...<</l>>` | 高亮词汇（蓝色粗体） |
 | `<<ex>>...<</ex>>` | 例句中高亮词（斜体） |
+
+### phrasal-verbs（短语动词）
+
+OALD4 的 "PHR V 动词短语" 结构。
+
+```json
+[
+  {
+    "headword": "part with sth",
+    "senses": [
+      {
+        "definition": "give away or relinquish sth",
+        "definition_zh": "放弃或出让某物",
+        "examples": [
+          {
+            "text": "Despite his poverty, he refused to part with the family jewels.",
+            "text_zh": "他尽管贫穷，却不肯变卖家中的珠宝。"
+          },
+          {
+            "text": "He hates parting with <<ie>>(=spending)<</ie>> his money.",
+            "text_zh": "他很不喜欢花钱。"
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `headword` | 短语动词文本 |
+| `senses` | 义项数组 |
+| `senses[].definition` | 英文释义 |
+| `senses[].definition_zh` | 中文释义 |
+| `senses[].examples` | 例句数组 |
 
 ### runons（派生词）
 
