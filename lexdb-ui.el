@@ -2690,9 +2690,15 @@ ADAPTER-ID is used for crossref navigation."
          (phrasal-verbs (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrasal-verbs")))
     (when (and phrasal-verbs (> (length phrasal-verbs) 0))
       (insert "\n")
-      (insert (propertize "PHR V 动词短语" 'face 'lexdb-label-face))
-      (insert "\n")
-      (lexdb-ui--render-phrasal-verbs phrasal-verbs))))
+      (let ((pv-start (point)))
+        (insert (propertize "PHR V 动词短语" 'face 'lexdb-label-face))
+        (insert "\n")
+        (lexdb-ui--render-phrasal-verbs phrasal-verbs)
+        ;; Create overlay for background
+        (when (> (point) pv-start)
+          (let ((ov (make-overlay pv-start (point))))
+            (overlay-put ov 'face 'lexdb-grambox-background-face)
+            (overlay-put ov 'lexdb-phrasal-verbs t)))))))
 
 (defun lexdb-ui--slot-synonyms (entry adapter)
   "Slot: Render synonyms and cross-references."
