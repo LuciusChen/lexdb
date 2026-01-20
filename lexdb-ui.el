@@ -2277,13 +2277,17 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
             (let ((number (cdr (assoc 'number sense)))
                   (lexunit (cdr (assoc 'lexunit sense)))
                   (definition (cdr (assoc 'definition sense)))
+                  (definition-zh (cdr (assoc 'definition_zh sense)))
                   (labels-raw (cdr (assoc 'labels sense)))
                   (examples-raw (cdr (assoc 'examples sense))))
               ;; Convert vectors to lists
               (let ((labels (if (vectorp labels-raw) (append labels-raw nil) labels-raw))
                     (examples (if (vectorp examples-raw) (append examples-raw nil) examples-raw)))
+                ;; Translation indicator or indent
+                (if (lexdb-ui--valid-string-p definition-zh)
+                    (lexdb-ui--insert-translation-indicator definition-zh)
+                  (insert "  "))
                 ;; Sense number and lexunit
-                (insert "  ")
                 (when (and number (not (string-empty-p number)))
                   (insert (propertize number 'face 'lexdb-sense-num-face) " "))
                 (when (and lexunit (not (string-empty-p lexunit)))
@@ -2300,7 +2304,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                         (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
                 ;; Definition
                 (when definition
-                  (insert (propertize definition 'face 'lexdb-definition-face)))
+                  (lexdb-ui--insert-formatted-definition definition 'lexdb-definition-face))
                 ;; SYN label AFTER definition
                 (dolist (label labels)
                   (let ((ltype (cdr (assoc 'type label)))
@@ -2315,10 +2319,15 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                     (when (and lvalue (string= ltype "related"))
                       (insert " " (propertize lvalue 'face 'lexdb-crossref-face)))))
                 (insert "\n")
-                ;; Examples
+                ;; Examples - handle both string and {text, text_zh} formats
                 (dolist (ex examples)
-                  (when (and ex (not (string-empty-p ex)))
-                    (insert "    " (propertize ex 'face 'lexdb-example-face) "\n"))))))
+                  (let ((ex-text (if (stringp ex) ex (alist-get 'text ex)))
+                        (ex-zh (unless (stringp ex) (alist-get 'text_zh ex))))
+                    (when (lexdb-ui--valid-string-p ex-text)
+                      (unless (lexdb-ui--insert-translation-indicator ex-zh "  ")
+                        (insert "    "))
+                      (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
+                      (insert "\n")))))))
           (insert "\n"))))))
 
 (defun lexdb-ui--build-collocations-content (collocations)
@@ -2680,6 +2689,9 @@ ADAPTER-ID is used for crossref navigation."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (phrasal-verbs (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrasal-verbs")))
     (when (and phrasal-verbs (> (length phrasal-verbs) 0))
+      (insert "\n")
+      (insert (propertize "PHR V 动词短语" 'face 'lexdb-label-face))
+      (insert "\n")
       (lexdb-ui--render-phrasal-verbs phrasal-verbs))))
 
 (defun lexdb-ui--slot-synonyms (entry adapter)

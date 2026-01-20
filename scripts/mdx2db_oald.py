@@ -277,15 +277,15 @@ def parse_oald4_entry(html, headword_hint=None):
         if idioms:
             entries[0]['attributes']['oald/idioms'] = idioms
 
-        # Phrases
-        phrases = []
+        # Phrasal verbs (phrsubentry)
+        phrasal_verbs = []
         for phr_sub in oald4ec.find_all('div', class_='phrsubentry'):
             for phrase_div in phr_sub.find_all('div', class_='phrase'):
                 phrase_data = parse_oald4_phrase(phrase_div)
                 if phrase_data:
-                    phrases.append(phrase_data)
-        if phrases:
-            entries[0]['attributes']['oald/phrases'] = phrases
+                    phrasal_verbs.append(phrase_data)
+        if phrasal_verbs:
+            entries[0]['attributes']['oald/phrasal-verbs'] = phrasal_verbs
 
         # Derivatives (standalone ones at oald4ec level)
         derivatives = []
@@ -1013,29 +1013,55 @@ def parse_oald4_idiom(idiom_div):
 
 
 def parse_oald4_phrase(phrase_div):
-    """Parse a phrase element."""
-    phrase = {
-        'text': '',
-        'definition': '',
-        'definition_zh': ''
-    }
+    """Parse a phrase element (phrasal verb).
 
+    Returns a structure compatible with lexdb-ui--render-phrasal-verbs:
+    {
+        'headword': 'part with sth',
+        'senses': [{
+            'definition': '...',
+            'definition_zh': '...',
+            'examples': [{'text': '...', 'text_zh': '...'}]
+        }]
+    }
+    """
     # Phrase text
     l_elem = phrase_div.find('span', class_='l')
-    if l_elem:
-        phrase['text'] = clean_text(l_elem.get_text())
+    if not l_elem:
+        return None
 
-    # Find sense
+    headword = clean_text(l_elem.get_text())
+    if not headword:
+        return None
+
+    # Build sense
+    sense = {
+        'definition': '',
+        'definition_zh': '',
+        'examples': []
+    }
+
     se = phrase_div.find('div', class_='se')
     if se:
         df = se.find('span', class_='df')
         if df:
-            phrase['definition'] = extract_definition_with_format(df)
-            phrase['definition_zh'] = extract_zh(df)
+            sense['definition'] = extract_definition_with_format(df)
+            sense['definition_zh'] = extract_zh(df)
 
-    if phrase['text']:
-        return phrase
-    return None
+        # Extract examples
+        for eg in se.find_all('div', class_='eg', recursive=False):
+            ex_text = extract_highlighted_example(eg)
+            ex_zh = extract_zh(eg)
+            if ex_text:
+                sense['examples'].append({
+                    'text': ex_text,
+                    'text_zh': ex_zh
+                })
+
+    return {
+        'headword': headword,
+        'senses': [sense] if sense['definition'] else []
+    }
 
 
 def parse_oald4_sense(sense_elem, order=0, sense_number=None):
