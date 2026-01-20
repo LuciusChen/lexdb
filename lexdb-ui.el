@@ -640,10 +640,11 @@ Format markers:
   <<reg>>...<</reg>> - register labels (same as grammar codes)
   <<gram>>...<</gram>> - grammar labels (same as grammar codes)
   <<pr>>...<</pr>>   - pronunciations (same as entry pronunciation)
-  <<pos>>...<</pos>> - part of speech references (hot pink)"
+  <<pos>>...<</pos>> - part of speech references (hot pink)
+  <<ex>>...<</ex>>   - example words in text (highlighted like examples)"
   (when (and text (not (string-empty-p text)))
     (let ((start 0))
-      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\|pos\\)>>\\([^<]*\\)<</\\1>>" text start)
+      (while (string-match "<<\\(l\\|reg\\|gram\\|pr\\|pos\\|ex\\)>>\\([^<]*\\)<</\\1>>" text start)
         (let ((before-match (substring text start (match-beginning 0)))
               (marker-type (match-string 1 text))
               (content (match-string 2 text)))
@@ -658,6 +659,7 @@ Format markers:
                                 ("gram" 'lexdb-grammar-face)
                                 ("pr" 'lexdb-phonetic-face)
                                 ("pos" 'lexdb-pos-face)
+                                ("ex" 'lexdb-example-highlight-face)
                                 (_ default-face))))
           (setq start (match-end 0))))
       ;; Insert remaining text
@@ -2583,10 +2585,17 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                               (t nil))))
         (when usage-list
           (insert "\n")
-          (insert (propertize "NOTE OF USAGE 用法:" 'face 'lexdb-label-face))
-          (insert "\n")
-          ;; Render each top-level usage item recursively
-          (lexdb-ui--render-usage-items usage-list 0))))))
+          (let ((usage-start (point)))
+            (insert (propertize "NOTE OF USAGE 用法:" 'face 'lexdb-label-face))
+            (insert "\n")
+            ;; Render each top-level usage item recursively
+            (lexdb-ui--render-usage-items usage-list 0)
+            ;; Create overlay for background (like grammar box)
+            (when (> (point) usage-start)
+              (let ((ov (make-overlay usage-start (point))))
+                (overlay-put ov 'face 'lexdb-grambox-background-face)
+                (overlay-put ov 'lexdb-usage t)))
+            (insert "\n")))))))
 
 (defun lexdb-ui--render-usage-items (items indent-level)
   "Render list of usage ITEMS at INDENT-LEVEL."
