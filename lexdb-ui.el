@@ -40,12 +40,13 @@
     (idioms          . lexdb-ui--slot-idioms)
     (phrasal-verbs   . lexdb-ui--slot-phrasal-verbs)
     (synonyms        . lexdb-ui--slot-synonyms)
+    (runons          . lexdb-ui--slot-runons)
     (separator       . lexdb-ui--slot-separator))
   "Alist mapping slot names to rendering functions.
 Each function takes (entry adapter) and renders content at point.")
 
 (defcustom lexdb-ui-default-template
-  '(header tabs senses entry-grammar-box idioms phrasal-verbs synonyms separator)
+  '(header tabs senses entry-grammar-box idioms phrasal-verbs synonyms runons separator)
   "Default slot order for rendering entries.
 This is a list of slot names from `lexdb-ui-slot-functions'."
   :type '(repeat symbol)
@@ -2491,6 +2492,26 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 (defun lexdb-ui--slot-synonyms (entry adapter)
   "Slot: Render synonyms and cross-references."
   (lexdb-ui--render-synonyms-and-crossrefs entry adapter))
+
+(defun lexdb-ui--slot-runons (entry adapter)
+  "Slot: Render run-on entries (derived words like 'relevantly adverb')."
+  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+         (runons (lexdb-meta-get (lexdb-entry-metadata entry) ns "runons")))
+    (when (and runons (> (length runons) 0))
+      (let ((runon-list (cond ((vectorp runons) (append runons nil))
+                              ((listp runons) runons)
+                              (t nil))))
+        (when runon-list
+          (insert "\n")
+          (dolist (runon runon-list)
+            (let ((word (cdr (assoc 'word runon)))
+                  (pos (cdr (assoc 'pos runon))))
+              (when word
+                (insert (propertize "—" 'face 'lexdb-label-face))
+                (insert (propertize word 'face 'lexdb-headword-face))
+                (when (and pos (not (string-empty-p pos)))
+                  (insert " " (propertize pos 'face 'lexdb-pos-face)))
+                (insert "\n")))))))))
 
 (defun lexdb-ui--slot-separator (_entry _adapter)
   "Slot: Render entry separator line."

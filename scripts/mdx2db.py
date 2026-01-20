@@ -136,7 +136,13 @@ class LDOCEParser:
         soup = BeautifulSoup(html, HTML_PARSER)
 
         # Find all entry divs (for homographs like swing1, swing2)
-        entry_divs = soup.find_all(class_='entry')
+        # Exclude entries inside popups (at-link) - they are nested entries for Word Origin, Examples, etc.
+        entry_divs = []
+        for entry_elem in soup.find_all(class_='entry'):
+            # Skip if inside a popup (at-link)
+            if entry_elem.find_parent(class_='at-link'):
+                continue
+            entry_divs.append(entry_elem)
 
         # If no entry divs found, treat whole HTML as single entry
         if not entry_divs:
@@ -1361,6 +1367,25 @@ class LDOCEParser:
                 if ref_text and ref_link and ref_text not in cross_refs_dict:
                     cross_refs_dict[ref_text] = ref_link
 
+            # Extract run-on entries (derived words like "—relevantly adverb")
+            runons = []
+            for runon in tail.find_all(class_='runon'):
+                deriv = runon.find(class_='deriv')
+                pos = runon.find(class_='pos')
+                if deriv:
+                    deriv_text = clean_text(deriv.get_text())
+                    # Remove leading dash if present
+                    if deriv_text.startswith('—') or deriv_text.startswith('-'):
+                        deriv_text = deriv_text[1:].strip()
+                    pos_text = clean_text(pos.get_text()) if pos else ''
+                    if deriv_text:
+                        runons.append({
+                            'word': deriv_text,
+                            'pos': pos_text
+                        })
+            if runons:
+                entry['attributes']['runons'] = runons
+
         # Parse crossref sections - handle reflex + link combinations
         # Now using fragment storage for cleaner rendering
         for crossref in soup.find_all(class_='crossref'):
@@ -2349,6 +2374,12 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
 
             for entry_data in entries:
                 if entry_data.get('senses'):
+                    # Skip redirects: if parsed headword differs from MDX key, it's a redirect
+                    parsed_hw = entry_data.get('headword', '').lower().rstrip('0123456789')
+                    word_key_lower = word_key.lower()
+                    if parsed_hw and parsed_hw != word_key_lower:
+                        # This is likely a redirect (e.g., "relevantly" -> "relevant")
+                        continue
                     writer.write_entry(entry_data)
                     success += 1
         except Exception as e:
