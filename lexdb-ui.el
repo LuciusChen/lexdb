@@ -1291,12 +1291,13 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
       (when subsenses
         (let ((sub-list (if (vectorp subsenses) (append subsenses nil) subsenses)))
           (dolist (sub sub-list)
-            (let ((sub-num (cdr (assoc "number" sub)))
-                  (sub-def (cdr (assoc "definition" sub)))
-                  (sub-def-zh (cdr (assoc "definition_zh" sub)))
-                  (sub-grammar (cdr (assoc "grammar" sub)))
-                  (sub-labels (cdr (assoc "labels" sub)))
-                  (sub-examples (cdr (assoc "examples" sub))))
+            ;; JSON parsing returns symbol keys, not string keys
+            (let ((sub-num (cdr (assoc 'number sub)))
+                  (sub-def (cdr (assoc 'definition sub)))
+                  (sub-def-zh (cdr (assoc 'definition_zh sub)))
+                  (sub-grammar (cdr (assoc 'grammar sub)))
+                  (sub-labels (cdr (assoc 'labels sub)))
+                  (sub-examples (cdr (assoc 'examples sub))))
               ;; Subsense number
               (insert "  ")
               (when sub-num
@@ -1324,7 +1325,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (when sub-labels
                 (let ((labels-list (if (vectorp sub-labels) (append sub-labels nil) sub-labels)))
                   (dolist (label labels-list)
-                    (let ((lvalue (cdr (assoc "value" label))))
+                    (let ((lvalue (cdr (assoc 'value label))))
                       (when lvalue
                         (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
               ;; Definition
@@ -1335,9 +1336,9 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (when sub-examples
                 (let ((ex-list (if (vectorp sub-examples) (append sub-examples nil) sub-examples)))
                   (dolist (ex ex-list)
-                    (let ((ex-text (cdr (assoc "text" ex)))
-                          (ex-zh (cdr (assoc "text_zh" ex)))
-                          (ex-audio (cdr (assoc "audio_path" ex))))
+                    (let ((ex-text (cdr (assoc 'text ex)))
+                          (ex-zh (cdr (assoc 'text_zh ex)))
+                          (ex-audio (cdr (assoc 'audio_path ex))))
                       (when (and ex-text (not (string-empty-p ex-text)))
                         (let ((has-audio (and ex-audio (not (string-empty-p ex-audio))))
                               (has-translation (and (memq 'chinese-example caps)
