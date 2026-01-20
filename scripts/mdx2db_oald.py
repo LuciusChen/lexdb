@@ -850,8 +850,32 @@ def parse_oald4_usage(usage_div):
     return usage_data if usage_data else None
 
 
+def parse_idiom_example(eg_elem):
+    """Parse an idiom example, extracting register labels (joc, fig, etc.)."""
+    ex_text = extract_highlighted_example(eg_elem)
+    ex_zh = extract_zh(eg_elem)
+
+    if not ex_text:
+        return None
+
+    # Check for register label at start of example
+    reg_elem = eg_elem.find('span', class_='reg', recursive=False)
+    label = ''
+    if reg_elem:
+        label = clean_text(reg_elem.get_text())
+
+    return {
+        'text': ex_text,
+        'text_zh': ex_zh,
+        'label': label  # joc, fig, etc.
+    }
+
+
 def parse_oald4_idiom(idiom_div):
-    """Parse an idiom element."""
+    """Parse an idiom element.
+
+    Supports idioms with multiple subsenses (se3 elements).
+    """
     from bs4 import NavigableString
 
     idiom = {
@@ -859,7 +883,8 @@ def parse_oald4_idiom(idiom_div):
         'definition': '',
         'definition_zh': '',
         'labels': [],  # Register labels like fml, infml
-        'examples': []
+        'examples': [],
+        'senses': []  # Subsenses for idioms with multiple meanings
     }
 
     # Idiom text
@@ -867,88 +892,116 @@ def parse_oald4_idiom(idiom_div):
     if l_elem:
         idiom['text'] = clean_text(l_elem.get_text())
 
-    # Find sense (se or se3)
-    se = idiom_div.find('div', class_=['se', 'se3'])
-    if se:
-        # Extract register labels (fml, infml, etc.) - they are outside df
-        for reg in se.find_all('span', class_='reg', recursive=False):
-            reg_text = clean_text(reg.get_text())
-            if reg_text:
-                idiom['labels'].append({'type': 'register', 'value': reg_text})
+    # Check for multiple se3 subsenses first
+    se3_list = idiom_div.find_all('div', class_='se3', recursive=False)
+    if not se3_list:
+        # Try finding se3 inside se
+        se = idiom_div.find('div', class_='se')
+        if se:
+            se3_list = se.find_all('div', class_='se3', recursive=False)
 
-        # First try df element
-        df = se.find(['span', 'div'], class_='df')
-        if df:
-            idiom['definition'] = extract_definition_with_format(df)
-            idiom['definition_zh'] = extract_zh(df)
-        else:
-            # Check for xrg (cross-reference) first
-            xrg = se.find('span', class_='xrg')
-            if xrg:
-                idiom['definition'] = extract_definition_with_format(xrg)
-                idiom['definition_zh'] = extract_zh(xrg)
-                # Extract cross-reference target from <a class="xr"> link
-                xr_link = xrg.find('a', class_='xr')
-                if xr_link:
-                    href = xr_link.get('href', '')
-                    link_text = xr_link.get_text().strip()
-                    raw_target = href.replace('entry://', '') if href.startswith('entry://') else link_text
-                    # Normalize target_word: remove superscripts, numbers, spaces
-                    # "better³ 3" -> "better"
-                    target_word = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹0-9\s]+', '', raw_target).lower()
-                    idiom['crossref'] = {
-                        'is_crossref': True,
-                        'prefix': '→',
-                        'clickable': link_text,
-                        'suffix': None,
-                        'target_word': target_word,
-                        'target_sense': None
-                    }
+    if len(se3_list) > 1:
+        # Multiple subsenses - parse each one
+        for idx, se3 in enumerate(se3_list):
+            subsense = {
+                'number': str(idx + 1),
+                'definition': '',
+                'definition_zh': '',
+                'labels': [],
+                'examples': []
+            }
+
+            # Definition
+            df = se3.find('span', class_='df')
+            if df:
+                subsense['definition'] = extract_definition_with_format(df)
+                subsense['definition_zh'] = extract_zh(df)
+
+            # Examples with register labels
+            for eg in se3.find_all('div', class_='eg', recursive=False):
+                ex_data = parse_idiom_example(eg)
+                if ex_data:
+                    subsense['examples'].append(ex_data)
+
+            idiom['senses'].append(subsense)
+    else:
+        # Single sense or no se3 - use original logic
+        se = idiom_div.find('div', class_=['se', 'se3'])
+        if se:
+            # Extract register labels (fml, infml, etc.) - they are outside df
+            for reg in se.find_all('span', class_='reg', recursive=False):
+                reg_text = clean_text(reg.get_text())
+                if reg_text:
+                    idiom['labels'].append({'type': 'register', 'value': reg_text})
+
+            # First try df element
+            df = se.find(['span', 'div'], class_='df')
+            if df:
+                idiom['definition'] = extract_definition_with_format(df)
+                idiom['definition_zh'] = extract_zh(df)
             else:
-                # No df or xrg - definition might be directly in se
-                # Extract text excluding nested elements like eg
-                def_text_parts = []
-                def_zh_parts = []
+                # Check for xrg (cross-reference) first
+                xrg = se.find('span', class_='xrg')
+                if xrg:
+                    idiom['definition'] = extract_definition_with_format(xrg)
+                    idiom['definition_zh'] = extract_zh(xrg)
+                    # Extract cross-reference target from <a class="xr"> link
+                    xr_link = xrg.find('a', class_='xr')
+                    if xr_link:
+                        href = xr_link.get('href', '')
+                        link_text = xr_link.get_text().strip()
+                        raw_target = href.replace('entry://', '') if href.startswith('entry://') else link_text
+                        # Normalize target_word: remove superscripts, numbers, spaces
+                        # "better³ 3" -> "better"
+                        target_word = re.sub(r'[⁰¹²³⁴⁵⁶⁷⁸⁹0-9\s]+', '', raw_target).lower()
+                        idiom['crossref'] = {
+                            'is_crossref': True,
+                            'prefix': '→',
+                            'clickable': link_text,
+                            'suffix': None,
+                            'target_word': target_word,
+                            'target_sense': None
+                        }
+                else:
+                    # No df or xrg - definition might be directly in se
+                    # Extract text excluding nested elements like eg
+                    def_text_parts = []
+                    def_zh_parts = []
 
-                for child in se.children:
-                    if isinstance(child, NavigableString):
-                        text = str(child).strip()
-                        if text:
-                            def_text_parts.append(text)
-                    elif child.name == 'zh':
-                        zh_text = clean_text(child.get_text())
-                        def_zh_parts.append(zh_text)
-                    elif child.name == 'div' and 'eg' in child.get('class', []):
-                        # Skip example divs
-                        continue
-                    elif child.name == 'span' and 'xrg' in child.get('class', []):
-                        # Skip cross-references (already handled above)
-                        continue
-                    else:
-                        # Get text from other elements (like span with reg)
-                        text = extract_text_without_zh(child)
-                        if text:
-                            def_text_parts.append(text)
+                    for child in se.children:
+                        if isinstance(child, NavigableString):
+                            text = str(child).strip()
+                            if text:
+                                def_text_parts.append(text)
+                        elif child.name == 'zh':
+                            zh_text = clean_text(child.get_text())
+                            def_zh_parts.append(zh_text)
+                        elif child.name == 'div' and 'eg' in child.get('class', []):
+                            # Skip example divs
+                            continue
+                        elif child.name == 'span' and 'xrg' in child.get('class', []):
+                            # Skip cross-references (already handled above)
+                            continue
+                        else:
+                            # Get text from other elements (like span with reg)
+                            text = extract_text_without_zh(child)
+                            if text:
+                                def_text_parts.append(text)
 
-                if def_text_parts:
-                    idiom['definition'] = ' '.join(def_text_parts)
-                if def_zh_parts:
-                    # Use the last/main Chinese definition (skip parenthetical ones)
-                    idiom['definition_zh'] = def_zh_parts[-1] if def_zh_parts else ''
+                    if def_text_parts:
+                        idiom['definition'] = ' '.join(def_text_parts)
+                    if def_zh_parts:
+                        # Use the last/main Chinese definition (skip parenthetical ones)
+                        idiom['definition_zh'] = def_zh_parts[-1] if def_zh_parts else ''
 
-        # Examples
-        ex_order = 0
-        for eg in se.find_all('div', class_='eg'):
-            # Pass entire eg div to include <ie> siblings
-            ex_text = extract_highlighted_example(eg)
-            ex_zh = extract_zh(eg)
-            if ex_text:
-                idiom['examples'].append({
-                    'text': ex_text,
-                    'text_zh': ex_zh,
-                    'sort_order': ex_order
-                })
-                ex_order += 1
+            # Examples
+            ex_order = 0
+            for eg in se.find_all('div', class_='eg'):
+                ex_data = parse_idiom_example(eg)
+                if ex_data:
+                    ex_data['sort_order'] = ex_order
+                    idiom['examples'].append(ex_data)
+                    ex_order += 1
 
     if idiom['text']:
         # Check if definition is a cross-reference (→word.)

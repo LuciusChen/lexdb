@@ -2492,90 +2492,140 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                   (idiom-def (alist-get 'definition idiom))
                   (idiom-def-zh (alist-get 'definition_zh idiom))
                   (idiom-examples (alist-get 'examples idiom))
+                  (idiom-senses (alist-get 'senses idiom))
                   (jump-adapter adapter-id))
-              ;; Translation indicator at start of line
-              (if (and idiom-def-zh (stringp idiom-def-zh) (not (string-empty-p idiom-def-zh))
-                       lexdb-ui-translation-indicator)
-                  (insert (propertize lexdb-ui-translation-indicator
-                                      'face 'lexdb-translation-indicator-face
-                                      'lexdb-translation idiom-def-zh
-                                      'help-echo "Press t to peek translation")
-                          " ")
-                (insert "  "))
-              ;; Idiom text (bold)
+              ;; Idiom text (bold) - no translation indicator at this level if has subsenses
+              (insert "  ")
               (when idiom-text
                 (insert (propertize idiom-text 'face '(:inherit lexdb-phrase-face :weight bold))))
               (insert "\n")
-              ;; Second line: labels and definition (only if there's content)
-              (let* ((idiom-labels (alist-get 'labels idiom))
-                     (label-list (cond ((vectorp idiom-labels) (append idiom-labels nil))
-                                       ((listp idiom-labels) idiom-labels)
-                                       (t nil)))
-                     (has-valid-labels (and label-list
-                                            (cl-some (lambda (l) (alist-get 'value l)) label-list)))
-                     ;; Only show definition if it contains English letters
-                     (idiom-def-valid (and idiom-def (stringp idiom-def)
-                                           (not (string-empty-p idiom-def))
-                                           (string-match-p "[a-zA-Z]" idiom-def))))
-                (when (or has-valid-labels idiom-def-valid)
-                  (insert "  ")
-                  ;; Labels (fml, infml, etc.) before definition
-                  (dolist (label label-list)
-                    (let ((lvalue (alist-get 'value label)))
-                      (when lvalue
-                        (insert (propertize lvalue 'face 'lexdb-grammar-face) " "))))
-                  ;; Definition - check for pre-parsed crossref first, then fallback to regex
-                  (when idiom-def-valid
-                    (let ((crossref (alist-get 'crossref idiom)))
-                      (if crossref
-                          ;; Pre-parsed crossref from database (new format)
-                          (let* ((prefix (alist-get 'prefix crossref))
-                                 (clickable (alist-get 'clickable crossref))
-                                 (target-word (alist-get 'target_word crossref))
-                                 (search-word (lexdb-ui--normalize-search-word
-                                               (or target-word clickable))))
-                            (when prefix
-                              (insert (propertize prefix 'face 'lexdb-crossref-face)))
-                            (insert-text-button clickable
-                                                'face 'lexdb-crossref-face
-                                                'action (lambda (_)
-                                                          (lexdb-search-and-goto-sense
-                                                           search-word nil jump-adapter))
-                                                'help-echo (format "Look up: %s [%s]"
-                                                                   search-word jump-adapter)))
-                        ;; Fallback: regex detection for legacy data (→word.)
-                        (if (string-match "^→\\([^.]+\\)\\.$" idiom-def)
-                            (let* ((raw-target (match-string 1 idiom-def))
-                                   (search-word (lexdb-ui--normalize-search-word raw-target)))
-                              (insert (propertize "→" 'face 'lexdb-crossref-face))
-                              (insert-text-button raw-target
-                                                  'face 'lexdb-crossref-face
-                                                  'action (lambda (_)
-                                                            (lexdb-search-and-goto-sense
-                                                             search-word nil jump-adapter))
-                                                  'help-echo (format "Look up: %s [%s]" search-word jump-adapter)))
-                          ;; Regular definition with format markers
-                          (lexdb-ui--insert-formatted-definition idiom-def 'lexdb-definition-face)))))
-                  (insert "\n")))
-              (when idiom-examples
-                (let ((ex-list (cond ((vectorp idiom-examples) (append idiom-examples nil))
-                                     ((listp idiom-examples) idiom-examples)
-                                     (t nil))))
-                  (dolist (ex ex-list)
-                    (let ((ex-text (alist-get 'text ex))
-                          (ex-zh (alist-get 'text_zh ex)))
-                      (when (and ex-text (stringp ex-text) (not (string-empty-p ex-text)))
-                        ;; Indicator for idiom example translation
-                        (if (and ex-zh (stringp ex-zh) (not (string-empty-p ex-zh))
-                                 lexdb-ui-translation-indicator)
-                            (insert "  " (propertize lexdb-ui-translation-indicator
-                                                     'face 'lexdb-translation-indicator-face
-                                                     'lexdb-translation ex-zh
-                                                     'help-echo "Press t to peek translation")
-                                    " ")
-                          (insert "    "))
-                        (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-                        (insert "\n")))))))))))))
+
+              ;; Check if idiom has subsenses
+              (let ((sense-list (cond ((vectorp idiom-senses) (append idiom-senses nil))
+                                      ((listp idiom-senses) idiom-senses)
+                                      (t nil))))
+                (if sense-list
+                    ;; Multiple subsenses - render each with number
+                    (dolist (subsense sense-list)
+                      (let ((sub-num (alist-get 'number subsense))
+                            (sub-def (alist-get 'definition subsense))
+                            (sub-def-zh (alist-get 'definition_zh subsense))
+                            (sub-examples (alist-get 'examples subsense)))
+                        ;; Subsense number and definition
+                        (when sub-def
+                          (if (and sub-def-zh (stringp sub-def-zh) (not (string-empty-p sub-def-zh))
+                                   lexdb-ui-translation-indicator)
+                              (insert (propertize lexdb-ui-translation-indicator
+                                                  'face 'lexdb-translation-indicator-face
+                                                  'lexdb-translation sub-def-zh
+                                                  'help-echo "Press t to peek translation")
+                                      " ")
+                            (insert "  "))
+                          (insert (propertize (concat sub-num ". ") 'face 'lexdb-sense-number-face))
+                          (lexdb-ui--insert-formatted-definition sub-def 'lexdb-definition-face)
+                          (insert "\n"))
+                        ;; Subsense examples with labels
+                        (when sub-examples
+                          (let ((ex-list (cond ((vectorp sub-examples) (append sub-examples nil))
+                                               ((listp sub-examples) sub-examples)
+                                               (t nil))))
+                            (dolist (ex ex-list)
+                              (let ((ex-text (alist-get 'text ex))
+                                    (ex-zh (alist-get 'text_zh ex))
+                                    (ex-label (alist-get 'label ex)))
+                                (when (and ex-text (stringp ex-text) (not (string-empty-p ex-text)))
+                                  ;; Translation indicator
+                                  (if (and ex-zh (stringp ex-zh) (not (string-empty-p ex-zh))
+                                           lexdb-ui-translation-indicator)
+                                      (insert "  " (propertize lexdb-ui-translation-indicator
+                                                               'face 'lexdb-translation-indicator-face
+                                                               'lexdb-translation ex-zh
+                                                               'help-echo "Press t to peek translation")
+                                              " ")
+                                    (insert "    "))
+                                  ;; Register label (joc, fig, etc.)
+                                  (when (and ex-label (stringp ex-label) (not (string-empty-p ex-label)))
+                                    (insert (propertize ex-label 'face 'lexdb-grammar-face) " "))
+                                  (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
+                                  (insert "\n"))))))))
+                  ;; Single definition idiom - use original logic
+                  (let* ((idiom-labels (alist-get 'labels idiom))
+                         (label-list (cond ((vectorp idiom-labels) (append idiom-labels nil))
+                                           ((listp idiom-labels) idiom-labels)
+                                           (t nil)))
+                         (has-valid-labels (and label-list
+                                                (cl-some (lambda (l) (alist-get 'value l)) label-list)))
+                         (idiom-def-valid (and idiom-def (stringp idiom-def)
+                                               (not (string-empty-p idiom-def))
+                                               (string-match-p "[a-zA-Z]" idiom-def))))
+                    ;; Translation indicator for single definition
+                    (when (or has-valid-labels idiom-def-valid)
+                      (if (and idiom-def-zh (stringp idiom-def-zh) (not (string-empty-p idiom-def-zh))
+                               lexdb-ui-translation-indicator)
+                          (insert (propertize lexdb-ui-translation-indicator
+                                              'face 'lexdb-translation-indicator-face
+                                              'lexdb-translation idiom-def-zh
+                                              'help-echo "Press t to peek translation")
+                                  " ")
+                        (insert "  "))
+                      ;; Labels (fml, infml, etc.)
+                      (dolist (label label-list)
+                        (let ((lvalue (alist-get 'value label)))
+                          (when lvalue
+                            (insert (propertize lvalue 'face 'lexdb-grammar-face) " "))))
+                      ;; Definition
+                      (when idiom-def-valid
+                        (let ((crossref (alist-get 'crossref idiom)))
+                          (if crossref
+                              (let* ((prefix (alist-get 'prefix crossref))
+                                     (clickable (alist-get 'clickable crossref))
+                                     (target-word (alist-get 'target_word crossref))
+                                     (search-word (lexdb-ui--normalize-search-word
+                                                   (or target-word clickable))))
+                                (when prefix
+                                  (insert (propertize prefix 'face 'lexdb-crossref-face)))
+                                (insert-text-button clickable
+                                                    'face 'lexdb-crossref-face
+                                                    'action (lambda (_)
+                                                              (lexdb-search-and-goto-sense
+                                                               search-word nil jump-adapter))
+                                                    'help-echo (format "Look up: %s [%s]"
+                                                                       search-word jump-adapter)))
+                            (if (string-match "^→\\([^.]+\\)\\.$" idiom-def)
+                                (let* ((raw-target (match-string 1 idiom-def))
+                                       (search-word (lexdb-ui--normalize-search-word raw-target)))
+                                  (insert (propertize "→" 'face 'lexdb-crossref-face))
+                                  (insert-text-button raw-target
+                                                      'face 'lexdb-crossref-face
+                                                      'action (lambda (_)
+                                                                (lexdb-search-and-goto-sense
+                                                                 search-word nil jump-adapter))
+                                                      'help-echo (format "Look up: %s [%s]" search-word jump-adapter)))
+                              (lexdb-ui--insert-formatted-definition idiom-def 'lexdb-definition-face)))))
+                      (insert "\n")))
+                  ;; Examples for single definition idiom
+                  (when idiom-examples
+                    (let ((ex-list (cond ((vectorp idiom-examples) (append idiom-examples nil))
+                                         ((listp idiom-examples) idiom-examples)
+                                         (t nil))))
+                      (dolist (ex ex-list)
+                        (let ((ex-text (alist-get 'text ex))
+                              (ex-zh (alist-get 'text_zh ex))
+                              (ex-label (alist-get 'label ex)))
+                          (when (and ex-text (stringp ex-text) (not (string-empty-p ex-text)))
+                            (if (and ex-zh (stringp ex-zh) (not (string-empty-p ex-zh))
+                                     lexdb-ui-translation-indicator)
+                                (insert "  " (propertize lexdb-ui-translation-indicator
+                                                         'face 'lexdb-translation-indicator-face
+                                                         'lexdb-translation ex-zh
+                                                         'help-echo "Press t to peek translation")
+                                        " ")
+                              (insert "    "))
+                            ;; Register label (joc, fig, etc.)
+                            (when (and ex-label (stringp ex-label) (not (string-empty-p ex-label)))
+                              (insert (propertize ex-label 'face 'lexdb-grammar-face) " "))
+                            (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
+                            (insert "\n")))))))))))))
 
 (defun lexdb-ui--slot-usage (entry adapter)
   "Slot: Render usage notes section."
