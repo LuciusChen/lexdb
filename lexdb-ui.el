@@ -1175,14 +1175,10 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                                 gps))))
             (when codes
               (insert (propertize (string-join codes " ") 'face 'lexdb-grammar-face) " "))))))
-    ;; Grammar label (for non-OALD adapters)
-    (when (memq 'grammar caps)
-      (when-let ((gram (lexdb-sense-grammar sense)))
-        (when (lexdb--non-empty-string-p gram)
-          (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
-    ;; Lexunit prefix (e.g., "all round British English, all around American English")
+    ;; Lexunit prefix (e.g., "particulars", "all round British English")
     ;; Read from entry-level sense_lexunit_prefixes indexed by sense number
     ;; Now structured: [{'type': 'lexunit'/'geo'/'lexvar', 'text': '...'}, ...]
+    ;; Rendered BEFORE grammar label so "particulars [plural]" not "[plural] particulars"
     (when entry
       (let* ((sense-prefixes (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_lexunit_prefixes"))
              (lexunit-prefix (when sense-prefixes
@@ -1214,6 +1210,11 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                     (insert (propertize ptext 'face 'lexdb-lexunit-face))))
                   (setq first-part nil))))
             (when parts (insert " "))))))
+    ;; Grammar label (for non-OALD adapters) - after lexunit prefix
+    (when (memq 'grammar caps)
+      (when-let ((gram (lexdb-sense-grammar sense)))
+        (when (lexdb--non-empty-string-p gram)
+          (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
     ;; Register labels (e.g., "formal", "informal") - after lexunit, before definition
     ;; Also geographic/regional labels (e.g., "especially British English")
     (let ((labels (lexdb-sense-labels sense)))
