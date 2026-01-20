@@ -1076,17 +1076,17 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
             if cf_text:
                 sense['labels'].append({'type': 'cf', 'value': cf_text})
 
-    # === Subsenses (se3) - only if this sense has its own definition ===
-    if sense['definition']:
-        sub_order = 0
-        for se3 in sense_elem.find_all('div', class_='se3', recursive=False):
-            subsense = parse_oald4_subsense(se3, sub_order)
-            if subsense:
-                sense['subsenses'].append(subsense)
-                sub_order += 1
+    # === Subsenses (se3) ===
+    # Parse subsenses even if parent sense has no main definition (e.g., elder sense 1)
+    sub_order = 0
+    for se3 in sense_elem.find_all('div', class_='se3', recursive=False):
+        subsense = parse_oald4_subsense(se3, sub_order)
+        if subsense:
+            sense['subsenses'].append(subsense)
+            sub_order += 1
 
-    # Only return if has definition or examples
-    if sense['definition'] or sense['examples']:
+    # Return if has definition, examples, or subsenses
+    if sense['definition'] or sense['examples'] or sense['subsenses']:
         return sense
 
     return None
