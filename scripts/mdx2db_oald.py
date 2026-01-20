@@ -122,6 +122,12 @@ def extract_definition_with_format(element):
                 text = f'[{text}]'
             vps.replace_with(f' <<gram>>{text}<</gram>> ')
 
+    # Format inline grammar references (like "n" in definitions)
+    for gr in elem_copy.find_all('span', class_='gr'):
+        text = clean_text(gr.get_text())
+        if text:
+            gr.replace_with(f'<<gram>>{text}<</gram>>')
+
     return clean_text(elem_copy.get_text())
 
 

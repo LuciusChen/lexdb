@@ -1291,12 +1291,23 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
           (dolist (sub sub-list)
             (let ((sub-num (cdr (assoc 'number sub)))
                   (sub-def (cdr (assoc 'definition sub)))
+                  (sub-grammar (cdr (assoc 'grammar sub)))
                   (sub-labels (cdr (assoc 'labels sub)))
                   (sub-examples (cdr (assoc 'examples sub))))
-              ;; Subsense number and labels
+              ;; Subsense number
               (insert "  ")
               (when sub-num
                 (insert (propertize sub-num 'face 'lexdb-sense-num-face) " "))
+              ;; Grammar (e.g., [attrib], [pred])
+              (when sub-grammar
+                (let ((gram-list (cond ((vectorp sub-grammar) (append sub-grammar nil))
+                                       ((listp sub-grammar) sub-grammar)
+                                       ((stringp sub-grammar) (list sub-grammar))
+                                       (t nil))))
+                  (dolist (gram gram-list)
+                    (when (and gram (not (string-empty-p gram)))
+                      (insert (propertize (if (string-match-p "^\\[" gram) gram (format "[%s]" gram))
+                                          'face 'lexdb-grammar-face) " ")))))
               ;; Labels (register, etc.)
               (when sub-labels
                 (let ((labels-list (if (vectorp sub-labels) (append sub-labels nil) sub-labels)))
