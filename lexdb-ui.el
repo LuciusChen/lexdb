@@ -1072,48 +1072,52 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     (when has-audio (insert "\n"))))
 
 (defun lexdb-ui--render-inflections (entry adapter)
-  "Render inflections (past tense, plural, etc.) for ENTRY."
+  "Render inflections (past tense, plural, comparative/superlative, etc.) for ENTRY."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (adapter-id (lexdb-adapter-id adapter))
          (meta (lexdb-entry-metadata entry))
          (infl-text (lexdb-meta-get meta ns "inflections"))
          (relations (lexdb-entry-relations entry))
          (inflections (seq-filter (lambda (r) (eq (lexdb-relation-type r) 'inflection)) relations)))
-    ;; Display full inflection text if available
+    ;; Display full inflection text if available (may contain format markers)
     (when (lexdb--non-empty-string-p infl-text)
       (insert " ")
-      ;; Make inflection words clickable within the text
-      (let ((text (concat "(" infl-text ")"))
-            (start 0))
-        ;; Try to make each inflection word clickable
-        (dolist (infl inflections)
-          (let* ((target (lexdb-relation-target infl))
-                 (raw-link (lexdb-relation-target-link infl))
-                 (link (when raw-link
-                         (if (string-match "\\`\\([^#]+\\)" raw-link)
-                             (match-string 1 raw-link)
-                           raw-link)))
-                 ;; Normalize search word for lookup
-                 (search-word (lexdb-ui--normalize-search-word (or link target)))
-                 (pos (string-match (regexp-quote target) text start))
-                 ;; Capture adapter-id for closure
-                 (jump-adapter adapter-id))
-            (when pos
-              ;; Insert text before the match
-              (when (> pos start)
-                (insert (propertize (substring text start pos) 'face 'lexdb-inflection-face)))
-              ;; Insert clickable word - use intra-dictionary jump
-              (if search-word
-                  (insert-text-button target
-                                      'face 'lexdb-inflection-link-face
-                                      'action (lambda (_)
-                                                (lexdb-search-and-goto-sense search-word nil jump-adapter))
-                                      'help-echo (format "Look up: %s [%s]" search-word jump-adapter))
-                (insert (propertize target 'face 'lexdb-inflection-face)))
-              (setq start (+ pos (length target))))))
-        ;; Insert remaining text
-        (when (< start (length text))
-          (insert (propertize (substring text start) 'face 'lexdb-inflection-face)))))))
+      ;; Check if text contains format markers
+      (if (string-match-p "<<[a-z]+>>" infl-text)
+          ;; Use formatted definition renderer for markers like <<l>>, <<pr>>
+          (lexdb-ui--insert-formatted-definition infl-text 'lexdb-inflection-face)
+        ;; Legacy: make inflection words clickable within the text
+        (let ((text (concat "(" infl-text ")"))
+              (start 0))
+          ;; Try to make each inflection word clickable
+          (dolist (infl inflections)
+            (let* ((target (lexdb-relation-target infl))
+                   (raw-link (lexdb-relation-target-link infl))
+                   (link (when raw-link
+                           (if (string-match "\\`\\([^#]+\\)" raw-link)
+                               (match-string 1 raw-link)
+                             raw-link)))
+                   ;; Normalize search word for lookup
+                   (search-word (lexdb-ui--normalize-search-word (or link target)))
+                   (pos (string-match (regexp-quote target) text start))
+                   ;; Capture adapter-id for closure
+                   (jump-adapter adapter-id))
+              (when pos
+                ;; Insert text before the match
+                (when (> pos start)
+                  (insert (propertize (substring text start pos) 'face 'lexdb-inflection-face)))
+                ;; Insert clickable word - use intra-dictionary jump
+                (if search-word
+                    (insert-text-button target
+                                        'face 'lexdb-inflection-link-face
+                                        'action (lambda (_)
+                                                  (lexdb-search-and-goto-sense search-word nil jump-adapter))
+                                        'help-echo (format "Look up: %s [%s]" search-word jump-adapter))
+                  (insert (propertize target 'face 'lexdb-inflection-face)))
+                (setq start (+ pos (length target))))))
+          ;; Insert remaining text
+          (when (< start (length text))
+            (insert (propertize (substring text start) 'face 'lexdb-inflection-face))))))))
 
 (defun lexdb-ui--render-sense (sense adapter &optional entry)
   "Render a single SENSE using ADAPTER.
@@ -1247,6 +1251,14 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (insert " " (propertize (upcase (symbol-name ltype)) 'face 'lexdb-synonym-face)
                       " " (propertize lvalue 'face 'lexdb-synonym-face)))))))
     (insert "\n")
+    ;; Cross-references (Cf) on separate line
+    (let ((labels (lexdb-sense-labels sense)))
+      (when labels
+        (dolist (label labels)
+          (let ((ltype (lexdb-label-type label))
+                (lvalue (lexdb-label-value label)))
+            (when (and lvalue (eq ltype 'cf))
+              (insert "  " (propertize lvalue 'face 'lexdb-grammar-face) "\n"))))))
 
     ;; Subsenses (a, b, c)
     (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))

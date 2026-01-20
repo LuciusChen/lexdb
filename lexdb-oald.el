@@ -167,33 +167,48 @@
                         "SELECT id, sense_number, signpost, plural, definition, definition_zh, sort_order
                          FROM senses WHERE entry_id = ? ORDER BY sort_order"
                         (list id)))
-           (senses (mapcar (lambda (sr) (lexdb-oald--row-to-sense sr db)) sense-rows))
            (prons (lexdb-oald--build-pronunciations id db))
            (label-rows (sqlite-select db
                         "SELECT label_type, label_value FROM labels WHERE entry_id = ? ORDER BY sort_order"
                         (list id)))
-           (metadata nil))
+           (metadata nil)
+           (subsenses-map nil))  ;; Will hold subsenses by sense number
       ;; Add pos from labels
       (dolist (label label-rows)
         (pcase-let ((`(,ltype ,lvalue) label))
           (when (and (equal ltype "pos") (not (assq 'oald/pos metadata)))
             (push (cons 'oald/pos lvalue) metadata))))
-      ;; Fetch entry attributes (idioms, derivatives, etc.)
+      ;; Fetch entry attributes (idioms, derivatives, subsenses, etc.)
       (let ((attr-rows (sqlite-select db
                         "SELECT attr_key, attr_value, attr_type FROM entry_attributes WHERE entry_id = ?"
                         (list id))))
         (dolist (attr attr-rows)
           (pcase-let ((`(,key ,value ,type) attr))
             (when (lexdb--non-empty-string-p value)
-              (push (cons (intern key)
-                          (if (equal type "json_compressed")
-                              (lexdb-oald--decompress-json value)
-                            value))
-                    metadata)))))
-      (lexdb-entry-create
-       :id id :headword word
-       :headword-display (when (lexdb--non-empty-string-p hyph) hyph)
-       :senses senses :pronunciations prons :metadata metadata))))
+              (let ((parsed-value (if (equal type "json_compressed")
+                                      (lexdb-oald--decompress-json value)
+                                    value)))
+                ;; Extract subsenses map for sense-level distribution
+                (if (equal key "oald/subsenses")
+                    (setq subsenses-map parsed-value)
+                  (push (cons (intern key) parsed-value) metadata)))))))
+      ;; Convert sense rows, attaching subsenses from map
+      (let ((senses (mapcar (lambda (sr)
+                              (let* ((sense (lexdb-oald--row-to-sense sr db))
+                                     (sense-num (lexdb-sense-number sense))
+                                     (sense-subsenses (when (and subsenses-map sense-num)
+                                                        (cdr (assoc sense-num subsenses-map #'string=)))))
+                                ;; Attach subsenses to sense metadata if present
+                                (when sense-subsenses
+                                  (let ((meta (lexdb-sense-metadata sense)))
+                                    (setf (lexdb-sense-metadata sense)
+                                          (cons (cons 'oald/subsenses sense-subsenses) meta))))
+                                sense))
+                            sense-rows)))
+        (lexdb-entry-create
+         :id id :headword word
+         :headword-display (when (lexdb--non-empty-string-p hyph) hyph)
+         :senses senses :pronunciations prons :metadata metadata)))))
 
 ;;;; ============================================================
 ;;;; Adapter Functions

@@ -623,9 +623,10 @@ def _parse_mainentry(main_entry, headword_hint=None):
                 'audio_path': ''
             })
 
-    # === Verb forms (pt, pp) ===
+    # === Verb forms (pt, pp) and adjective forms (-er, -est) ===
     sg = main_entry.find('div', class_='sg')
     if sg:
+        # Verb forms: <span class="gr">pt</span> <span class="bd">-ed</span>
         gr_elems = sg.find_all('span', class_='gr')
         verb_forms = []
         for gr in gr_elems:
@@ -637,6 +638,42 @@ def _parse_mainentry(main_entry, headword_hint=None):
                     verb_forms.append({'type': gr_text.strip(), 'form': form_text})
         if verb_forms:
             entry['attributes']['oald/verb_forms'] = verb_forms
+
+        # Adjective comparative/superlative forms:
+        # (<span class="bd">-nger </span><span class="pr">...</span><span class="bd">-ngest</span><span class="pr">...</span>)
+        # These are direct bd elements not preceded by gr
+        from bs4 import NavigableString
+        inflection_parts = []
+        posg = sg.find('div', class_='posg')
+        # Look for content after posg that forms inflection pattern
+        if posg:
+            started = False
+            for child in sg.children:
+                if child == posg:
+                    started = True
+                    continue
+                if not started:
+                    continue
+                # Stop when we hit se2 or other sense elements
+                if hasattr(child, 'name') and child.name == 'div':
+                    break
+                if isinstance(child, NavigableString):
+                    text = str(child)
+                    if text.strip():
+                        inflection_parts.append(text)
+                elif hasattr(child, 'name'):
+                    classes = child.get('class', [])
+                    if 'bd' in classes:
+                        # Mark with <<l>> for blue variant face
+                        inflection_parts.append('<<l>>' + child.get_text() + '<</l>>')
+                    elif 'pr' in classes:
+                        # Mark pronunciation with <<pr>>
+                        inflection_parts.append('<<pr>>' + child.get_text() + '<</pr>>')
+            if inflection_parts:
+                inflection_text = ''.join(inflection_parts).strip()
+                inflection_text = re.sub(r'\s+', ' ', inflection_text)
+                if inflection_text and '<<l>>' in inflection_text:
+                    entry['attributes']['oald/inflections'] = inflection_text
 
     # === Senses from mainentry ===
     sense_order = 0
@@ -651,19 +688,38 @@ def _parse_mainentry(main_entry, headword_hint=None):
                 sense_order += 1
                 sense_num += 1
             else:
-                # se2 has no direct content, process its se3 children
-                for se3 in se2.find_all('div', class_='se3', recursive=False):
-                    subsense_data = parse_oald4_subsense(se3, sense_order)
-                    if subsense_data:
+                # se2 has no direct definition, but may have reg label and se3 children
+                # e.g., <se2><span class="reg">becoming dated</span><se3>...</se3><se3>...</se3></se2>
+                se3_list = se2.find_all('div', class_='se3', recursive=False)
+                if se3_list:
+                    # Extract parent register label if present
+                    parent_labels = []
+                    for reg in se2.find_all('span', class_='reg', recursive=False):
+                        reg_text = clean_text(reg.get_text())
+                        if reg_text:
+                            parent_labels.append({'type': 'register', 'value': reg_text})
+
+                    # Process se3 children as subsenses with letter numbering
+                    subsenses = []
+                    sub_letter = ord('a')
+                    for se3 in se3_list:
+                        subsense_data = parse_oald4_subsense(se3, len(subsenses))
+                        if subsense_data:
+                            subsense_data['number'] = chr(sub_letter)
+                            subsenses.append(subsense_data)
+                            sub_letter += 1
+
+                    if subsenses:
+                        # Create parent sense with label and subsenses
                         entry['senses'].append({
                             'number': str(sense_num),
-                            'signpost': subsense_data.get('signpost', ''),
-                            'definition': subsense_data.get('definition', ''),
-                            'definition_zh': subsense_data.get('definition_zh', ''),
-                            'grammar': subsense_data.get('grammar', []),
-                            'labels': [],
-                            'examples': subsense_data.get('examples', []),
-                            'subsenses': [],
+                            'signpost': '',
+                            'definition': '',
+                            'definition_zh': '',
+                            'grammar': [],
+                            'labels': parent_labels,
+                            'examples': [],
+                            'subsenses': subsenses,
                             'sort_order': sense_order
                         })
                         sense_order += 1
@@ -981,6 +1037,18 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
             })
             ex_order += 1
 
+    # === Cross-references (cf) ===
+    # Structure: <div class="cf">Cf <zh>参看</zh> <a class="xr" href="entry://old">old</a>2.</div>
+    for cf in sense_elem.find_all('div', class_='cf', recursive=False):
+        # Skip if inside a nested se3
+        parent_se3 = cf.find_parent('div', class_='se3')
+        if parent_se3 and parent_se3 != sense_elem:
+            continue
+        # Extract cf text without Chinese
+        cf_text = extract_text_without_zh(cf)
+        if cf_text:
+            sense['labels'].append({'type': 'cf', 'value': cf_text})
+
     # === Subsenses (se3) - only if this sense has its own definition ===
     if sense['definition']:
         sub_order = 0
@@ -1098,9 +1166,12 @@ def insert_entry(conn, dict_id, entry):
                   pron.get('audio_path', ''), i))
 
     # Insert senses
+    subsenses_data = {}  # sense_number -> subsenses for storage (like LDOCE)
     for sense in entry.get('senses', []):
-        # Skip senses without definition or examples
-        if not sense.get('definition') and not sense.get('examples'):
+        # Skip senses without definition, examples, labels, or subsenses
+        has_content = (sense.get('definition') or sense.get('examples') or
+                       sense.get('labels') or sense.get('subsenses'))
+        if not has_content:
             continue
 
         # signpost is for "also" variants like "phone call, ring", not grammar labels
@@ -1137,28 +1208,13 @@ def insert_entry(conn, dict_id, entry):
                 VALUES (?, ?, ?, ?)
             """, (sense_id, label.get('type', 'register'), label.get('value', ''), i))
 
-        # Insert subsenses as additional senses
-        for subsense in sense.get('subsenses', []):
-            # Skip empty subsenses
-            if not subsense.get('definition') and not subsense.get('examples'):
-                continue
+        # Store subsenses for later (like LDOCE - store as entry attributes)
+        if sense.get('subsenses'):
+            subsenses_data[sense.get('number', str(sense_id))] = sense['subsenses']
 
-            sub_signpost = ' '.join(subsense.get('grammar', []))
-            cursor.execute("""
-                INSERT INTO senses (entry_id, sense_number, signpost, plural, definition, definition_zh, sort_order)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (entry_id, '', sub_signpost, subsense.get('plural', ''),
-                  subsense.get('definition', ''), subsense.get('definition_zh', ''),
-                  sense.get('sort_order', 0) * 100 + subsense.get('sort_order', 0)))
-
-            subsense_id = cursor.lastrowid
-
-            for ex in subsense.get('examples', []):
-                cursor.execute("""
-                    INSERT INTO examples (sense_id, text, text_zh, sort_order)
-                    VALUES (?, ?, ?, ?)
-                """, (subsense_id, ex.get('text', ''), ex.get('text_zh', ''),
-                      ex.get('sort_order', 0)))
+    # Add subsenses to entry attributes (like LDOCE)
+    if subsenses_data:
+        entry.setdefault('attributes', {})['oald/subsenses'] = subsenses_data
 
     # Insert relations (cross-refs, etc.)
     for idx, rel in enumerate(entry.get('relations', [])):
