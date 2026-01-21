@@ -81,16 +81,14 @@
   "Decompress COMPRESSED-DATA and parse as JSON."
   (when (and compressed-data (not (string-empty-p compressed-data)))
     (condition-case nil
-        (with-temp-buffer
-          (set-buffer-multibyte nil)
-          (insert compressed-data)
-          (zlib-decompress-region (point-min) (point-max))
-          ;; Convert to multibyte and decode as UTF-8
-          (set-buffer-multibyte t)
-          (decode-coding-region (point-min) (point-max) 'utf-8 t)
-          (goto-char (point-min))
-          ;; Use json-read for symbol keys (compatible with UI code)
-          (json-read))
+        (let ((decompressed-str
+               (with-temp-buffer
+                 (set-buffer-multibyte nil)
+                 (insert compressed-data)
+                 (zlib-decompress-region (point-min) (point-max))
+                 (buffer-string))))
+          ;; Decode the unibyte string as UTF-8, then parse JSON
+          (json-read-from-string (decode-coding-string decompressed-str 'utf-8)))
       (error nil))))
 
 (defun lexdb-ode--row-to-sense (sense-row db)
