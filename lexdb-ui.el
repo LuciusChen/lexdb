@@ -1622,7 +1622,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
       (when sense-relations
         (let ((cross-refs (seq-filter (lambda (r) (eq (lexdb-relation-type r) 'cross_ref)) sense-relations)))
           (when cross-refs
-            (insert "  ")
+            (insert "    ")  ; 4 spaces to align with examples and labels
             (let ((first t))
               (dolist (ref cross-refs)
                 (unless first (insert ", "))
@@ -1837,12 +1837,9 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                             (insert "\n"))
                           (buffer-string)))
                   tabs)))
-        ;; Insert tab bar if we have any tabs (aligned with examples - 4 spaces)
+        ;; Insert tab bar if we have any tabs (aligned with examples - always 4 spaces)
         (when tabs
-          ;; Subsenses get extra 2-space indent since sense line is already indented
-          (if (string-match-p "\\." ode-sense-num)
-              (insert "      ")  ; Subsense: 4 + 2 = 6 spaces (example 4 + subsense indent 2)
-            (insert "    "))     ; Main sense: 4 spaces (same as examples)
+          (insert "    ")  ; 4 spaces to align with examples
           (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) ode-sense-num)))
             (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))))
 
