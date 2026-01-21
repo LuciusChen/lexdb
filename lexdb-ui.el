@@ -1206,14 +1206,21 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                   " "))))
     ;; Signpost (guide word) - displayed in uppercase with background
     ;; For OALD: fix parentheses spacing (remove spaces around parentheses)
+    ;; For ODE: skip signpost if it's a POS keyword (displayed as section header instead)
     (when-let ((signpost (lexdb-sense-signpost sense)))
       (when (lexdb--non-empty-string-p signpost)
-        (let ((formatted (upcase signpost)))
-          ;; Fix spacing: "CALL (OUT)" -> "CALL(OUT)" for OALD style
-          (when (eq (lexdb-adapter-id adapter) 'oald)
-            (setq formatted (replace-regexp-in-string " +(" "(" formatted))
-            (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
-          (insert (propertize formatted 'face 'lexdb-signpost-face) " "))))
+        (let ((ode-pos-keywords '("adjective" "noun" "verb" "adverb" "preposition"
+                                  "conjunction" "pronoun" "determiner" "exclamation"
+                                  "prefix" "suffix" "combining form"))
+              (formatted (upcase signpost)))
+          ;; Skip POS signpost for ODE (already shown as section header)
+          (unless (and (eq (lexdb-adapter-id adapter) 'ode)
+                       (member (downcase signpost) ode-pos-keywords))
+            ;; Fix spacing: "CALL (OUT)" -> "CALL(OUT)" for OALD style
+            (when (eq (lexdb-adapter-id adapter) 'oald)
+              (setq formatted (replace-regexp-in-string " +(" "(" formatted))
+              (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
+            (insert (propertize formatted 'face 'lexdb-signpost-face) " ")))))
     ;; ODE: Form groups (e.g., "also days") - after sense number, before definition
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
       (let* ((form-groups-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_form_groups"))
@@ -1287,8 +1294,10 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                     (insert (propertize ptext 'face 'lexdb-lexunit-face))))
                   (setq first-part nil))))
             (when parts (insert " "))))))
-    ;; Grammar label (for non-OALD adapters) - after lexunit prefix
-    (when (memq 'grammar caps)
+    ;; Grammar label (for non-OALD/ODE adapters) - after lexunit prefix
+    ;; ODE handles grammar labels separately with [ATTRIBUTIVE] format
+    (when (and (memq 'grammar caps)
+               (not (eq (lexdb-adapter-id adapter) 'ode)))
       (when-let ((gram (lexdb-sense-grammar sense)))
         (when (lexdb--non-empty-string-p gram)
           (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
@@ -2585,8 +2594,17 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 
 (defun lexdb-ui--slot-senses (entry adapter)
   "Slot: Render senses/definitions."
-  (dolist (sense (lexdb-entry-senses entry))
-    (lexdb-ui--render-sense sense adapter entry))
+  (let ((ode-pos-keywords '("adjective" "noun" "verb" "adverb" "preposition"
+                            "conjunction" "pronoun" "determiner" "exclamation"
+                            "prefix" "suffix" "combining form")))
+    (dolist (sense (lexdb-entry-senses entry))
+      ;; For ODE: Show POS section header when signpost contains a part of speech
+      (when (eq (lexdb-adapter-id adapter) 'ode)
+        (when-let ((signpost (lexdb-sense-signpost sense)))
+          (when (member (downcase signpost) ode-pos-keywords)
+            ;; Insert POS header as a section divider
+            (insert (propertize signpost 'face 'lexdb-pos-face) "\n"))))
+      (lexdb-ui--render-sense sense adapter entry)))
   (insert "\n"))
 
 (defun lexdb-ui--slot-entry-grammar-box (entry adapter)

@@ -197,13 +197,26 @@ class ODEParser:
 
     def _parse_senses(self, gramb, entry):
         """Parse senses from gramb section."""
+        # Extract POS from grambhead for this section
+        section_pos = None
+        grambhead = gramb.find(class_='grambhead')
+        if grambhead:
+            pos_elem = grambhead.find(class_='pos')
+            if pos_elem:
+                section_pos = clean_text(pos_elem.get_text())
+
         # Find semb (sense block)
         semb = gramb.find(class_='semb')
         if not semb:
             return
 
+        # Track if this is the first sense in this gramb section
+        first_sense_in_section = True
+
+        # Use current entry sense count as starting order
+        sense_order = len(entry['senses'])
+
         # Process each main sense (li elements directly under semb)
-        sense_order = 0
         for li in semb.find_all('li', recursive=False):
             trg = li.find(class_='trg')
             if not trg:
@@ -211,6 +224,10 @@ class ODEParser:
 
             sense_data = self._parse_sense_block(trg, sense_order)
             if sense_data:
+                # Add section POS to first sense's signpost for header display
+                if first_sense_in_section and section_pos:
+                    sense_data['section_pos'] = section_pos
+                    first_sense_in_section = False
                 entry['senses'].append(sense_data)
                 sense_order += 1
 
@@ -740,13 +757,16 @@ class LexDBWriter:
         for sense_data in entry_data.get('senses', []):
             sense_number = sense_data.get('number', '')
 
+            # Use section_pos as signpost for ODE (marks first sense of a new POS section)
+            signpost = sense_data.get('signpost') or sense_data.get('section_pos')
+
             self.cursor.execute("""
                 INSERT INTO senses (entry_id, sense_number, signpost, definition, sort_order)
                 VALUES (?, ?, ?, ?, ?)
             """, (
                 entry_id,
                 sense_number,
-                sense_data.get('signpost'),
+                signpost,
                 sense_data.get('definition', ''),
                 sense_data.get('sort_order', 0)
             ))

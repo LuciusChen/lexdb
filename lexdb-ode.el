@@ -111,7 +111,26 @@
                         (list id)))
            (labels (mapcar (lambda (l)
                              (lexdb-label-create :type (intern (nth 0 l)) :value (nth 1 l)))
-                           label-rows)))
+                           label-rows))
+           ;; Fetch sense-level relations (cross-references)
+           (rel-rows (sqlite-select db
+                      "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense
+                       FROM relations WHERE sense_id = ? ORDER BY sort_order"
+                      (list id)))
+           (relations (delq nil
+                            (mapcar (lambda (row)
+                                      (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
+                                        (when (or (lexdb--non-empty-string-p clickable)
+                                                  (lexdb--non-empty-string-p prefix))
+                                          (lexdb-relation-create
+                                           :type (intern rel-type)
+                                           :prefix prefix
+                                           :clickable clickable
+                                           :suffix suffix
+                                           :target-word target-word
+                                           :target-sense target-sense
+                                           :target (concat (or prefix "") (or clickable "") (or suffix ""))))))
+                                    rel-rows))))
       (lexdb-sense-create
        :id id
        :number (when (lexdb--non-empty-string-p sense-num) sense-num)
@@ -119,7 +138,8 @@
        :definition definition
        :examples examples
        :grammar-patterns gram-patterns
-       :labels labels))))
+       :labels labels
+       :relations relations))))
 
 (defun lexdb-ode--build-pronunciations (entry-id db)
   "Build pronunciations for ENTRY-ID from DB."
