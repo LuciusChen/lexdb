@@ -230,6 +230,7 @@ class ODEParser:
             'number': '',
             'definition': '',
             'signpost': '',
+            'form_groups': '',  # e.g., "also days"
             'labels': [],
             'examples': [],
             'gram_examples': [],
@@ -241,6 +242,13 @@ class ODEParser:
         iteration = trg.find(class_='iteration')
         if iteration:
             sense_data['number'] = clean_text(iteration.get_text())
+
+        # Form groups (e.g., "also days") - inside <p> element
+        p_elem = trg.find('p', recursive=False)
+        if p_elem:
+            form_groups = p_elem.find(class_='form-groups')
+            if form_groups:
+                sense_data['form_groups'] = clean_text(form_groups.get_text())
 
         # Definition (ind) - only the first one, not nested in subSenses
         ind = trg.find(class_='ind')
@@ -622,9 +630,10 @@ class LexDBWriter:
                 idx
             ))
 
-        # Collect sense-level synonyms and expanded_examples for later storage
+        # Collect sense-level synonyms, expanded_examples, and form_groups for later storage
         sense_synonyms_map = {}
         sense_expanded_examples_map = {}
+        sense_form_groups_map = {}
 
         # Insert senses
         for sense_data in entry_data.get('senses', []):
@@ -641,6 +650,10 @@ class LexDBWriter:
                 sense_data.get('sort_order', 0)
             ))
             sense_id = self.cursor.lastrowid
+
+            # Collect form_groups for this sense (e.g., "also days")
+            if sense_data.get('form_groups'):
+                sense_form_groups_map[sense_number] = sense_data['form_groups']
 
             # Collect synonyms for this sense
             if sense_data.get('synonyms'):
@@ -773,11 +786,13 @@ class LexDBWriter:
                     example.get('sort_order', 0)
                 ))
 
-        # Store sense-level synonyms and expanded_examples as entry attributes
+        # Store sense-level synonyms, expanded_examples, and form_groups as entry attributes
         if sense_synonyms_map:
             entry_data.setdefault('attributes', {})['sense_synonyms'] = sense_synonyms_map
         if sense_expanded_examples_map:
             entry_data.setdefault('attributes', {})['sense_expanded_examples'] = sense_expanded_examples_map
+        if sense_form_groups_map:
+            entry_data.setdefault('attributes', {})['sense_form_groups'] = sense_form_groups_map
 
         # Insert extension attributes (EAV)
         for key, value in entry_data.get('attributes', {}).items():

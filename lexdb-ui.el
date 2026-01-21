@@ -489,6 +489,13 @@ Same color as definition but bold."
 Same color as example-highlight-face for consistency."
   :group 'lexdb)
 
+(defface lexdb-synonym-descriptive-face
+  '((((background dark))  :foreground "#B8B8B8" :weight bold)
+    (((background light)) :foreground "#555555" :weight bold))
+  "Face for non-clickable descriptive synonyms (e.g., 'twenty-four-hour period').
+These are typically more general descriptions rather than dictionary entries."
+  :group 'lexdb)
+
 ;; Definition inline formatting (for OALD variant words, register labels, etc.)
 (defface lexdb-def-variant-face
   '((((background dark))  :foreground "#7CB8FF" :weight bold)
@@ -1201,6 +1208,13 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (setq formatted (replace-regexp-in-string " +(" "(" formatted))
             (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
           (insert (propertize formatted 'face 'lexdb-signpost-face) " "))))
+    ;; ODE: Form groups (e.g., "also days") - after sense number, before definition
+    (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
+      (let* ((form-groups-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_form_groups"))
+             (form-groups (when form-groups-map
+                            (cdr (assoc sense-num-str form-groups-map #'string=)))))
+        (when (lexdb--non-empty-string-p form-groups)
+          (insert (propertize (concat "(" form-groups ")") 'face 'lexdb-grammar-face) " "))))
     ;; OALD grammar codes inline (e.g., "[Tn] [I]", "[sing or pl v]") - before definition
     (when (eq (lexdb-adapter-id adapter) 'oald)
       (let ((gps (lexdb-sense-grammar-patterns sense)))
@@ -1273,13 +1287,13 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
         (when (lexdb--non-empty-string-p gram)
           (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
     ;; Register labels (e.g., "formal", "informal") - after lexunit, before definition
-    ;; Also geographic/regional labels (e.g., "especially British English")
+    ;; Also geographic/regional labels and domain labels (e.g., "Astronomy")
     (let ((labels (lexdb-sense-labels sense)))
       (when labels
         (dolist (label labels)
           (let ((ltype (lexdb-label-type label))
                 (lvalue (lexdb-label-value label)))
-            (when (and lvalue (member ltype '(register geo)))
+            (when (and lvalue (member ltype '(register geo domain)))
               (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
     ;; OALD plural forms (e.g., "(pl manifestos or manifestoes)") - before definition
     ;; Uses <<l>>...<</l>> for plural words (blue), <<gram>>...<</gram>> for "pl" (gray)
@@ -1781,8 +1795,8 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                                                               'action (lambda (_)
                                                                         (lexdb-search-and-goto-sense word-text nil 'ode))
                                                               'help-echo (format "Look up: %s [ode]" word-text))
-                                        ;; Non-clickable: just styled text
-                                        (insert (propertize word-text 'face 'lexdb-synonym-face))))))
+                                        ;; Non-clickable: descriptive text with different face
+                                        (insert (propertize word-text 'face 'lexdb-synonym-descriptive-face))))))
                                 (insert "\n"))))
                           (buffer-string)))
                   tabs)))
