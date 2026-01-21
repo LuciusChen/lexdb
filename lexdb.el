@@ -128,7 +128,7 @@ Call this after setting up your dictionary configurations."
                    errors)))))))
     ;; Set default adapter to first enabled dictionary
     (unless lexdb-default-adapter
-      (when-let ((first-enabled (cl-find-if
+      (when-let* ((first-enabled (cl-find-if
                                  (lambda (c)
                                    (if (plist-member c :enabled)
                                        (plist-get c :enabled)
@@ -213,7 +213,7 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
   "Return description string for capability CAP."
   (catch 'found
     (dolist (group lexdb-capability-groups)
-      (when-let ((pair (assq cap (cdr group))))
+      (when-let* ((pair (assq cap (cdr group))))
         (throw 'found (cdr pair))))))
 
 ;;;; ============================================================
@@ -546,7 +546,7 @@ Does not mutate original metadata."
 
 (defun lexdb-unregister-adapter (id)
   "Unregister adapter with ID."
-  (when-let ((adapter (gethash id lexdb-adapters)))
+  (when-let* ((adapter (gethash id lexdb-adapters)))
     (when (lexdb-adapter-close-fn adapter)
       (funcall (lexdb-adapter-close-fn adapter)))
     (remhash id lexdb-adapters)))
@@ -643,12 +643,12 @@ Returns list of lexdb-entry structs."
   "Get part of speech from ENTRY metadata or labels."
   (or (lexdb-meta-get (lexdb-entry-metadata entry)
                       (symbol-name lexdb-current-adapter) "pos")
-      (when-let ((label (lexdb-entry-get-label entry 'pos)))
+      (when-let* ((label (lexdb-entry-get-label entry 'pos)))
         (lexdb-label-value label))))
 
 (defun lexdb-sense-grammar (sense)
   "Get grammar annotation from SENSE."
-  (when-let ((label (seq-find (lambda (l) (eq (lexdb-label-type l) 'grammar))
+  (when-let* ((label (seq-find (lambda (l) (eq (lexdb-label-type l) 'grammar))
                               (lexdb-sense-labels sense))))
     (lexdb-label-value label)))
 
@@ -727,7 +727,7 @@ Respects `lexdb-multi-dict-mode' setting."
            (entries (lexdb-lookup word adapter-id)))
       (unless entries
         (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+          (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
             (unless (equal lemma (downcase word))
               (setq entries (lexdb-lookup lemma adapter-id))))))
       (lexdb-ui-display word entries adapter))))
@@ -779,7 +779,7 @@ Otherwise, search only the current/default dictionary."
       ;; Try lemmatization if no results
       (unless entries
         (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+          (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
             (unless (equal lemma (downcase word))
               (setq entries (lexdb-lookup lemma adapter-id))
               (when entries
@@ -805,7 +805,7 @@ Otherwise, search only the current/default dictionary."
          (entries (lexdb-lookup word adapter-id)))
     (unless entries
       (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-        (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+        (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
           (unless (equal lemma (downcase word))
             (setq entries (lexdb-lookup lemma adapter-id))
             (when entries
@@ -957,7 +957,7 @@ Returns a lexdb-entry struct."
 
 (defun lexdb-get-definitions (word &optional adapter-id)
   "Get list of definition strings for WORD."
-  (when-let ((entry (lexdb-get-entry word adapter-id)))
+  (when-let* ((entry (lexdb-get-entry word adapter-id)))
     (mapcar #'lexdb-sense-definition (lexdb-entry-senses entry))))
 
 (provide 'lexdb)

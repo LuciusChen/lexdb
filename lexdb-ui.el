@@ -117,14 +117,14 @@ Returns adapter-specific template or default template."
 Returns alist of (adapter-id . (entries . adapter))."
   (let ((results nil))
     (dolist (adapter-id (lexdb-ui--get-enabled-adapters))
-      (when-let ((adapter (lexdb-get-adapter adapter-id)))
+      (when-let* ((adapter (lexdb-get-adapter adapter-id)))
         (let ((entries (condition-case nil
                            (lexdb-lookup word adapter-id)
                          (error nil))))
           ;; Try lemmatization if no results
           (unless entries
             (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-              (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+              (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
                 (unless (equal lemma (downcase word))
                   (setq entries (condition-case nil
                                     (lexdb-lookup lemma adapter-id)
@@ -259,7 +259,7 @@ Returns alist of (adapter-id . (entries . adapter))."
                             'face 'lexdb-definition-face))
         ;; Lemma suggestion
         (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
+          (when-let* ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
             (let ((lemma (funcall lemma-fn lexdb-ui--current-word))
                   (jump-adapter (lexdb-adapter-id adapter)))
               (unless (equal lemma (downcase lexdb-ui--current-word))
@@ -1054,7 +1054,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
         (us-ipa nil))
     ;; Collect UK and US pronunciations
     (dolist (pron prons)
-      (when-let ((ipa (lexdb-pronunciation-ipa pron)))
+      (when-let* ((ipa (lexdb-pronunciation-ipa pron)))
         (when (lexdb--non-empty-string-p ipa)
           (pcase (lexdb-pronunciation-variant pron)
             ('uk (setq uk-ipa ipa))
@@ -1080,20 +1080,20 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
          (meta (lexdb-entry-metadata entry)))
     ;; Frequency dots (●●● etc)
     (when (memq 'frequency-band caps)
-      (when-let ((dots (lexdb-meta-get meta ns "frequency-dots")))
+      (when-let* ((dots (lexdb-meta-get meta ns "frequency-dots")))
         (when (lexdb--non-empty-string-p dots)
           (insert " " (propertize dots 'face 'lexdb-frequency-dots-face)))))
     ;; Frequency level (S1 W2 etc) - use adapter hook if provided
     (when (memq 'frequency-band caps)
-      (when-let ((freq (lexdb-meta-get meta ns "frequency")))
+      (when-let* ((freq (lexdb-meta-get meta ns "frequency")))
         (when (lexdb--non-empty-string-p freq)
-          (if-let ((hook (lexdb-adapter-render-frequency-fn adapter)))
-              (when-let ((rendered (funcall hook freq)))
+          (if-let* ((hook (lexdb-adapter-render-frequency-fn adapter)))
+              (when-let* ((rendered (funcall hook freq)))
                 (insert " " rendered))
             (insert " " (propertize freq 'face 'lexdb-frequency-face))))))
     ;; CEFR level
     (when (memq 'cefr caps)
-      (when-let ((cefr (lexdb-meta-get meta ns "cefr-level")))
+      (when-let* ((cefr (lexdb-meta-get meta ns "cefr-level")))
         (when (lexdb--non-empty-string-p cefr)
           (insert " " (propertize (format "[%s]" cefr) 'face 'lexdb-cefr-face)))))))
 
@@ -1115,7 +1115,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     (when audio-dir
       ;; UK audio
       (when (memq 'audio-uk caps)
-        (when-let ((path (lexdb-meta-get meta ns "audio-uk")))
+        (when-let* ((path (lexdb-meta-get meta ns "audio-uk")))
           (when (lexdb--non-empty-string-p path)
             (setq has-audio t)
             (insert (propertize "🔊 UK"
@@ -1125,7 +1125,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
                                 'help-echo "C-c C-c to play UK pronunciation")))))
       ;; US audio
       (when (memq 'audio-us caps)
-        (when-let ((path (lexdb-meta-get meta ns "audio-us")))
+        (when-let* ((path (lexdb-meta-get meta ns "audio-us")))
           (when (lexdb--non-empty-string-p path)
             (when has-audio (insert "  "))
             (setq has-audio t)
@@ -1199,12 +1199,12 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     (when is-subsense
       (insert "  "))
     ;; Sense number
-    (when-let ((num (lexdb-sense-number sense)))
+    (when-let* ((num (lexdb-sense-number sense)))
       (when (lexdb--non-empty-string-p num)
         (insert (propertize num 'face 'lexdb-sense-num-face) " ")))
     ;; Translation indicator (🌐) - right after sense number
     (when (memq 'chinese-definition caps)
-      (when-let ((def-zh (lexdb-meta-get (lexdb-sense-metadata sense) ns "definition-zh")))
+      (when-let* ((def-zh (lexdb-meta-get (lexdb-sense-metadata sense) ns "definition-zh")))
         (when (and (lexdb--non-empty-string-p def-zh) lexdb-ui-translation-indicator)
           (insert (propertize lexdb-ui-translation-indicator
                               'face 'lexdb-translation-indicator-face
@@ -1214,7 +1214,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     ;; Signpost (guide word) - displayed in uppercase with background
     ;; For OALD: fix parentheses spacing (remove spaces around parentheses)
     ;; For ODE: skip signpost if it's a POS keyword (displayed as section header instead)
-    (when-let ((signpost (lexdb-sense-signpost sense)))
+    (when-let* ((signpost (lexdb-sense-signpost sense)))
       (when (lexdb--non-empty-string-p signpost)
         (let ((ode-pos-keywords '("adjective" "noun" "verb" "adverb" "preposition"
                                   "conjunction" "pronoun" "determiner" "exclamation"
@@ -1307,7 +1307,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     ;; ODE handles grammar labels separately with [ATTRIBUTIVE] format
     (when (and (memq 'grammar caps)
                (not (eq (lexdb-adapter-id adapter) 'ode)))
-      (when-let ((gram (lexdb-sense-grammar sense)))
+      (when-let* ((gram (lexdb-sense-grammar sense)))
         (when (lexdb--non-empty-string-p gram)
           (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
     ;; Register labels (e.g., "formal", "informal") - after lexunit, before definition
@@ -1328,7 +1328,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     ;; Uses <<l>>...<</l>> for plural words (blue), <<gram>>...<</gram>> for "pl" (gray)
     ;; Default face is definition-face so "or" and parentheses are plain text
     (when (eq (lexdb-adapter-id adapter) 'oald)
-      (when-let ((plural (lexdb-meta-get (lexdb-sense-metadata sense) ns "plural")))
+      (when-let* ((plural (lexdb-meta-get (lexdb-sense-metadata sense) ns "plural")))
         (when (lexdb--non-empty-string-p plural)
           (lexdb-ui--insert-formatted-definition plural 'lexdb-definition-face)
           (insert " "))))
@@ -1954,7 +1954,7 @@ Otherwise, fall back to global search."
         ;; Try lemmatization if no direct match
         (unless entries
           (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-            (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+            (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
               (unless (equal lemma (downcase word))
                 (setq entries (lexdb-lookup lemma adapter-id))
                 (when entries
@@ -2537,7 +2537,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 (defun lexdb-ui--slot-header (entry adapter)
   "Slot: Render entry header (headword, pronunciation, POS, etc.)."
   (let ((caps (lexdb-adapter-capabilities adapter)))
-    (if-let ((header-hook (lexdb-adapter-render-entry-header-fn adapter)))
+    (if-let* ((header-hook (lexdb-adapter-render-entry-header-fn adapter)))
         (funcall header-hook entry (current-buffer))
       ;; Default header rendering
       (lexdb-ui--render-headword entry)
@@ -2630,7 +2630,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
     ;; Count unique POS sections to decide if we need section headers
     (let ((pos-count 0))
       (dolist (sense (lexdb-entry-senses entry))
-        (when-let ((signpost (lexdb-sense-signpost sense)))
+        (when-let* ((signpost (lexdb-sense-signpost sense)))
           (when (member (downcase signpost) ode-pos-keywords)
             (setq pos-count (1+ pos-count)))))
       ;; Only show POS section headers if there are multiple POS sections
@@ -2639,7 +2639,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
         ;; but only if there are multiple POS sections (to avoid duplication with header)
         (when (and (eq (lexdb-adapter-id adapter) 'ode)
                    (> pos-count 1))
-          (when-let ((signpost (lexdb-sense-signpost sense)))
+          (when-let* ((signpost (lexdb-sense-signpost sense)))
             (when (and (member (downcase signpost) ode-pos-keywords)
                        (not (member signpost shown-pos)))
               ;; Insert POS header as a section divider
@@ -3139,7 +3139,7 @@ adapter-specific template from `lexdb-ui-adapter-templates'."
   (let ((template (lexdb-ui--get-template adapter)))
     (dolist (slot-name template)
       (when (lexdb-ui--slot-enabled-p slot-name)
-        (when-let ((slot-fn (cdr (assq slot-name lexdb-ui-slot-functions))))
+        (when-let* ((slot-fn (cdr (assq slot-name lexdb-ui-slot-functions))))
           (funcall slot-fn entry adapter))))))
 
 (defun lexdb-ui-render-entries (entries adapter)
@@ -3391,7 +3391,7 @@ Only searches within the current line to avoid playing wrong audio."
         ;; Search backward to line start
         (save-excursion
           (while (and (not found) (>= (point) line-start))
-            (when-let ((path (get-text-property (point) 'lexdb-audio-path))
+            (when-let* ((path (get-text-property (point) 'lexdb-audio-path))
                        (dir (get-text-property (point) 'lexdb-audio-dir)))
               (setq found (cons path dir)))
             (unless found (backward-char))))
@@ -3399,7 +3399,7 @@ Only searches within the current line to avoid playing wrong audio."
         (unless found
           (save-excursion
             (while (and (not found) (<= (point) line-end))
-              (when-let ((path (get-text-property (point) 'lexdb-audio-path))
+              (when-let* ((path (get-text-property (point) 'lexdb-audio-path))
                          (dir (get-text-property (point) 'lexdb-audio-dir)))
                 (setq found (cons path dir)))
               (unless found (forward-char)))))
@@ -3554,7 +3554,7 @@ If NO-LEMMA-HINT is nil and no entries found, offer lemma suggestion."
           ;; Lemma suggestion
           (unless no-lemma-hint
             (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-              (when-let ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
+              (when-let* ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
                 (let ((lemma (funcall lemma-fn word))
                       (jump-adapter (lexdb-adapter-id adapter)))
                   (unless (equal lemma (downcase word))

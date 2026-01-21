@@ -247,7 +247,7 @@ Uses fragment storage format: prefix + clickable + suffix."
             (push (cons 'ldoce/pos lvalue) metadata))))
       ;; Add audio paths to metadata
       (dolist (pron prons)
-        (when-let ((audio (lexdb-pronunciation-audio pron)))
+        (when-let* ((audio (lexdb-pronunciation-audio pron)))
           (pcase (lexdb-pronunciation-variant pron)
             ('uk (unless (assq 'ldoce/audio-uk metadata)
                    (push (cons 'ldoce/audio-uk audio) metadata)))
