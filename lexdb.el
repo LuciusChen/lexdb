@@ -690,14 +690,7 @@ If nil, search only the current/default dictionary."
   "Search for WORD in dictionaries.
 If `lexdb-multi-dict-mode' is non-nil, search all enabled dictionaries.
 Otherwise, search only the current/default dictionary."
-  (interactive
-   (let* ((default (thing-at-point 'word t))
-          (prompt (format "Lexdb%s: "
-                          (if (and (not lexdb-multi-dict-mode) lexdb-current-adapter)
-                              (format " [%s]" lexdb-current-adapter)
-                            "")))
-          (input (read-string prompt nil 'lexdb--search-history default)))
-     (list (if (string-empty-p input) default input))))
+  (interactive (list (read-string "Lexdb: " (thing-at-point 'word t) 'lexdb--search-history)))
   (when (or (null word) (not (stringp word)) (string-empty-p word))
     (user-error "No word specified"))
   (setq lexdb--last-word word)
