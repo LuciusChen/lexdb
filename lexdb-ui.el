@@ -1781,7 +1781,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
               (overlay-put ov 'lexdb-registerbox t))
             (insert "\n"))))))
 
-    ;; ODE: Sense-level tabs (SYNONYMS, MORE EXAMPLES)
+    ;; ODE: Sense-level tabs (SYNONYMS, Example sentences)
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
       ;; Use sense-index (sort_order) as key - unique per entry unlike sense_number
       ;; Keys are symbols (from json-read), so intern the string key
@@ -1829,10 +1829,10 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                 (insert "\n"))))
                           (buffer-string)))
                   tabs)))
-        ;; Build MORE EXAMPLES tab content
+        ;; Build Example sentences tab content
         (when expanded-examples
           (let ((ex-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
-            (push (list 'more-examples (format "MORE EXAMPLES (%d)" (length ex-list))
+            (push (list 'more-examples (format "Example sentences (%d)" (length ex-list))
                         (with-temp-buffer
                           (dolist (ex ex-list)
                             (insert "    " (propertize "• " 'face 'lexdb-definition-face))
@@ -2896,36 +2896,157 @@ ADAPTER-ID is used for crossref navigation."
                 (insert "\n")))))))))
 
 (defun lexdb-ui--slot-ode-phrases-origin (entry adapter)
-  "Slot: Render ODE Phrases, Derivatives, and Origin sections with background overlay."
+  "Slot: Render ODE Phrases, Phrasal Verbs, Derivatives, Usage, and Origin sections."
   (when (eq (lexdb-adapter-id adapter) 'ode)
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
            (phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases"))
+           (phrasal-verbs (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrasal_verbs"))
            (derivatives (lexdb-meta-get (lexdb-entry-metadata entry) ns "derivatives"))
            (origin-alist (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin")))
       ;; Phrases section
       (when (and phrases (> (length phrases) 0))
         (let ((section-start (point))
-              (phrase-list (if (vectorp phrases) (append phrases nil) phrases)))
+              (phrase-list (if (vectorp phrases) (append phrases nil) phrases))
+              (phrase-index 0))
           (insert "\n")
           (insert (propertize "PHRASES" 'face 'lexdb-grambox-heading-face) "\n")
           (dolist (phrase phrase-list)
             (let ((phrase-text (lexdb-ui--alist-get 'phrase phrase))
                   (definition (lexdb-ui--alist-get 'definition phrase))
-                  (examples (lexdb-ui--alist-get 'examples phrase)))
+                  (examples (lexdb-ui--alist-get 'examples phrase))
+                  (expanded-examples (lexdb-ui--alist-get 'expanded_examples phrase))
+                  (synonyms (lexdb-ui--alist-get 'synonyms phrase)))
               (when phrase-text
                 (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
                 (when (lexdb--non-empty-string-p definition)
                   (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
+                ;; Inline examples
                 (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
                   (dolist (ex ex-list)
                     (let ((ex-text (lexdb-ui--alist-get 'text ex)))
                       (when (lexdb--non-empty-string-p ex-text)
-                        (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n"))))))))
+                        (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n")))))
+                ;; Example sentences and SYNONYMS tabs
+                (let ((tabs nil)
+                      (tab-group (format "lexdb-ode-phrase-%d-%d" (lexdb-entry-id entry) phrase-index)))
+                  ;; Build tabs list
+                  (when expanded-examples
+                    (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
+                      (when (> (length exp-list) 0)
+                        (push (list 'more-examples
+                                    (format "Example sentences (%d)" (length exp-list))
+                                    (with-temp-buffer
+                                      (dolist (ex exp-list)
+                                        (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                        (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                                        (insert "\n"))
+                                      (buffer-string)))
+                              tabs))))
+                  (when synonyms
+                    (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
+                      (when (> (length syn-list) 0)
+                        (push (list 'synonyms
+                                    "SYNONYMS"
+                                    (with-temp-buffer
+                                      (dolist (group syn-list)
+                                        (let ((register (lexdb-ui--alist-get 'register group))
+                                              (words (lexdb-ui--alist-get 'words group)))
+                                          (when register
+                                            (insert "    " (propertize register 'face 'lexdb-label-face) " "))
+                                          (let ((word-list (if (vectorp words) (append words nil) words))
+                                                (first t))
+                                            (dolist (w word-list)
+                                              (unless first (insert ", "))
+                                              (setq first nil)
+                                              (let ((word (lexdb-ui--alist-get 'word w))
+                                                    (clickable (lexdb-ui--alist-get 'clickable w)))
+                                                (if clickable
+                                                    (insert (propertize word 'face 'lexdb-link-face))
+                                                  (insert (propertize word 'face 'lexdb-definition-face))))))
+                                          (insert "\n")))
+                                      (buffer-string)))
+                              tabs))))
+                  ;; Insert tab bar if we have tabs
+                  (when tabs
+                    (insert "    ")
+                    (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group)))
+                (setq phrase-index (1+ phrase-index)))))
           ;; Create overlay for background
           (when (> (point) section-start)
             (let ((ov (make-overlay section-start (point))))
               (overlay-put ov 'face 'lexdb-grambox-background-face)
               (overlay-put ov 'lexdb-ode-phrases t)))))
+      ;; Phrasal Verbs section (same structure as phrases)
+      (when (and phrasal-verbs (> (length phrasal-verbs) 0))
+        (let ((section-start (point))
+              (pv-list (if (vectorp phrasal-verbs) (append phrasal-verbs nil) phrasal-verbs))
+              (pv-index 0))
+          (insert "\n")
+          (insert (propertize "PHRASAL VERBS" 'face 'lexdb-grambox-heading-face) "\n")
+          (dolist (pv pv-list)
+            (let ((pv-text (lexdb-ui--alist-get 'phrase pv))
+                  (definition (lexdb-ui--alist-get 'definition pv))
+                  (examples (lexdb-ui--alist-get 'examples pv))
+                  (expanded-examples (lexdb-ui--alist-get 'expanded_examples pv))
+                  (synonyms (lexdb-ui--alist-get 'synonyms pv)))
+              (when pv-text
+                (insert "  " (propertize pv-text 'face 'lexdb-phrase-face) "\n")
+                (when (lexdb--non-empty-string-p definition)
+                  (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
+                ;; Inline examples
+                (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
+                  (dolist (ex ex-list)
+                    (let ((ex-text (lexdb-ui--alist-get 'text ex)))
+                      (when (lexdb--non-empty-string-p ex-text)
+                        (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n")))))
+                ;; Example sentences and SYNONYMS tabs
+                (let ((tabs nil)
+                      (tab-group (format "lexdb-ode-pv-%d-%d" (lexdb-entry-id entry) pv-index)))
+                  (when expanded-examples
+                    (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
+                      (when (> (length exp-list) 0)
+                        (push (list 'more-examples
+                                    (format "Example sentences (%d)" (length exp-list))
+                                    (with-temp-buffer
+                                      (dolist (ex exp-list)
+                                        (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                        (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                                        (insert "\n"))
+                                      (buffer-string)))
+                              tabs))))
+                  (when synonyms
+                    (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
+                      (when (> (length syn-list) 0)
+                        (push (list 'synonyms
+                                    "SYNONYMS"
+                                    (with-temp-buffer
+                                      (dolist (group syn-list)
+                                        (let ((register (lexdb-ui--alist-get 'register group))
+                                              (words (lexdb-ui--alist-get 'words group)))
+                                          (when register
+                                            (insert "    " (propertize register 'face 'lexdb-label-face) " "))
+                                          (let ((word-list (if (vectorp words) (append words nil) words))
+                                                (first t))
+                                            (dolist (w word-list)
+                                              (unless first (insert ", "))
+                                              (setq first nil)
+                                              (let ((word (lexdb-ui--alist-get 'word w))
+                                                    (clickable (lexdb-ui--alist-get 'clickable w)))
+                                                (if clickable
+                                                    (insert (propertize word 'face 'lexdb-link-face))
+                                                  (insert (propertize word 'face 'lexdb-definition-face))))))
+                                          (insert "\n")))
+                                      (buffer-string)))
+                              tabs))))
+                  (when tabs
+                    (insert "    ")
+                    (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group)))
+                (setq pv-index (1+ pv-index)))))
+          ;; Create overlay for background
+          (when (> (point) section-start)
+            (let ((ov (make-overlay section-start (point))))
+              (overlay-put ov 'face 'lexdb-grambox-background-face)
+              (overlay-put ov 'lexdb-ode-phrasal-verbs t)))))
       ;; Derivatives section
       (when (and derivatives (> (length derivatives) 0))
         (let ((section-start (point))
@@ -2956,7 +3077,7 @@ ADAPTER-ID is used for crossref navigation."
                   (dolist (ex ex-list)
                     (when (lexdb--non-empty-string-p ex)
                       (insert "      " (propertize ex 'face 'lexdb-example-face) "\n"))))
-                ;; MORE EXAMPLES tab for expanded examples
+                ;; Example sentences tab for expanded examples
                 (when expanded-examples
                   (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
                     (when (> (length exp-list) 0)
@@ -2964,7 +3085,7 @@ ADAPTER-ID is used for crossref navigation."
                       (let ((tab-group (format "lexdb-ode-deriv-%d-%d" (lexdb-entry-id entry) deriv-index)))
                         (lexdb-ui--insert-tab-bar
                          (list (list 'more-examples
-                                     (format "MORE EXAMPLES (%d)" (length exp-list))
+                                     (format "Example sentences (%d)" (length exp-list))
                                      (with-temp-buffer
                                        (dolist (ex exp-list)
                                          (insert "    " (propertize "• " 'face 'lexdb-definition-face))
@@ -2978,6 +3099,17 @@ ADAPTER-ID is used for crossref navigation."
             (let ((ov (make-overlay section-start (point))))
               (overlay-put ov 'face 'lexdb-grambox-background-face)
               (overlay-put ov 'lexdb-ode-derivatives t)))))
+      ;; Usage section
+      (let ((usage-text (lexdb-meta-get (lexdb-entry-metadata entry) ns "usage")))
+        (when (lexdb--non-empty-string-p usage-text)
+          (let ((section-start (point)))
+            (insert "\n")
+            (insert (propertize "USAGE" 'face 'lexdb-grambox-heading-face) "\n")
+            (insert "  " (propertize usage-text 'face 'lexdb-origin-face) "\n")
+            ;; Create overlay for background
+            (let ((ov (make-overlay section-start (point))))
+              (overlay-put ov 'face 'lexdb-grambox-background-face)
+              (overlay-put ov 'lexdb-ode-usage t)))))
       ;; Origin section
       (when (and origin-alist (listp origin-alist))
         (let ((section-start (point))

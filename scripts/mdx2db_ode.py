@@ -266,14 +266,8 @@ class ODEParser:
         for gramb in soup.find_all('section', class_='gramb'):
             self._parse_senses(gramb, entry)
 
-        # === Phrases section ===
-        self._parse_phrases(soup, entry)
-
-        # === Derivatives section ===
-        self._parse_derivatives(soup, entry)
-
-        # === Etymology/Origin ===
-        self._parse_etymology(soup, entry)
+        # === Etymology sections (phrases, derivatives, usage, origin) ===
+        self._parse_etym_sections(soup, entry)
 
         return entry
 
@@ -283,9 +277,21 @@ class ODEParser:
         section_pos = None
         grambhead = gramb.find(class_='grambhead')
         if grambhead:
-            pos_elem = grambhead.find(class_='pos')
-            if pos_elem:
-                section_pos = clean_text(pos_elem.get_text())
+            # Find span.ps.pos > span.pos (the inner pos, not the wrapper)
+            ps_pos = grambhead.find(class_='ps')
+            if ps_pos:
+                # Find the direct span.pos child (not pos-inflections)
+                for child in ps_pos.children:
+                    if hasattr(child, 'get') and 'pos' in (child.get('class') or []):
+                        # Make sure it's not pos-inflections
+                        if 'pos-inflections' not in (child.get('class') or []):
+                            section_pos = clean_text(child.get_text())
+                            break
+            # Fallback: try direct pos element if ps wrapper not found
+            if not section_pos:
+                pos_elem = grambhead.find(class_='pos')
+                if pos_elem and 'ps' not in (pos_elem.get('class') or []):
+                    section_pos = clean_text(pos_elem.get_text())
 
         # Find semb (sense block)
         semb = gramb.find(class_='semb')
@@ -643,206 +649,250 @@ class ODEParser:
 
         return sense_data if sense_data['definition'] else None
 
-    def _parse_phrases(self, soup, entry):
-        """Parse phrases from the entry.
+    def _parse_etym_sections(self, soup, entry):
+        """Parse all etymology sections (phrases, phrasal verbs, derivatives, usage, origin).
 
-        ODE phrase structure:
-        section.etymology.phrase > senseInnerWrapper > ul.semb.gramb >
-          li (contains div.trg > p > span.ind > strong.phrase)
-          ul.semb >
-            li.phrase_sense (contains definition and examples)
+        All these sections share the same outer structure:
+        section.etymology.etym.{type} > senseInnerWrapper > content
+
+        Types found in ODE:
+        - origin: word etymology (most common)
+        - derivative: derived words
+        - phrase: idiomatic phrases
+        - phrasalverb: phrasal verbs (same structure as phrase)
+        - usage: usage notes
         """
-        phrases_data = []
-
-        # Find phrase sections
         for section in soup.find_all('section', class_='etymology'):
             classes = section.get('class', [])
-            if 'phrase' not in classes:
-                continue
-
             inner = section.find(class_='senseInnerWrapper')
             if not inner:
                 continue
 
-            # Find all semb containers
-            semb = inner.find(class_='semb')
-            if not semb:
+            if 'phrase' in classes:
+                self._handle_phrases(inner, entry, 'phrases')
+            elif 'phrasalverb' in classes:
+                self._handle_phrases(inner, entry, 'phrasal_verbs')
+            elif 'derivative' in classes:
+                self._handle_derivatives(inner, entry)
+            elif 'usage' in classes:
+                self._handle_usage(inner, entry)
+            elif 'origin' in classes:
+                self._handle_origin(inner, entry)
+
+    def _handle_phrases(self, inner, entry, attr_key='phrases'):
+        """Handle phrases/phrasal verbs section content.
+
+        Structure: ul.semb.gramb >
+          li (contains div.trg > p > span.ind > strong.phrase)
+          ul.semb > li.phrase_sense (contains definition, examples, synonyms)
+
+        Args:
+            inner: senseInnerWrapper element
+            entry: entry dict to update
+            attr_key: 'phrases' or 'phrasal_verbs'
+        """
+        phrases_data = []
+
+        semb = inner.find('ul', class_='semb')
+        if not semb:
+            return
+
+        # Process each phrase entry
+        for li in semb.find_all('li', recursive=False):
+            trg = li.find(class_='trg')
+            if not trg:
                 continue
 
-            # Process each phrase entry
-            for li in semb.find_all('li', recursive=False):
-                # Find phrase text in ind > strong.phrase
-                trg = li.find(class_='trg')
-                if not trg:
-                    continue
+            ind = trg.find(class_='ind')
+            if not ind:
+                continue
 
-                ind = trg.find(class_='ind')
-                if not ind:
-                    continue
+            phrase_strong = ind.find(class_='phrase')
+            if not phrase_strong:
+                continue
 
-                phrase_strong = ind.find(class_='phrase')
-                if not phrase_strong:
-                    continue
+            phrase_text = clean_text(phrase_strong.get_text())
+            if not phrase_text:
+                continue
 
-                phrase_text = clean_text(phrase_strong.get_text())
-                if not phrase_text:
-                    continue
+            # Find nested ul.semb with phrase_sense
+            nested_semb = li.find_next_sibling('ul', class_='semb')
+            if not nested_semb:
+                nested_semb = li.find('ul', class_='semb')
 
-                # Find nested ul.semb with phrase_sense
-                nested_semb = li.find_next_sibling('ul', class_='semb')
-                if not nested_semb:
-                    # Try finding as child
-                    nested_semb = li.find('ul', class_='semb')
+            if nested_semb:
+                for phrase_sense in nested_semb.find_all(class_='phrase_sense'):
+                    phrase_entry = {
+                        'phrase': phrase_text,
+                        'definition': '',
+                        'examples': [],
+                        'expanded_examples': [],
+                        'synonyms': None
+                    }
 
-                if nested_semb:
-                    for phrase_sense in nested_semb.find_all(class_='phrase_sense'):
-                        definition = ''
-                        ps_ind = phrase_sense.find(class_='ind')
-                        if ps_ind:
-                            definition = clean_text(ps_ind.get_text())
+                    # Definition
+                    ps_ind = phrase_sense.find(class_='ind')
+                    if ps_ind:
+                        phrase_entry['definition'] = clean_text(ps_ind.get_text())
 
-                        # Get examples
-                        examples = []
-                        ex_order = 0
-                        for exg in phrase_sense.find_all(class_='exg'):
-                            ex = exg.find(class_='ex')
-                            if ex:
+                    # Search in phrase_sense for examples and synonyms
+                    # Structure: phrase_sense > trg (def) + trg (examples/synonyms)
+
+                    # Inline examples (exg not inside .examples or .synonyms)
+                    ex_order = 0
+                    for exg in phrase_sense.find_all(class_='exg'):
+                        if exg.find_parent(class_='examples') or exg.find_parent(class_='synonyms'):
+                            continue
+                        ex = exg.find(class_='ex')
+                        if ex:
+                            ex_text = extract_example_text(ex)
+                            if ex_text:
+                                phrase_entry['examples'].append({
+                                    'text': ex_text,
+                                    'sort_order': ex_order
+                                })
+                                ex_order += 1
+
+                    # Expanded examples (inside div.examples)
+                    examples_div = phrase_sense.find(class_='examples')
+                    if examples_div:
+                        for exg in examples_div.find_all(class_='exg'):
+                            for ex in exg.find_all(class_='ex'):
                                 ex_text = extract_example_text(ex)
                                 if ex_text:
-                                    examples.append({
-                                        'text': ex_text,
-                                        'sort_order': ex_order
-                                    })
-                                    ex_order += 1
+                                    phrase_entry['expanded_examples'].append(ex_text)
 
-                        if definition:
-                            phrases_data.append({
-                                'phrase': phrase_text,
-                                'definition': definition,
-                                'examples': examples
-                            })
+                    # Synonyms
+                    synonyms_div = phrase_sense.find(class_='synonyms')
+                    if synonyms_div:
+                        synonyms_data = self._parse_synonyms(synonyms_div)
+                        if synonyms_data:
+                            phrase_entry['synonyms'] = synonyms_data
+
+                    # Clean up empty fields
+                    if not phrase_entry['expanded_examples']:
+                        del phrase_entry['expanded_examples']
+                    if not phrase_entry['synonyms']:
+                        del phrase_entry['synonyms']
+
+                    if phrase_entry['definition']:
+                        phrases_data.append(phrase_entry)
 
         if phrases_data:
-            entry['attributes']['phrases'] = phrases_data
+            entry['attributes'][attr_key] = phrases_data
 
-    def _parse_etymology(self, soup, entry):
-        """Parse etymology/origin information."""
-        # Look for etym section with Origin header
-        for etym in soup.find_all(class_='etym'):
-            h3 = etym.find('h3')
-            if h3 and 'Origin' in h3.get_text():
-                # Found origin section
-                inner = etym.find(class_='senseInnerWrapper')
-                if inner:
-                    # Get main origin text (first <p> tag, excluding appendix)
-                    main_p = inner.find('p', recursive=False)
-                    main_origin = ''
-                    if main_p:
-                        main_origin = clean_text(main_p.get_text())
+    def _handle_usage(self, inner, entry):
+        """Handle usage section content.
 
-                    # Try to find origin_appendix for additional info
-                    appendix = inner.find(class_='origin_appendix')
-                    appendix_text = ''
-                    if appendix:
-                        # Get text from the <p> inside appendix
-                        appendix_p = appendix.find('p')
-                        if appendix_p:
-                            appendix_text = clean_text(appendix_p.get_text())
+        Structure: div.usage_note > span.editorial_note
+        """
+        usage_note = inner.find(class_='usage_note')
+        if usage_note:
+            editorial_note = usage_note.find(class_='editorial_note')
+            if editorial_note:
+                usage_text = clean_text(editorial_note.get_text())
+                if usage_text:
+                    entry['attributes']['usage'] = usage_text
 
-                    if main_origin:
-                        entry['attributes']['origin'] = {
-                            'text': main_origin,
-                            'appendix': appendix_text
-                        }
-                    break
+    def _handle_origin(self, inner, entry):
+        """Handle origin section content.
 
-    def _parse_derivatives(self, soup, entry):
-        """Parse derivatives section.
+        Structure: p (main text) + ul.origin_appendix > li > p (appendix)
+        """
+        main_p = inner.find('p', recursive=False)
+        main_origin = ''
+        if main_p:
+            main_origin = clean_text(main_p.get_text())
 
-        ODE derivative structure:
-        section.etymology.derivative > senseInnerWrapper > ul.semb.gramb >
+        appendix = inner.find(class_='origin_appendix')
+        appendix_text = ''
+        if appendix:
+            appendix_p = appendix.find('p')
+            if appendix_p:
+                appendix_text = clean_text(appendix_p.get_text())
+
+        if main_origin:
+            entry['attributes']['origin'] = {
+                'text': main_origin,
+                'appendix': appendix_text
+            }
+
+    def _handle_derivatives(self, inner, entry):
+        """Handle derivatives section content.
+
+        Structure: ul.semb.gramb >
           li.derivative_sense (contains strong.derivative = headword)
           div.grambhead (contains pos, pronunciation)
           ul.semb > li (contains definition and examples)
         """
         derivatives_data = []
 
-        # Find derivative sections (section.etymology.derivative)
-        for section in soup.find_all('section', class_='etymology'):
-            classes = section.get('class', [])
-            if 'derivative' not in classes:
-                continue
+        # Find the main semb container
+        main_semb = inner.find('ul', class_='semb')
+        if not main_semb:
+            return
 
-            inner = section.find(class_='senseInnerWrapper')
-            if not inner:
-                continue
+        # Process derivative entries - each derivative_sense followed by grambhead and definition semb
+        deriv_senses = main_semb.find_all('li', class_='derivative_sense', recursive=False)
 
-            # Find the main semb container
-            main_semb = inner.find('ul', class_='semb')
-            if not main_semb:
-                continue
+        for deriv_sense in deriv_senses:
+            deriv_entry = {}
 
-            # Process derivative entries - each derivative_sense followed by grambhead and definition semb
-            deriv_senses = main_semb.find_all('li', class_='derivative_sense', recursive=False)
+            # Get headword from strong.derivative
+            deriv_strong = deriv_sense.find('strong', class_='derivative')
+            if deriv_strong:
+                deriv_entry['headword'] = clean_text(deriv_strong.get_text())
 
-            for deriv_sense in deriv_senses:
-                deriv_entry = {}
+            # Get grambhead (next sibling after derivative_sense)
+            grambhead = deriv_sense.find_next_sibling('div', class_='grambhead')
+            if grambhead:
+                # Get POS
+                pos_elem = grambhead.find(class_='pos')
+                if pos_elem:
+                    deriv_entry['pos'] = clean_text(pos_elem.get_text())
 
-                # Get headword from strong.derivative
-                deriv_strong = deriv_sense.find('strong', class_='derivative')
-                if deriv_strong:
-                    deriv_entry['headword'] = clean_text(deriv_strong.get_text())
+                # Get pronunciation
+                pron = grambhead.find(class_='phoneticSymbol')
+                if pron:
+                    deriv_entry['ipa'] = clean_text(pron.get_text())
 
-                # Get grambhead (next sibling after derivative_sense)
-                grambhead = deriv_sense.find_next_sibling('div', class_='grambhead')
-                if grambhead:
-                    # Get POS
-                    pos_elem = grambhead.find(class_='pos')
-                    if pos_elem:
-                        deriv_entry['pos'] = clean_text(pos_elem.get_text())
+            # Get definition from nested ul.semb
+            def_semb = deriv_sense.find_next_sibling('ul', class_='semb')
+            if def_semb:
+                # Find definition in ind
+                ind = def_semb.find(class_='ind')
+                if ind:
+                    deriv_entry['definition'] = clean_text(ind.get_text())
 
-                    # Get pronunciation
-                    pron = grambhead.find(class_='phoneticSymbol')
-                    if pron:
-                        deriv_entry['ipa'] = clean_text(pron.get_text())
+                # Get inline examples (direct exg > ex, not inside .examples)
+                examples = []
+                for exg in def_semb.find_all('div', class_='exg', recursive=True):
+                    # Skip if this exg is inside .examples (those are expanded examples)
+                    if exg.find_parent(class_='examples'):
+                        continue
+                    ex = exg.find(class_='ex')
+                    if ex:
+                        ex_text = extract_example_text(ex)
+                        if ex_text:
+                            examples.append(ex_text)
+                if examples:
+                    deriv_entry['examples'] = examples
 
-                # Get definition from nested ul.semb
-                def_semb = deriv_sense.find_next_sibling('ul', class_='semb')
-                if def_semb:
-                    # Find definition in ind
-                    ind = def_semb.find(class_='ind')
-                    if ind:
-                        deriv_entry['definition'] = clean_text(ind.get_text())
-
-                    # Get inline examples (direct exg > ex, not inside .examples)
-                    examples = []
-                    for exg in def_semb.find_all('div', class_='exg', recursive=True):
-                        # Skip if this exg is inside .examples (those are expanded examples)
-                        if exg.find_parent(class_='examples'):
-                            continue
-                        ex = exg.find(class_='ex')
-                        if ex:
-                            ex_text = extract_example_text(ex)
+                # Get expanded examples (inside .examples > .exg > ul > li.ex)
+                expanded_examples = []
+                examples_div = def_semb.find(class_='examples')
+                if examples_div:
+                    exg = examples_div.find(class_='exg')
+                    if exg:
+                        for li in exg.find_all('li', class_='ex'):
+                            ex_text = extract_example_text(li)
                             if ex_text:
-                                examples.append(ex_text)
-                    if examples:
-                        deriv_entry['examples'] = examples
+                                expanded_examples.append(ex_text)
+                if expanded_examples:
+                    deriv_entry['expanded_examples'] = expanded_examples
 
-                    # Get expanded examples (inside .examples > .exg > ul > li.ex)
-                    expanded_examples = []
-                    examples_div = def_semb.find(class_='examples')
-                    if examples_div:
-                        exg = examples_div.find(class_='exg')
-                        if exg:
-                            for li in exg.find_all('li', class_='ex'):
-                                ex_text = extract_example_text(li)
-                                if ex_text:
-                                    expanded_examples.append(ex_text)
-                    if expanded_examples:
-                        deriv_entry['expanded_examples'] = expanded_examples
-
-                if deriv_entry.get('headword'):
-                    derivatives_data.append(deriv_entry)
+            if deriv_entry.get('headword'):
+                derivatives_data.append(deriv_entry)
 
         if derivatives_data:
             entry['attributes']['derivatives'] = derivatives_data
