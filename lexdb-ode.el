@@ -209,20 +209,14 @@
 ;;;; ============================================================
 
 (defun lexdb-ode--lookup (word)
-  "Look up WORD in ODE database."
+  "Look up WORD in ODE database (exact match only)."
   (let* ((db (lexdb-ode--ensure-db))
          (word-lower (downcase word))
-         ;; First try exact match
+         ;; Exact match only - no fuzzy/prefix matching to avoid confusion
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
                  FROM entries WHERE headword_lower = ? AND dict_id = 'ode'"
                 (list word-lower))))
-    ;; If no results, try fuzzy match
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ode' LIMIT 20"
-                  (list (concat word-lower "%")))))
     (mapcar #'lexdb-ode--row-to-entry rows)))
 
 (defun lexdb-ode--get-phrases (entry-id)
