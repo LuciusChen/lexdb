@@ -183,9 +183,8 @@ class ODEParser:
                     'audio_path': audio_path
                 })
 
-        # === Main grammar section (gramb) ===
-        gramb = soup.find(class_='gramb')
-        if gramb:
+        # === Main grammar sections (gramb) - may have multiple (adjective, noun, etc.) ===
+        for gramb in soup.find_all(class_='gramb'):
             self._parse_senses(gramb, entry)
 
         # === Phrases section ===
@@ -329,6 +328,12 @@ class ODEParser:
             if synonyms_data:
                 sense_data['synonyms'] = synonyms_data
 
+        # Cross references (e.g., "Contrasted with universal")
+        for xref_div in trg.find_all(class_='crossReference', recursive=False):
+            xref_data = self._parse_cross_reference(xref_div)
+            if xref_data:
+                sense_data['cross_refs'].append(xref_data)
+
         return sense_data if sense_data['definition'] else None
 
     def _parse_synonyms(self, synonyms_div):
@@ -373,6 +378,58 @@ class ODEParser:
                 synonyms_groups.append(group)
 
         return synonyms_groups if synonyms_groups else None
+
+    def _parse_cross_reference(self, xref_div):
+        """Parse a crossReference element.
+
+        Returns a dict with:
+        - type: RelationType.CROSS_REF
+        - prefix: text before the link (e.g., "Contrasted with ")
+        - clickable: the link text (e.g., "universal")
+        - target_word: the target word from href
+        - suffix: text after the link
+        """
+        if not xref_div:
+            return None
+
+        # Get the full text and find the link
+        link = xref_div.find('a')
+        if not link:
+            # No clickable link, just text - skip empty crossReferences
+            text = clean_text(xref_div.get_text())
+            if text:
+                return {
+                    'type': RelationType.CROSS_REF,
+                    'prefix': text,
+                    'clickable': '',
+                    'target_word': '',
+                    'suffix': ''
+                }
+            return None
+
+        # Parse the link
+        link_text = clean_text(link.get_text())
+        href = link.get('href', '')
+
+        # Extract target word from href (e.g., "entry://universal" -> "universal")
+        target_word = ''
+        if href.startswith('entry://'):
+            target_word = href[8:]  # Remove "entry://"
+
+        # Get text before and after the link
+        full_text = xref_div.get_text()
+        link_pos = full_text.find(link.get_text())
+
+        prefix = clean_text(full_text[:link_pos]) if link_pos > 0 else ''
+        suffix = clean_text(full_text[link_pos + len(link.get_text()):]) if link_pos >= 0 else ''
+
+        return {
+            'type': RelationType.CROSS_REF,
+            'prefix': prefix,
+            'clickable': link_text,
+            'target_word': target_word or link_text,
+            'suffix': suffix
+        }
 
     def _parse_subsense(self, subsense, sort_order):
         """Parse a subsense element."""
@@ -470,49 +527,93 @@ class ODEParser:
             if synonyms_data:
                 sense_data['synonyms'] = synonyms_data
 
+        # Cross references (e.g., "Contrasted with universal")
+        xref_container = trg if trg else subsense
+        for xref_div in xref_container.find_all(class_='crossReference'):
+            xref_data = self._parse_cross_reference(xref_div)
+            if xref_data:
+                sense_data['cross_refs'].append(xref_data)
+
         return sense_data if sense_data['definition'] else None
 
     def _parse_phrases(self, soup, entry):
-        """Parse phrases from the entry."""
-        # Find phrases section (usually in etym section with h3.phrases-title)
+        """Parse phrases from the entry.
+
+        ODE phrase structure:
+        section.etymology.phrase > senseInnerWrapper > ul.semb.gramb >
+          li (contains div.trg > p > span.ind > strong.phrase)
+          ul.semb >
+            li.phrase_sense (contains definition and examples)
+        """
         phrases_data = []
 
-        # Look for phrase elements
-        for phrase_elem in soup.find_all(class_='phrase'):
-            phrase_text = clean_text(phrase_elem.get_text())
-            if not phrase_text or phrase_text.startswith('Phrases'):
+        # Find phrase sections
+        for section in soup.find_all('section', class_='etymology'):
+            classes = section.get('class', [])
+            if 'phrase' not in classes:
                 continue
 
-            # Find associated phrase_sense
-            parent = phrase_elem.find_parent()
-            if parent:
-                phrase_sense = parent.find(class_='phrase_sense')
-                if phrase_sense:
-                    definition = ''
-                    ind = phrase_sense.find(class_='ind')
-                    if ind:
-                        definition = clean_text(ind.get_text())
+            inner = section.find(class_='senseInnerWrapper')
+            if not inner:
+                continue
 
-                    # Get examples
-                    examples = []
-                    ex_order = 0
-                    for exg in phrase_sense.find_all(class_='exg'):
-                        ex = exg.find(class_='ex')
-                        if ex:
-                            ex_text = extract_example_text(ex)
-                            if ex_text:
-                                examples.append({
-                                    'text': ex_text,
-                                    'sort_order': ex_order
-                                })
-                                ex_order += 1
+            # Find all semb containers
+            semb = inner.find(class_='semb')
+            if not semb:
+                continue
 
-                    if definition:
-                        phrases_data.append({
-                            'phrase': phrase_text,
-                            'definition': definition,
-                            'examples': examples
-                        })
+            # Process each phrase entry
+            for li in semb.find_all('li', recursive=False):
+                # Find phrase text in ind > strong.phrase
+                trg = li.find(class_='trg')
+                if not trg:
+                    continue
+
+                ind = trg.find(class_='ind')
+                if not ind:
+                    continue
+
+                phrase_strong = ind.find(class_='phrase')
+                if not phrase_strong:
+                    continue
+
+                phrase_text = clean_text(phrase_strong.get_text())
+                if not phrase_text:
+                    continue
+
+                # Find nested ul.semb with phrase_sense
+                nested_semb = li.find_next_sibling('ul', class_='semb')
+                if not nested_semb:
+                    # Try finding as child
+                    nested_semb = li.find('ul', class_='semb')
+
+                if nested_semb:
+                    for phrase_sense in nested_semb.find_all(class_='phrase_sense'):
+                        definition = ''
+                        ps_ind = phrase_sense.find(class_='ind')
+                        if ps_ind:
+                            definition = clean_text(ps_ind.get_text())
+
+                        # Get examples
+                        examples = []
+                        ex_order = 0
+                        for exg in phrase_sense.find_all(class_='exg'):
+                            ex = exg.find(class_='ex')
+                            if ex:
+                                ex_text = extract_example_text(ex)
+                                if ex_text:
+                                    examples.append({
+                                        'text': ex_text,
+                                        'sort_order': ex_order
+                                    })
+                                    ex_order += 1
+
+                        if definition:
+                            phrases_data.append({
+                                'phrase': phrase_text,
+                                'definition': definition,
+                                'examples': examples
+                            })
 
         if phrases_data:
             entry['attributes']['phrases'] = phrases_data

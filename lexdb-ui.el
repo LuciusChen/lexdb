@@ -1299,8 +1299,13 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
         (dolist (label labels)
           (let ((ltype (lexdb-label-type label))
                 (lvalue (lexdb-label-value label)))
-            (when (and lvalue (member ltype '(register geo domain)))
-              (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
+            (cond
+             ;; Grammar labels for ODE: format as [ATTRIBUTIVE]
+             ((and lvalue (eq ltype 'grammar) (eq (lexdb-adapter-id adapter) 'ode))
+              (insert (propertize (format "[%s]" (upcase lvalue)) 'face 'lexdb-grammar-face) " "))
+             ;; Register, geo, domain labels
+             ((and lvalue (member ltype '(register geo domain)))
+              (insert (propertize lvalue 'face 'lexdb-register-face) " ")))))))
     ;; OALD plural forms (e.g., "(pl manifestos or manifestoes)") - before definition
     ;; Uses <<l>>...<</l>> for plural words (blue), <<gram>>...<</gram>> for "pl" (gray)
     ;; Default face is definition-face so "or" and parentheses are plain text
@@ -2204,6 +2209,26 @@ ADAPTER-ID is used for intra-dictionary jumps."
                                   'face 'lexdb-phrase-face) "\n"))
     (buffer-string)))
 
+(defun lexdb-ui--build-ode-phrases-content (phrases)
+  "Build content string for ODE PHRASES tab.
+PHRASES is a list of alists with 'phrase', 'definition', and 'examples' keys."
+  (with-temp-buffer
+    (let ((phrase-list (if (vectorp phrases) (append phrases nil) phrases)))
+      (dolist (phrase phrase-list)
+        (let ((phrase-text (cdr (assoc 'phrase phrase)))
+              (definition (cdr (assoc 'definition phrase)))
+              (examples (cdr (assoc 'examples phrase))))
+          (when phrase-text
+            (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
+            (when (lexdb--non-empty-string-p definition)
+              (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
+            (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
+              (dolist (ex ex-list)
+                (let ((ex-text (cdr (assoc 'text ex))))
+                  (when (lexdb--non-empty-string-p ex-text)
+                    (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n")))))))))
+    (buffer-string)))
+
 (defun lexdb-ui--build-entry-menu-content (entry-menu)
   "Build content string for ENTRY MENU tab.
 ENTRY-MENU is a list of sections with header and menu items."
@@ -2488,10 +2513,21 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
               tabs)))
     ;; WORD ORIGIN tab
     (when (lexdb-adapter-has-capability-p adapter 'origin)
-      (let ((origin (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin_full")))
-        (when (lexdb--non-empty-string-p origin)
+      (let* ((origin-full (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin_full"))
+             ;; ODE stores origin as alist with 'text' and 'appendix' keys
+             (origin-alist (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin"))
+             (origin-text (cond
+                           (origin-full origin-full)
+                           ((and origin-alist (listp origin-alist))
+                            (let ((text (cdr (assoc 'text origin-alist)))
+                                  (appendix (cdr (assoc 'appendix origin-alist))))
+                              (if (and appendix (not (string-empty-p appendix)))
+                                  (concat text " " appendix)
+                                text)))
+                           (t nil))))
+        (when (lexdb--non-empty-string-p origin-text)
           (push (list 'origin "WORD ORIGIN"
-                      (concat "  " (propertize origin 'face 'lexdb-origin-face) "\n"))
+                      (concat "  " (propertize origin-text 'face 'lexdb-origin-face) "\n"))
                 tabs))))
     ;; VERB TABLE tab
     (let ((verb-table (lexdb-meta-get (lexdb-entry-metadata entry) ns "verb_table")))
@@ -2525,11 +2561,18 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
           (when (not (string-empty-p content))
             (push (list 'collocations "COLLOCATIONS" content) tabs)))))
     ;; PHRASES tab
-    (let ((popup-phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "popup_phrases")))
-      (when (and popup-phrases (> (length popup-phrases) 0))
+    (let ((popup-phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "popup_phrases"))
+          ;; ODE stores phrases differently
+          (ode-phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases")))
+      (cond
+       ((and popup-phrases (> (length popup-phrases) 0))
         (push (list 'phrases "PHRASES"
                     (lexdb-ui--build-popup-phrases-content popup-phrases))
-              tabs)))
+              tabs))
+       ((and ode-phrases (> (length ode-phrases) 0))
+        (push (list 'phrases "PHRASES"
+                    (lexdb-ui--build-ode-phrases-content ode-phrases))
+              tabs))))
     ;; WORD FAMILY tab
     (let ((word-family (lexdb-meta-get (lexdb-entry-metadata entry) ns "word_family")))
       (when (and word-family (> (length word-family) 0))
