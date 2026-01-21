@@ -874,6 +874,8 @@ TABS is a list of (id label content) tuples."
     (dolist (tab tabs)
       (let* ((tab-id (nth 0 tab))
              (content (nth 2 tab))
+             ;; Optional 4th element: background face for special sections
+             (bg-face (nth 3 tab))
              (start (point)))
         (insert content)
         (unless (eq (char-before) ?\n) (insert "\n"))
@@ -882,7 +884,10 @@ TABS is a list of (id label content) tuples."
           (overlay-put content-ov 'lexdb-tab-id tab-id)
           (overlay-put content-ov 'lexdb-tab-content t)  ; Mark as tab content
           (overlay-put content-ov 'invisible t)
-          (overlay-put content-ov 'evaporate t))))
+          (overlay-put content-ov 'evaporate t)
+          ;; Apply optional background face for special tabs like Phrases/Origin
+          (when bg-face
+            (overlay-put content-ov 'face bg-face)))))
     (insert "\n")))
 
 ;;;; ============================================================
@@ -1833,7 +1838,10 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                   tabs)))
         ;; Insert tab bar if we have any tabs (with indentation)
         (when tabs
-          (insert "  ")  ; Indent tab bar
+          ;; Extra indent for subsenses (sense numbers containing ".")
+          (if (string-match-p "\\." ode-sense-num)
+              (insert "    ")  ; Subsense indent (4 spaces)
+            (insert "  "))     ; Main sense indent (2 spaces)
           (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) ode-sense-num)))
             (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))))
 
@@ -2533,10 +2541,14 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                               (if (and appendix (not (string-empty-p appendix)))
                                   (concat text " " appendix)
                                 text)))
-                           (t nil))))
+                           (t nil)))
+             ;; ODE gets background overlay like grammar boxes
+             (bg-face (when (eq (lexdb-adapter-id adapter) 'ode)
+                        'lexdb-grambox-background-face)))
         (when (lexdb--non-empty-string-p origin-text)
           (push (list 'origin "WORD ORIGIN"
-                      (concat "  " (propertize origin-text 'face 'lexdb-origin-face) "\n"))
+                      (concat "  " (propertize origin-text 'face 'lexdb-origin-face) "\n")
+                      bg-face)
                 tabs))))
     ;; VERB TABLE tab
     (let ((verb-table (lexdb-meta-get (lexdb-entry-metadata entry) ns "verb_table")))
@@ -2580,7 +2592,8 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
               tabs))
        ((and ode-phrases (> (length ode-phrases) 0))
         (push (list 'phrases "PHRASES"
-                    (lexdb-ui--build-ode-phrases-content ode-phrases))
+                    (lexdb-ui--build-ode-phrases-content ode-phrases)
+                    'lexdb-grambox-background-face)  ; ODE Phrases get background
               tabs))))
     ;; WORD FAMILY tab
     (let ((word-family (lexdb-meta-get (lexdb-entry-metadata entry) ns "word_family")))

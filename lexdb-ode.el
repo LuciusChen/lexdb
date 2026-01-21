@@ -86,7 +86,8 @@
           (zlib-decompress-region (point-min) (point-max))
           (decode-coding-region (point-min) (point-max) 'utf-8)
           (goto-char (point-min))
-          (json-parse-buffer :object-type 'alist))
+          ;; Use json-read for symbol keys (compatible with UI code)
+          (json-read))
       (error nil))))
 
 (defun lexdb-ode--row-to-sense (sense-row db)
@@ -186,7 +187,8 @@
                                     (lexdb-ode--decompress-json value))
                                    ((equal type "json")
                                     (condition-case nil
-                                        (json-parse-string value :object-type 'alist)
+                                        ;; Use json-read-from-string for symbol keys
+                                        (json-read-from-string value)
                                       (error value)))
                                    ((equal type "integer")
                                     (string-to-number value))

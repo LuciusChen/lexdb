@@ -438,6 +438,9 @@ class ODEParser:
         link_pos = full_text.find(link.get_text())
 
         prefix = clean_text(full_text[:link_pos]) if link_pos > 0 else ''
+        # Add trailing space to prefix if original had whitespace before the link
+        if prefix and link_pos > 0 and full_text[link_pos - 1].isspace():
+            prefix = prefix + ' '
         suffix = clean_text(full_text[link_pos + len(link.get_text()):]) if link_pos >= 0 else ''
 
         return {
