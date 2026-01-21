@@ -4,7 +4,7 @@
 MDX/MDD Dictionary to LexDB SQLite Database Converter (LDOCE)
 
 Supports multiple dictionaries in a single database using EAV pattern for extensibility.
-Uses unified schema from lexdb_schema module.
+Uses unified schema from lexdb_common module.
 """
 
 import sqlite3
@@ -31,8 +31,8 @@ except ImportError:
     HTML_PARSER = 'html.parser'
     print("Note: Install lxml for faster parsing: pip install lxml")
 
-# Import unified schema module
-from lexdb_schema import (
+# Import unified common module
+from lexdb_common import (
     SCHEMA_SQL,
     SCHEMA_VERSION,
     init_database,

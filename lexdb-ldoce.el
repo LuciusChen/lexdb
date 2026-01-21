@@ -364,32 +364,9 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
 ;;;; Lemmatization
 ;;;; ============================================================
 
-(defun lexdb-ldoce--try-lemma (word suffix replacement)
-  "Try removing SUFFIX from WORD and adding REPLACEMENT."
-  (when (and (> (length word) (length suffix)) (string-suffix-p suffix word))
-    (let ((candidate (concat (substring word 0 (- (length word) (length suffix))) replacement)))
-      (when (and (> (length candidate) 1) (lexdb-ldoce--lookup candidate)) candidate))))
-
 (defun lexdb-ldoce--find-lemma (word)
-  "Find base form of WORD."
-  (let ((w (downcase word)))
-    (if (lexdb-ldoce--lookup w) w
-      (or (lexdb-ldoce--try-lemma w "ing" "") (lexdb-ldoce--try-lemma w "ing" "e")
-          (lexdb-ldoce--try-lemma w "ning" "n") (lexdb-ldoce--try-lemma w "ting" "t")
-          (lexdb-ldoce--try-lemma w "ping" "p") (lexdb-ldoce--try-lemma w "bing" "b")
-          (lexdb-ldoce--try-lemma w "ging" "g") (lexdb-ldoce--try-lemma w "ming" "m")
-          (lexdb-ldoce--try-lemma w "ding" "d") (lexdb-ldoce--try-lemma w "ed" "")
-          (lexdb-ldoce--try-lemma w "ed" "e") (lexdb-ldoce--try-lemma w "ied" "y")
-          (lexdb-ldoce--try-lemma w "ned" "n") (lexdb-ldoce--try-lemma w "ted" "t")
-          (lexdb-ldoce--try-lemma w "ped" "p") (lexdb-ldoce--try-lemma w "bed" "b")
-          (lexdb-ldoce--try-lemma w "ged" "g") (lexdb-ldoce--try-lemma w "med" "m")
-          (lexdb-ldoce--try-lemma w "ded" "d") (lexdb-ldoce--try-lemma w "s" "")
-          (lexdb-ldoce--try-lemma w "es" "") (lexdb-ldoce--try-lemma w "ies" "y")
-          (lexdb-ldoce--try-lemma w "er" "") (lexdb-ldoce--try-lemma w "er" "e")
-          (lexdb-ldoce--try-lemma w "ier" "y") (lexdb-ldoce--try-lemma w "est" "")
-          (lexdb-ldoce--try-lemma w "est" "e") (lexdb-ldoce--try-lemma w "iest" "y")
-          (lexdb-ldoce--try-lemma w "ly" "") (lexdb-ldoce--try-lemma w "ily" "y")
-          (lexdb-ldoce--try-lemma w "'s" "") w))))
+  "Find base form of WORD using common lemmatization rules."
+  (lexdb--find-lemma-with-lookup word #'lexdb-ldoce--lookup))
 
 ;;;; ============================================================
 ;;;; Frequency Rendering

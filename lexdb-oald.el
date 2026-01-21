@@ -253,32 +253,9 @@
 ;;;; Lemmatization
 ;;;; ============================================================
 
-(defun lexdb-oald--try-lemma (word suffix replacement)
-  "Try removing SUFFIX from WORD and adding REPLACEMENT."
-  (when (and (> (length word) (length suffix)) (string-suffix-p suffix word))
-    (let ((candidate (concat (substring word 0 (- (length word) (length suffix))) replacement)))
-      (when (and (> (length candidate) 1) (lexdb-oald--lookup candidate)) candidate))))
-
 (defun lexdb-oald--find-lemma (word)
-  "Find base form of WORD."
-  (let ((w (downcase word)))
-    (if (lexdb-oald--lookup w) w
-      (or (lexdb-oald--try-lemma w "ing" "") (lexdb-oald--try-lemma w "ing" "e")
-          (lexdb-oald--try-lemma w "ning" "n") (lexdb-oald--try-lemma w "ting" "t")
-          (lexdb-oald--try-lemma w "ping" "p") (lexdb-oald--try-lemma w "bing" "b")
-          (lexdb-oald--try-lemma w "ging" "g") (lexdb-oald--try-lemma w "ming" "m")
-          (lexdb-oald--try-lemma w "ding" "d") (lexdb-oald--try-lemma w "ed" "")
-          (lexdb-oald--try-lemma w "ed" "e") (lexdb-oald--try-lemma w "ied" "y")
-          (lexdb-oald--try-lemma w "ned" "n") (lexdb-oald--try-lemma w "ted" "t")
-          (lexdb-oald--try-lemma w "ped" "p") (lexdb-oald--try-lemma w "bed" "b")
-          (lexdb-oald--try-lemma w "ged" "g") (lexdb-oald--try-lemma w "med" "m")
-          (lexdb-oald--try-lemma w "ded" "d") (lexdb-oald--try-lemma w "s" "")
-          (lexdb-oald--try-lemma w "es" "") (lexdb-oald--try-lemma w "ies" "y")
-          (lexdb-oald--try-lemma w "er" "") (lexdb-oald--try-lemma w "er" "e")
-          (lexdb-oald--try-lemma w "ier" "y") (lexdb-oald--try-lemma w "est" "")
-          (lexdb-oald--try-lemma w "est" "e") (lexdb-oald--try-lemma w "iest" "y")
-          (lexdb-oald--try-lemma w "ly" "") (lexdb-oald--try-lemma w "ily" "y")
-          (lexdb-oald--try-lemma w "'s" "") w))))
+  "Find base form of WORD using common lemmatization rules."
+  (lexdb--find-lemma-with-lookup word #'lexdb-oald--lookup))
 
 ;;;; ============================================================
 ;;;; Registration

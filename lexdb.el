@@ -229,6 +229,79 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
   (if (lexdb--non-empty-string-p s) s (or default "")))
 
 ;;;; ============================================================
+;;;; Common Lemmatization
+;;;; ============================================================
+
+(defconst lexdb-lemma-rules
+  '(;; -ing forms (progressive/gerund)
+    ("ing" . "")        ; running -> runn -> run
+    ("ing" . "e")       ; making -> mak -> make
+    ("ning" . "n")      ; running -> run
+    ("ting" . "t")      ; hitting -> hit
+    ("ping" . "p")      ; stopping -> stop
+    ("bing" . "b")      ; robbing -> rob
+    ("ging" . "g")      ; hugging -> hug
+    ("ming" . "m")      ; swimming -> swim
+    ("ding" . "d")      ; bidding -> bid
+
+    ;; -ed forms (past tense/past participle)
+    ("ed" . "")         ; walked -> walk
+    ("ed" . "e")        ; liked -> lik -> like
+    ("ied" . "y")       ; tried -> tri -> try
+    ("ned" . "n")       ; tanned -> tan
+    ("ted" . "t")       ; patted -> pat
+    ("ped" . "p")       ; stopped -> stop
+    ("bed" . "b")       ; robbed -> rob
+    ("ged" . "g")       ; hugged -> hug
+    ("med" . "m")       ; trimmed -> trim
+    ("ded" . "d")       ; padded -> pad
+
+    ;; Plural/third person singular
+    ("s" . "")          ; cats -> cat
+    ("es" . "")         ; boxes -> box
+    ("ies" . "y")       ; tries -> tr -> try
+
+    ;; Comparative/superlative
+    ("er" . "")         ; taller -> tall
+    ("er" . "e")        ; nicer -> nic -> nice
+    ("ier" . "y")       ; happier -> happi -> happy
+    ("est" . "")        ; tallest -> tall
+    ("est" . "e")       ; nicest -> nic -> nice
+    ("iest" . "y")      ; happiest -> happi -> happy
+
+    ;; Adverbs
+    ("ly" . "")         ; quickly -> quick
+    ("ily" . "y")       ; happily -> happ -> happy
+
+    ;; Possessive
+    ("'s" . ""))        ; John's -> John
+  "Common English lemmatization rules.
+Each element is (SUFFIX . REPLACEMENT) pair.")
+
+(defun lexdb--try-lemma (word suffix replacement lookup-fn)
+  "Try removing SUFFIX from WORD and adding REPLACEMENT.
+LOOKUP-FN is called to check if the candidate exists in dictionary.
+Returns the candidate if found, nil otherwise."
+  (when (and (> (length word) (length suffix))
+             (string-suffix-p suffix word))
+    (let ((candidate (concat (substring word 0 (- (length word) (length suffix)))
+                             replacement)))
+      (when (and (> (length candidate) 1)
+                 (funcall lookup-fn candidate))
+        candidate))))
+
+(defun lexdb--find-lemma-with-lookup (word lookup-fn)
+  "Find base form of WORD using LOOKUP-FN to check candidates.
+LOOKUP-FN should be a function that returns non-nil if a word exists.
+Returns the lemma if found, WORD otherwise."
+  (let ((w (downcase word)))
+    (if (funcall lookup-fn w)
+        w
+      (or (cl-loop for (suffix . replacement) in lexdb-lemma-rules
+                   thereis (lexdb--try-lemma w suffix replacement lookup-fn))
+          w))))
+
+;;;; ============================================================
 ;;;; Core Data Structures
 ;;;; ============================================================
 

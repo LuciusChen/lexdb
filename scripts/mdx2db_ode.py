@@ -4,7 +4,7 @@
 ODE (Oxford Dictionary of English) / OELD (Oxford English Living Dictionary) MDX to LexDB SQLite Converter
 
 Supports ODE Living Online and similar Oxford dictionary formats.
-Uses unified schema from lexdb_schema module for compatibility.
+Uses unified schema from lexdb_common module for compatibility.
 """
 
 import sqlite3
@@ -32,8 +32,8 @@ except ImportError:
     HTML_PARSER = 'html.parser'
     print("Note: Install lxml for faster parsing: pip install lxml")
 
-# Import unified schema module
-from lexdb_schema import (
+# Import unified common module
+from lexdb_common import (
     SCHEMA_SQL,
     SCHEMA_VERSION,
     init_database,
