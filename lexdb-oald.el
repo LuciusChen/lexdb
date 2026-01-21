@@ -60,28 +60,13 @@
 ;;;; Database Connection
 ;;;; ============================================================
 
-(defvar lexdb-oald--db nil
-  "Database connection for OALD.")
-
-(defvar lexdb-oald--cache (make-hash-table :test 'eql)
-  "Cache for prefetched data.")
-
 (defun lexdb-oald--ensure-db ()
   "Ensure database connection is open."
-  (unless lexdb-oald-db-file
-    (error "Please set `lexdb-oald-db-file'"))
-  (unless (file-exists-p lexdb-oald-db-file)
-    (error "Database file not found: %s" lexdb-oald-db-file))
-  (unless (and lexdb-oald--db (sqlitep lexdb-oald--db))
-    (setq lexdb-oald--db (sqlite-open lexdb-oald-db-file)))
-  lexdb-oald--db)
+  (lexdb-db-ensure 'oald lexdb-oald-db-file))
 
 (defun lexdb-oald--close ()
   "Close database connection and clear cache."
-  (when (and lexdb-oald--db (sqlitep lexdb-oald--db))
-    (sqlite-close lexdb-oald--db)
-    (setq lexdb-oald--db nil))
-  (clrhash lexdb-oald--cache))
+  (lexdb-db-close 'oald))
 
 ;;;; ============================================================
 ;;;; Schema Queries
@@ -133,31 +118,11 @@
          :labels labels
          :metadata meta)))))
 
-(defun lexdb-oald--build-pronunciations (entry-id db)
-  "Build pronunciations for ENTRY-ID from DB."
-  (let ((rows (sqlite-select db
-               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
-               (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (lexdb--non-empty-string-p ipa)
-                        (lexdb-pronunciation-create
-                         :ipa ipa
-                         :variant (when variant (intern variant))
-                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
-                  rows))))
+(defalias 'lexdb-oald--build-pronunciations #'lexdb--build-pronunciations-from-db
+  "Build pronunciations for ENTRY-ID from DB.")
 
-(defun lexdb-oald--decompress-json (compressed-data)
-  "Decompress COMPRESSED-DATA and parse as JSON."
-  (when (and compressed-data (not (string-empty-p compressed-data)))
-    (with-temp-buffer
-      (set-buffer-multibyte nil)
-      (insert compressed-data)
-      (zlib-decompress-region (point-min) (point-max))
-      (decode-coding-region (point-min) (point-max) 'utf-8)
-      (goto-char (point-min))
-      (json-parse-buffer :object-type 'alist))))
+(defalias 'lexdb-oald--decompress-json #'lexdb--decompress-json-value
+  "Decompress COMPRESSED-DATA and parse as JSON.")
 
 (defun lexdb-oald--row-to-entry (row)
   "Convert database ROW to lexdb-entry."
@@ -233,7 +198,7 @@
 
 (defun lexdb-oald--get-idioms (entry-id)
   "Get idioms for ENTRY-ID."
-  (or (gethash (cons entry-id 'idioms) lexdb-oald--cache)
+  (or (lexdb-db-cache-get 'oald (cons entry-id 'idioms))
       (let* ((db (lexdb-oald--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -246,8 +211,7 @@
                            (if (equal type "json_compressed")
                                (lexdb-oald--decompress-json value)
                              (json-parse-string value :object-type 'alist)))))))
-        (puthash (cons entry-id 'idioms) idioms lexdb-oald--cache)
-        idioms)))
+        (lexdb-db-cache-put 'oald (cons entry-id 'idioms) idioms))))
 
 ;;;; ============================================================
 ;;;; Lemmatization

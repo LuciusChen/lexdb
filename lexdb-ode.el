@@ -50,46 +50,20 @@
 ;;;; Database Connection
 ;;;; ============================================================
 
-(defvar lexdb-ode--db nil
-  "Database connection for ODE.")
-
-(defvar lexdb-ode--cache (make-hash-table :test 'eql)
-  "Cache for prefetched data.")
-
 (defun lexdb-ode--ensure-db ()
   "Ensure database connection is open."
-  (unless lexdb-ode-db-file
-    (error "Please set `lexdb-ode-db-file'"))
-  (unless (file-exists-p lexdb-ode-db-file)
-    (error "Database file not found: %s" lexdb-ode-db-file))
-  (unless (and lexdb-ode--db (sqlitep lexdb-ode--db))
-    (setq lexdb-ode--db (sqlite-open lexdb-ode-db-file)))
-  lexdb-ode--db)
+  (lexdb-db-ensure 'ode lexdb-ode-db-file))
 
 (defun lexdb-ode--close ()
   "Close database connection and clear cache."
-  (when (and lexdb-ode--db (sqlitep lexdb-ode--db))
-    (sqlite-close lexdb-ode--db)
-    (setq lexdb-ode--db nil))
-  (clrhash lexdb-ode--cache))
+  (lexdb-db-close 'ode))
 
 ;;;; ============================================================
 ;;;; Schema Queries
 ;;;; ============================================================
 
-(defun lexdb-ode--decompress-json (compressed-data)
-  "Decompress COMPRESSED-DATA and parse as JSON."
-  (when (and compressed-data (not (string-empty-p compressed-data)))
-    (condition-case nil
-        (let ((decompressed-str
-               (with-temp-buffer
-                 (set-buffer-multibyte nil)
-                 (insert compressed-data)
-                 (zlib-decompress-region (point-min) (point-max))
-                 (buffer-string))))
-          ;; Decode the unibyte string as UTF-8, then parse JSON
-          (json-read-from-string (decode-coding-string decompressed-str 'utf-8)))
-      (error nil))))
+(defalias 'lexdb-ode--decompress-json #'lexdb--decompress-json-value
+  "Decompress COMPRESSED-DATA and parse as JSON.")
 
 (defun lexdb-ode--row-to-sense (sense-row db)
   "Convert SENSE-ROW to lexdb-sense using DB connection."
@@ -143,20 +117,8 @@
        :labels labels
        :relations relations))))
 
-(defun lexdb-ode--build-pronunciations (entry-id db)
-  "Build pronunciations for ENTRY-ID from DB."
-  (let ((rows (sqlite-select db
-               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
-               (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (lexdb--non-empty-string-p ipa)
-                        (lexdb-pronunciation-create
-                         :ipa ipa
-                         :variant (when variant (intern variant))
-                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
-                  rows))))
+(defalias 'lexdb-ode--build-pronunciations #'lexdb--build-pronunciations-from-db
+  "Build pronunciations for ENTRY-ID from DB.")
 
 (defun lexdb-ode--row-to-entry (row)
   "Convert database ROW to lexdb-entry."
@@ -231,7 +193,7 @@ First tries exact match, then combining forms (-WORD), then prefix match."
 
 (defun lexdb-ode--get-phrases (entry-id)
   "Get phrases for ENTRY-ID."
-  (or (gethash (cons entry-id 'phrases) lexdb-ode--cache)
+  (or (lexdb-db-cache-get 'ode (cons entry-id 'phrases))
       (let* ((db (lexdb-ode--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -249,12 +211,11 @@ First tries exact match, then combining forms (-WORD), then prefix match."
                                   (json-parse-string value :object-type 'alist)
                                 (error nil)))
                              (t nil)))))))
-        (puthash (cons entry-id 'phrases) phrases lexdb-ode--cache)
-        phrases)))
+        (lexdb-db-cache-put 'ode (cons entry-id 'phrases) phrases))))
 
 (defun lexdb-ode--get-origin (entry-id)
   "Get etymology/origin for ENTRY-ID."
-  (or (gethash (cons entry-id 'origin) lexdb-ode--cache)
+  (or (lexdb-db-cache-get 'ode (cons entry-id 'origin))
       (let* ((db (lexdb-ode--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -272,8 +233,7 @@ First tries exact match, then combining forms (-WORD), then prefix match."
                                  (json-parse-string value :object-type 'alist)
                                (error nil)))
                             (t value)))))))
-        (puthash (cons entry-id 'origin) origin lexdb-ode--cache)
-        origin)))
+        (lexdb-db-cache-put 'ode (cons entry-id 'origin) origin))))
 
 ;;;; ============================================================
 ;;;; Lemmatization

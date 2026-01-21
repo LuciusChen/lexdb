@@ -229,6 +229,96 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
   (if (lexdb--non-empty-string-p s) s (or default "")))
 
 ;;;; ============================================================
+;;;; Generic Database Connection Module
+;;;; ============================================================
+
+(defvar lexdb--database-connections (make-hash-table :test 'eq)
+  "Hash table of database connections keyed by adapter ID.")
+
+(defvar lexdb--query-caches (make-hash-table :test 'eq)
+  "Hash table of query caches keyed by adapter ID.")
+
+(defun lexdb-db-ensure (adapter-id db-file)
+  "Ensure database connection for ADAPTER-ID using DB-FILE.
+Returns the database connection."
+  (unless db-file
+    (error "No database file configured for %s" adapter-id))
+  (unless (file-exists-p db-file)
+    (error "Database file not found: %s" db-file))
+  (let ((db (gethash adapter-id lexdb--database-connections)))
+    (unless (and db (sqlitep db))
+      (setq db (sqlite-open db-file))
+      (puthash adapter-id db lexdb--database-connections)
+      ;; Initialize cache for this adapter if needed
+      (unless (gethash adapter-id lexdb--query-caches)
+        (puthash adapter-id (make-hash-table :test 'eql) lexdb--query-caches)))
+    db))
+
+(defun lexdb-db-get (adapter-id)
+  "Get database connection for ADAPTER-ID.
+Returns nil if not connected."
+  (gethash adapter-id lexdb--database-connections))
+
+(defun lexdb-db-close (adapter-id)
+  "Close database connection and clear cache for ADAPTER-ID."
+  (when-let* ((db (gethash adapter-id lexdb--database-connections)))
+    (when (sqlitep db)
+      (sqlite-close db))
+    (remhash adapter-id lexdb--database-connections))
+  (when-let* ((cache (gethash adapter-id lexdb--query-caches)))
+    (clrhash cache)))
+
+(defun lexdb-db-cache-get (adapter-id key)
+  "Get VALUE for KEY from ADAPTER-ID's cache."
+  (when-let* ((cache (gethash adapter-id lexdb--query-caches)))
+    (gethash key cache)))
+
+(defun lexdb-db-cache-put (adapter-id key value)
+  "Store VALUE for KEY in ADAPTER-ID's cache."
+  (let ((cache (or (gethash adapter-id lexdb--query-caches)
+                   (let ((new-cache (make-hash-table :test 'eql)))
+                     (puthash adapter-id new-cache lexdb--query-caches)
+                     new-cache))))
+    (puthash key value cache)
+    value))
+
+;;;; ============================================================
+;;;; Shared Data Processing Functions
+;;;; ============================================================
+
+(defun lexdb--decompress-json-value (compressed-data)
+  "Decompress zlib-compressed JSON COMPRESSED-DATA and parse it.
+Returns nil on error or if data is empty."
+  (when (and compressed-data (not (string-empty-p compressed-data)))
+    (condition-case nil
+        (let ((decompressed
+               (with-temp-buffer
+                 (set-buffer-multibyte nil)
+                 (insert compressed-data)
+                 (zlib-decompress-region (point-min) (point-max))
+                 (buffer-string))))
+          (json-read-from-string (decode-coding-string decompressed 'utf-8)))
+      (error nil))))
+
+(defun lexdb--build-pronunciations-from-db (entry-id db)
+  "Build pronunciation list for ENTRY-ID from DB.
+Uses standard pronunciations table schema.
+Returns pronunciations that have either IPA or audio path."
+  (let ((rows (sqlite-select db
+               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
+               (list entry-id))))
+    (delq nil
+          (mapcar (lambda (row)
+                    (pcase-let ((`(,variant ,ipa ,audio) row))
+                      (when (or (lexdb--non-empty-string-p ipa)
+                                (lexdb--non-empty-string-p audio))
+                        (lexdb-pronunciation-create
+                         :ipa ipa
+                         :variant (when variant (intern variant))
+                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
+                  rows))))
+
+;;;; ============================================================
 ;;;; Common Lemmatization
 ;;;; ============================================================
 

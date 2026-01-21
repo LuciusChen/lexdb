@@ -62,28 +62,13 @@
 ;;;; Database Connection
 ;;;; ============================================================
 
-(defvar lexdb-ldoce--db nil
-  "Database connection for LDOCE.")
-
-(defvar lexdb-ldoce--cache (make-hash-table :test 'eql)
-  "Cache for prefetched data.")
-
 (defun lexdb-ldoce--ensure-db ()
   "Ensure database connection is open."
-  (unless lexdb-ldoce-db-file
-    (error "Please set `lexdb-ldoce-db-file'"))
-  (unless (file-exists-p lexdb-ldoce-db-file)
-    (error "Database file not found: %s" lexdb-ldoce-db-file))
-  (unless (and lexdb-ldoce--db (sqlitep lexdb-ldoce--db))
-    (setq lexdb-ldoce--db (sqlite-open lexdb-ldoce-db-file)))
-  lexdb-ldoce--db)
+  (lexdb-db-ensure 'ldoce lexdb-ldoce-db-file))
 
 (defun lexdb-ldoce--close ()
   "Close database connection and clear cache."
-  (when (and lexdb-ldoce--db (sqlitep lexdb-ldoce--db))
-    (sqlite-close lexdb-ldoce--db)
-    (setq lexdb-ldoce--db nil))
-  (clrhash lexdb-ldoce--cache))
+  (lexdb-db-close 'ldoce))
 
 ;;;; ============================================================
 ;;;; Schema V2 (New LexDB Schema)
@@ -141,21 +126,8 @@
                                      ex-rows)))))
             rows)))
 
-(defun lexdb-ldoce--v2-build-pronunciations (entry-id db)
-  "Build pronunciations for ENTRY-ID from V2 schema."
-  (let ((rows (sqlite-select db
-               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
-               (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (or (lexdb--non-empty-string-p ipa)
-                                (lexdb--non-empty-string-p audio))
-                        (lexdb-pronunciation-create
-                         :ipa ipa
-                         :variant (when variant (intern variant))
-                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
-                  rows))))
+(defalias 'lexdb-ldoce--v2-build-pronunciations #'lexdb--build-pronunciations-from-db
+  "Build pronunciations for ENTRY-ID from V2 schema.")
 
 (defun lexdb-ldoce--v2-fetch-relations (entry-id db)
   "Fetch entry-level relations for ENTRY-ID from V2 schema.
@@ -200,15 +172,8 @@ Uses fragment storage format: prefix + clickable + suffix."
                          :target (concat (or prefix "") clickable (or suffix ""))))))
                   rows))))
 
-(defun lexdb-ldoce--decompress-json (compressed-data)
-  "Decompress zlib-compressed JSON data."
-  (let ((decompressed
-         (with-temp-buffer
-           (set-buffer-multibyte nil)
-           (insert compressed-data)
-           (zlib-decompress-region (point-min) (point-max))
-           (buffer-string))))
-    (json-read-from-string (decode-coding-string decompressed 'utf-8))))
+(defalias 'lexdb-ldoce--decompress-json #'lexdb--decompress-json-value
+  "Decompress zlib-compressed JSON data.")
 
 (defun lexdb-ldoce--v2-fetch-attributes (entry-id db)
   "Fetch EAV attributes for ENTRY-ID from V2 schema."
@@ -306,7 +271,7 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
 
 (defun lexdb-ldoce--get-collocations (entry-id)
   "Get collocations for ENTRY-ID."
-  (or (gethash (cons entry-id 'collocations) lexdb-ldoce--cache)
+  (or (lexdb-db-cache-get 'ldoce (cons entry-id 'collocations))
       (let* ((db (lexdb-ldoce--ensure-db))
              (rows (sqlite-select db
                     "SELECT id, category, text, gloss FROM collocations WHERE entry_id = ? ORDER BY sort_order"
@@ -320,8 +285,7 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
                                    :category cat :text coll :gloss gloss
                                    :examples (mapcar #'car ex-rows)))))
                             rows)))
-        (puthash (cons entry-id 'collocations) colls lexdb-ldoce--cache)
-        colls)))
+        (lexdb-db-cache-put 'ldoce (cons entry-id 'collocations) colls))))
 
 (defun lexdb-ldoce--get-relations (entry-id type)
   "Get relations of TYPE for ENTRY-ID."
@@ -348,16 +312,17 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
            (entry-colls (make-hash-table :test 'eql)))
       (dolist (row coll-rows) (push row (gethash (nth 1 row) entry-colls)))
       (maphash (lambda (entry-id rows)
-                 (puthash (cons entry-id 'collocations)
-                          (mapcar (lambda (row)
-                                    (pcase-let ((`(,coll-id ,_ ,cat ,coll ,gloss) row))
-                                      (lexdb-collocation-create
-                                       :category cat :text coll :gloss gloss
-                                       :examples (mapcar #'car (sqlite-select db
-                                                                "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
-                                                                (list coll-id))))))
-                                  (nreverse rows))
-                          lexdb-ldoce--cache))
+                 (lexdb-db-cache-put
+                  'ldoce
+                  (cons entry-id 'collocations)
+                  (mapcar (lambda (row)
+                            (pcase-let ((`(,coll-id ,_ ,cat ,coll ,gloss) row))
+                              (lexdb-collocation-create
+                               :category cat :text coll :gloss gloss
+                               :examples (mapcar #'car (sqlite-select db
+                                                        "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
+                                                        (list coll-id))))))
+                          (nreverse rows))))
                entry-colls))))
 
 ;;;; ============================================================
