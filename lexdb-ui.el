@@ -1229,10 +1229,12 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
               (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
             (insert (propertize formatted 'face 'lexdb-signpost-face) " ")))))
     ;; ODE: Form groups (e.g., "also days") - after sense number, before definition
-    (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
+    ;; Uses sense-index (sort_order) as key, not sense number (which can repeat across POS)
+    (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
       (let* ((form-groups-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_form_groups"))
+             (sort-key (number-to-string sense-index))
              (form-groups (when form-groups-map
-                            (cdr (assoc sense-num-str form-groups-map #'string=)))))
+                            (cdr (assoc sort-key form-groups-map #'string=)))))
         (when (lexdb--non-empty-string-p form-groups)
           (insert (propertize (concat "(" form-groups ")") 'face 'lexdb-grammar-face) " "))))
     ;; OALD grammar codes inline (e.g., "[Tn] [I]", "[sing or pl v]") - before definition
