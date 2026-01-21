@@ -85,7 +85,9 @@
           (set-buffer-multibyte nil)
           (insert compressed-data)
           (zlib-decompress-region (point-min) (point-max))
-          (decode-coding-region (point-min) (point-max) 'utf-8)
+          ;; Convert to multibyte and decode as UTF-8
+          (set-buffer-multibyte t)
+          (decode-coding-region (point-min) (point-max) 'utf-8 t)
           (goto-char (point-min))
           ;; Use json-read for symbol keys (compatible with UI code)
           (json-read))
