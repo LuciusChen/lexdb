@@ -209,14 +209,17 @@
 ;;;; ============================================================
 
 (defun lexdb-ode--lookup (word)
-  "Look up WORD in ODE database (exact match only)."
+  "Look up WORD in ODE database.
+Also searches for combining forms like -WORD."
   (let* ((db (lexdb-ode--ensure-db))
          (word-lower (downcase word))
-         ;; Exact match only - no fuzzy/prefix matching to avoid confusion
+         (combining-form (concat "-" word-lower))
+         ;; Search for exact match and combining form (e.g., "logic" and "-logic")
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
-                 FROM entries WHERE headword_lower = ? AND dict_id = 'ode'"
-                (list word-lower))))
+                 FROM entries WHERE (headword_lower = ? OR headword_lower = ?) AND dict_id = 'ode'
+                 ORDER BY headword_lower"
+                (list word-lower combining-form))))
     (mapcar #'lexdb-ode--row-to-entry rows)))
 
 (defun lexdb-ode--get-phrases (entry-id)
