@@ -184,7 +184,8 @@ class ODEParser:
                 })
 
         # === Main grammar sections (gramb) - may have multiple (adjective, noun, etc.) ===
-        for gramb in soup.find_all(class_='gramb'):
+        # Only select <section class="gramb">, not <ul class="semb gramb"> in phrase sections
+        for gramb in soup.find_all('section', class_='gramb'):
             self._parse_senses(gramb, entry)
 
         # === Phrases section ===
