@@ -2884,10 +2884,11 @@ ADAPTER-ID is used for crossref navigation."
                 (insert "\n")))))))))
 
 (defun lexdb-ui--slot-ode-phrases-origin (entry adapter)
-  "Slot: Render ODE Phrases and Origin sections with background overlay."
+  "Slot: Render ODE Phrases, Derivatives, and Origin sections with background overlay."
   (when (eq (lexdb-adapter-id adapter) 'ode)
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
            (phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases"))
+           (derivatives (lexdb-meta-get (lexdb-entry-metadata entry) ns "derivatives"))
            (origin-alist (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin")))
       ;; Phrases section
       (when (and phrases (> (length phrases) 0))
@@ -2913,6 +2914,39 @@ ADAPTER-ID is used for crossref navigation."
             (let ((ov (make-overlay section-start (point))))
               (overlay-put ov 'face 'lexdb-grambox-background-face)
               (overlay-put ov 'lexdb-ode-phrases t)))))
+      ;; Derivatives section
+      (when (and derivatives (> (length derivatives) 0))
+        (let ((section-start (point))
+              (deriv-list (if (vectorp derivatives) (append derivatives nil) derivatives)))
+          (insert "\n")
+          (insert (propertize "DERIVATIVES" 'face 'lexdb-grambox-heading-face) "\n")
+          (dolist (deriv deriv-list)
+            (let ((headword (lexdb-ui--alist-get 'headword deriv))
+                  (pos (lexdb-ui--alist-get 'pos deriv))
+                  (ipa (lexdb-ui--alist-get 'ipa deriv))
+                  (definition (lexdb-ui--alist-get 'definition deriv))
+                  (examples (lexdb-ui--alist-get 'examples deriv)))
+              (when headword
+                ;; Headword with POS and pronunciation
+                (insert "  " (propertize headword 'face 'lexdb-phrase-face))
+                (when (lexdb--non-empty-string-p pos)
+                  (insert " " (propertize pos 'face 'lexdb-pos-face)))
+                (when (lexdb--non-empty-string-p ipa)
+                  (insert " " (propertize (concat "/" ipa "/") 'face 'lexdb-pronunciation-face)))
+                (insert "\n")
+                ;; Definition
+                (when (lexdb--non-empty-string-p definition)
+                  (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
+                ;; Examples
+                (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
+                  (dolist (ex ex-list)
+                    (when (lexdb--non-empty-string-p ex)
+                      (insert "      " (propertize ex 'face 'lexdb-example-face) "\n")))))))
+          ;; Create overlay for background
+          (when (> (point) section-start)
+            (let ((ov (make-overlay section-start (point))))
+              (overlay-put ov 'face 'lexdb-grambox-background-face)
+              (overlay-put ov 'lexdb-ode-derivatives t)))))
       ;; Origin section
       (when (and origin-alist (listp origin-alist))
         (let ((section-start (point))
@@ -2923,10 +2957,9 @@ ADAPTER-ID is used for crossref navigation."
           (when (lexdb--non-empty-string-p text)
             (insert "\n")
             (insert (propertize "ORIGIN" 'face 'lexdb-grambox-heading-face) "\n")
-            (insert "  " (propertize text 'face 'lexdb-origin-face))
+            (insert "  " (propertize text 'face 'lexdb-origin-face) "\n")
             (when (and appendix (not (string-empty-p appendix)))
-              (insert " " (propertize appendix 'face 'lexdb-origin-face)))
-            (insert "\n")
+              (insert "  " (propertize appendix 'face 'lexdb-origin-face) "\n"))
             ;; Create overlay for background
             (let ((ov (make-overlay section-start (point))))
               (overlay-put ov 'face 'lexdb-grambox-background-face)

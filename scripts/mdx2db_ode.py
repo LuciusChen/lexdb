@@ -269,6 +269,9 @@ class ODEParser:
         # === Phrases section ===
         self._parse_phrases(soup, entry)
 
+        # === Derivatives section ===
+        self._parse_derivatives(soup, entry)
+
         # === Etymology/Origin ===
         self._parse_etymology(soup, entry)
 
@@ -726,20 +729,20 @@ class ODEParser:
                 # Found origin section
                 inner = etym.find(class_='senseInnerWrapper')
                 if inner:
-                    origin_text = clean_text(inner.get_text())
+                    # Get main origin text (first <p> tag, excluding appendix)
+                    main_p = inner.find('p', recursive=False)
+                    main_origin = ''
+                    if main_p:
+                        main_origin = clean_text(main_p.get_text())
 
                     # Try to find origin_appendix for additional info
                     appendix = inner.find(class_='origin_appendix')
                     appendix_text = ''
                     if appendix:
-                        appendix_text = clean_text(appendix.get_text())
-
-                    # Get main origin text (excluding appendix)
-                    origin = inner.find(class_='origin')
-                    if origin:
-                        main_origin = clean_text(origin.get_text())
-                    else:
-                        main_origin = origin_text
+                        # Get text from the <p> inside appendix
+                        appendix_p = appendix.find('p')
+                        if appendix_p:
+                            appendix_text = clean_text(appendix_p.get_text())
 
                     if main_origin:
                         entry['attributes']['origin'] = {
@@ -747,6 +750,81 @@ class ODEParser:
                             'appendix': appendix_text
                         }
                     break
+
+    def _parse_derivatives(self, soup, entry):
+        """Parse derivatives section.
+
+        ODE derivative structure:
+        section.etymology.derivative > senseInnerWrapper > ul.semb.gramb >
+          li.derivative_sense (contains strong.derivative = headword)
+          div.grambhead (contains pos, pronunciation)
+          ul.semb > li (contains definition and examples)
+        """
+        derivatives_data = []
+
+        # Find derivative sections (section.etymology.derivative)
+        for section in soup.find_all('section', class_='etymology'):
+            classes = section.get('class', [])
+            if 'derivative' not in classes:
+                continue
+
+            inner = section.find(class_='senseInnerWrapper')
+            if not inner:
+                continue
+
+            # Find the main semb container
+            main_semb = inner.find('ul', class_='semb')
+            if not main_semb:
+                continue
+
+            # Process derivative entries - each derivative_sense followed by grambhead and definition semb
+            deriv_senses = main_semb.find_all('li', class_='derivative_sense', recursive=False)
+
+            for deriv_sense in deriv_senses:
+                deriv_entry = {}
+
+                # Get headword from strong.derivative
+                deriv_strong = deriv_sense.find('strong', class_='derivative')
+                if deriv_strong:
+                    deriv_entry['headword'] = clean_text(deriv_strong.get_text())
+
+                # Get grambhead (next sibling after derivative_sense)
+                grambhead = deriv_sense.find_next_sibling('div', class_='grambhead')
+                if grambhead:
+                    # Get POS
+                    pos_elem = grambhead.find(class_='pos')
+                    if pos_elem:
+                        deriv_entry['pos'] = clean_text(pos_elem.get_text())
+
+                    # Get pronunciation
+                    pron = grambhead.find(class_='phoneticSymbol')
+                    if pron:
+                        deriv_entry['ipa'] = clean_text(pron.get_text())
+
+                # Get definition from nested ul.semb
+                def_semb = deriv_sense.find_next_sibling('ul', class_='semb')
+                if def_semb:
+                    # Find definition in ind
+                    ind = def_semb.find(class_='ind')
+                    if ind:
+                        deriv_entry['definition'] = clean_text(ind.get_text())
+
+                    # Get examples
+                    examples = []
+                    for exg in def_semb.find_all(class_='exg'):
+                        ex = exg.find(class_='ex')
+                        if ex:
+                            ex_text = extract_example_text(ex)
+                            if ex_text:
+                                examples.append(ex_text)
+                    if examples:
+                        deriv_entry['examples'] = examples
+
+                if deriv_entry.get('headword'):
+                    derivatives_data.append(deriv_entry)
+
+        if derivatives_data:
+            entry['attributes']['derivatives'] = derivatives_data
 
 
 # ============================================================
