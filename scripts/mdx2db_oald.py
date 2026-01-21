@@ -199,7 +199,7 @@ def extract_highlighted_example(element):
 
 
 def parse_cross_reference(text):
-    """Parse cross-reference text like '→necessity.' or '→old.'
+    """Parse cross-reference text like '→necessity.' or '→coin <<pos>>v<</pos>>.'
 
     Returns:
         dict with 'is_crossref', 'prefix', 'clickable', 'suffix', 'target_word', 'target_sense'
@@ -208,16 +208,25 @@ def parse_cross_reference(text):
     if not text:
         return None
 
-    # Pattern: →word. or → word.
+    # Pattern: →word. or → word. (may include format markers like <<pos>>v<</pos>>)
     match = re.match(r'^→\s*([^.]+)\.$', text.strip())
     if match:
         target = match.group(1).strip()
+        # Separate clickable word from suffix (e.g., "coin <<pos>>v<</pos>>" -> "coin", "<<pos>>v<</pos>>")
+        # Look for format markers or trailing text after the main word
+        suffix_match = re.match(r'^(\S+)((?:\s+<<\w+>>.+)?)\s*$', target)
+        if suffix_match:
+            clickable = suffix_match.group(1)
+            suffix = suffix_match.group(2).strip() if suffix_match.group(2) else None
+        else:
+            clickable = target
+            suffix = None
         return {
             'is_crossref': True,
             'prefix': '→',
-            'clickable': target,
-            'suffix': None,
-            'target_word': target.lower(),
+            'clickable': clickable,
+            'suffix': suffix,
+            'target_word': clickable.lower(),
             'target_sense': None  # OALD4 doesn't have sense-level cross-refs
         }
     return None

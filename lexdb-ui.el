@@ -2582,6 +2582,7 @@ IDIOM is the full idiom alist, ADAPTER-ID for crossref jumps."
      (crossref
       (let* ((prefix (alist-get 'prefix crossref))
              (clickable (alist-get 'clickable crossref))
+             (suffix (alist-get 'suffix crossref))
              (target-word (alist-get 'target_word crossref))
              (search-word (lexdb-ui--normalize-search-word
                            (or target-word clickable))))
@@ -2593,7 +2594,11 @@ IDIOM is the full idiom alist, ADAPTER-ID for crossref jumps."
                                       (lexdb-search-and-goto-sense
                                        search-word nil adapter-id))
                             'help-echo (format "Look up: %s [%s]"
-                                               search-word adapter-id))))
+                                               search-word adapter-id))
+        ;; Render suffix with format markers (e.g., <<pos>>v<</pos>>)
+        (when suffix
+          (insert " ")
+          (lexdb-ui--insert-formatted-definition suffix 'lexdb-crossref-face))))
      ;; Arrow-style crossref in definition
      ((string-match "^→\\([^.]+\\)\\.$" idiom-def)
       (let* ((raw-target (match-string 1 idiom-def))
