@@ -106,17 +106,34 @@ class ODEParser:
         seen_entry_ids = set()
 
         for wrapper in entry_wrappers:
-            # Get entry ID to avoid duplicates
-            entry_head = wrapper.find(class_='entryHead')
-            if entry_head:
-                entry_id = entry_head.get('id', '')
-                if entry_id and entry_id in seen_entry_ids:
-                    continue
-                seen_entry_ids.add(entry_id)
+            # Check for multiple homographs within this wrapper
+            # Each entryHead represents a separate homograph
+            entry_heads = wrapper.find_all(class_='entryHead')
 
-            entry = self._parse_single_entry(wrapper, word_key)
-            if entry and entry.get('senses'):
-                entries.append(entry)
+            if len(entry_heads) > 1:
+                # Multiple homographs - split and parse each separately
+                homograph_entries = self._split_homographs(wrapper, entry_heads)
+                for homograph_soup, entry_head in homograph_entries:
+                    entry_id = entry_head.get('id', '')
+                    if entry_id and entry_id in seen_entry_ids:
+                        continue
+                    seen_entry_ids.add(entry_id)
+
+                    entry = self._parse_single_entry(homograph_soup, word_key)
+                    if entry and entry.get('senses'):
+                        entries.append(entry)
+            else:
+                # Single entry in wrapper
+                entry_head = wrapper.find(class_='entryHead')
+                if entry_head:
+                    entry_id = entry_head.get('id', '')
+                    if entry_id and entry_id in seen_entry_ids:
+                        continue
+                    seen_entry_ids.add(entry_id)
+
+                entry = self._parse_single_entry(wrapper, word_key)
+                if entry and entry.get('senses'):
+                    entries.append(entry)
 
         # If no entries parsed, try parsing whole soup as single entry
         if not entries:
@@ -125,6 +142,48 @@ class ODEParser:
                 entries.append(entry)
 
         return entries
+
+    def _split_homographs(self, wrapper, entry_heads):
+        """Split a wrapper with multiple entryHead elements into separate soups.
+
+        Returns list of (soup, entry_head) tuples for each homograph.
+        """
+        results = []
+
+        # Get all direct children of wrapper for sequential processing
+        children = list(wrapper.children)
+
+        # Find positions of each entryHead in children list
+        head_positions = []
+        for i, child in enumerate(children):
+            if hasattr(child, 'get') and child.get('class'):
+                if 'entryHead' in child.get('class', []):
+                    head_positions.append(i)
+
+        # For each entryHead, collect elements until the next entryHead or end
+        for idx, pos in enumerate(head_positions):
+            # Determine end position
+            end_pos = head_positions[idx + 1] if idx + 1 < len(head_positions) else len(children)
+
+            # Create a new soup with just this homograph's elements
+            new_soup = BeautifulSoup('<div class="homograph"></div>', HTML_PARSER)
+            container = new_soup.find('div')
+
+            # Copy elements from this entryHead to the next
+            for i in range(pos, end_pos):
+                child = children[i]
+                if hasattr(child, 'name') and child.name:
+                    # Skip navBar and oeldToolbar - they're shared UI elements
+                    classes = child.get('class', [])
+                    if 'navBar' in classes or 'oeldToolbar' in classes:
+                        continue
+                    container.append(BeautifulSoup(str(child), HTML_PARSER))
+
+            # Find the entryHead in original children
+            entry_head = children[pos] if hasattr(children[pos], 'get') else None
+            results.append((container, entry_head))
+
+        return results
 
     def _parse_single_entry(self, soup, word_key):
         """Parse a single entry from soup."""
@@ -143,8 +202,27 @@ class ODEParser:
         # Headword
         hw = soup.find(class_='hw')
         if hw:
-            entry['headword'] = clean_text(hw.get_text())
-            entry['headword_display'] = entry['headword']
+            # Extract superscript for display, but remove for headword lookup
+            sup_elem = hw.find('sup')
+            sup_text = ''
+            if sup_elem:
+                sup_num = clean_text(sup_elem.get_text())
+                # Convert to Unicode superscript characters
+                sup_map = {'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+                           '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹'}
+                sup_text = ''.join(sup_map.get(c, c) for c in sup_num)
+
+            # Get clean headword without superscript
+            hw_copy = BeautifulSoup(str(hw), HTML_PARSER).find(class_='hw')
+            if hw_copy:
+                for sup in hw_copy.find_all('sup'):
+                    sup.decompose()
+                entry['headword'] = clean_text(hw_copy.get_text())
+            else:
+                entry['headword'] = clean_text(hw.get_text())
+
+            # Display includes superscript
+            entry['headword_display'] = entry['headword'] + sup_text
 
         if not entry['headword']:
             entry['headword'] = word_key
@@ -753,6 +831,7 @@ class LexDBWriter:
             ))
 
         # Collect sense-level synonyms, expanded_examples, and form_groups for later storage
+        # Use sort_order as key (unique per entry) instead of sense_number (can repeat across POS)
         sense_synonyms_map = {}
         sense_expanded_examples_map = {}
         sense_form_groups_map = {}
@@ -760,6 +839,9 @@ class LexDBWriter:
         # Insert senses
         for sense_data in entry_data.get('senses', []):
             sense_number = sense_data.get('number', '')
+            sort_order = sense_data.get('sort_order', 0)
+            # Use sort_order as string key for JSON compatibility
+            sort_key = str(sort_order)
 
             # Use section_pos as signpost for ODE (marks first sense of a new POS section)
             signpost = sense_data.get('signpost') or sense_data.get('section_pos')
@@ -772,21 +854,21 @@ class LexDBWriter:
                 sense_number,
                 signpost,
                 sense_data.get('definition', ''),
-                sense_data.get('sort_order', 0)
+                sort_order
             ))
             sense_id = self.cursor.lastrowid
 
             # Collect form_groups for this sense (e.g., "also days")
             if sense_data.get('form_groups'):
-                sense_form_groups_map[sense_number] = sense_data['form_groups']
+                sense_form_groups_map[sort_key] = sense_data['form_groups']
 
             # Collect synonyms for this sense
             if sense_data.get('synonyms'):
-                sense_synonyms_map[sense_number] = sense_data['synonyms']
+                sense_synonyms_map[sort_key] = sense_data['synonyms']
 
             # Collect expanded_examples for this sense
             if sense_data.get('expanded_examples'):
-                sense_expanded_examples_map[sense_number] = sense_data['expanded_examples']
+                sense_expanded_examples_map[sort_key] = sense_data['expanded_examples']
 
             # Sense-level labels
             for idx, label in enumerate(sense_data.get('labels', [])):

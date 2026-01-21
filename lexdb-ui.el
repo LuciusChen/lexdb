@@ -1184,9 +1184,10 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
           (when (< start (length text))
             (insert (propertize (substring text start) 'face 'lexdb-inflection-face))))))))
 
-(defun lexdb-ui--render-sense (sense adapter &optional entry)
+(defun lexdb-ui--render-sense (sense adapter &optional entry sense-index)
   "Render a single SENSE using ADAPTER.
-Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
+Optional ENTRY provides access to entry-level metadata for lexunits/grambox.
+Optional SENSE-INDEX is the 0-based index of this sense in the entry."
   (let* ((caps (lexdb-adapter-capabilities adapter))
          (audio-dir (lexdb-adapter-audio-dir adapter))
          (ns (symbol-name (lexdb-adapter-id adapter)))
@@ -1782,13 +1783,15 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
 
     ;; ODE: Sense-level tabs (SYNONYMS, MORE EXAMPLES)
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
-      (let* ((ode-sense-num (or (lexdb-sense-number sense) "0"))
+      ;; Use sense-index (sort_order) as key - unique per entry unlike sense_number
+      ;; Keys are symbols (from json-read), so intern the string key
+      (let* ((ode-sense-key (intern (if sense-index (number-to-string sense-index) "0")))
              (sense-synonyms (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_synonyms"))
              (synonyms (when sense-synonyms
-                         (cdr (assoc ode-sense-num sense-synonyms #'string=))))
+                         (cdr (assq ode-sense-key sense-synonyms))))
              (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
              (expanded-examples (when sense-expanded
-                                  (cdr (assoc ode-sense-num sense-expanded #'string=))))
+                                  (cdr (assq ode-sense-key sense-expanded))))
              (tabs nil))
         ;; Build SYNONYMS tab content
         (when synonyms
@@ -1840,7 +1843,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
         ;; Insert tab bar if we have any tabs (aligned with examples - always 4 spaces)
         (when tabs
           (insert "    ")  ; 4 spaces to align with examples
-          (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) ode-sense-num)))
+          (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) (symbol-name ode-sense-key))))
             (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))))
 
 (defun lexdb-ui--render-synonyms-and-crossrefs (entry adapter)
@@ -2592,7 +2595,8 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
   "Slot: Render senses/definitions."
   (let ((ode-pos-keywords '("adjective" "noun" "verb" "adverb" "preposition"
                             "conjunction" "pronoun" "determiner" "exclamation"
-                            "prefix" "suffix" "combining form")))
+                            "prefix" "suffix" "combining form"))
+        (sense-index 0))
     (dolist (sense (lexdb-entry-senses entry))
       ;; For ODE: Show POS section header when signpost contains a part of speech
       (when (eq (lexdb-adapter-id adapter) 'ode)
@@ -2600,7 +2604,8 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
           (when (member (downcase signpost) ode-pos-keywords)
             ;; Insert POS header as a section divider
             (insert (propertize signpost 'face 'lexdb-pos-face) "\n"))))
-      (lexdb-ui--render-sense sense adapter entry)))
+      (lexdb-ui--render-sense sense adapter entry sense-index)
+      (setq sense-index (1+ sense-index))))
   (insert "\n"))
 
 (defun lexdb-ui--slot-entry-grammar-box (entry adapter)
