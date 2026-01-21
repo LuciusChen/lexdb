@@ -2917,7 +2917,8 @@ ADAPTER-ID is used for crossref navigation."
       ;; Derivatives section
       (when (and derivatives (> (length derivatives) 0))
         (let ((section-start (point))
-              (deriv-list (if (vectorp derivatives) (append derivatives nil) derivatives)))
+              (deriv-list (if (vectorp derivatives) (append derivatives nil) derivatives))
+              (deriv-index 0))
           (insert "\n")
           (insert (propertize "DERIVATIVES" 'face 'lexdb-grambox-heading-face) "\n")
           (dolist (deriv deriv-list)
@@ -2925,7 +2926,8 @@ ADAPTER-ID is used for crossref navigation."
                   (pos (lexdb-ui--alist-get 'pos deriv))
                   (ipa (lexdb-ui--alist-get 'ipa deriv))
                   (definition (lexdb-ui--alist-get 'definition deriv))
-                  (examples (lexdb-ui--alist-get 'examples deriv)))
+                  (examples (lexdb-ui--alist-get 'examples deriv))
+                  (expanded-examples (lexdb-ui--alist-get 'expanded_examples deriv)))
               (when headword
                 ;; Headword with POS and pronunciation
                 (insert "  " (propertize headword 'face 'lexdb-phrase-face))
@@ -2937,11 +2939,28 @@ ADAPTER-ID is used for crossref navigation."
                 ;; Definition
                 (when (lexdb--non-empty-string-p definition)
                   (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
-                ;; Examples
+                ;; Inline examples
                 (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
                   (dolist (ex ex-list)
                     (when (lexdb--non-empty-string-p ex)
-                      (insert "      " (propertize ex 'face 'lexdb-example-face) "\n")))))))
+                      (insert "      " (propertize ex 'face 'lexdb-example-face) "\n"))))
+                ;; MORE EXAMPLES tab for expanded examples
+                (when expanded-examples
+                  (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
+                    (when (> (length exp-list) 0)
+                      (insert "    ")  ; Align with definition
+                      (let ((tab-group (format "lexdb-ode-deriv-%d-%d" (lexdb-entry-id entry) deriv-index)))
+                        (lexdb-ui--insert-tab-bar
+                         (list (list 'more-examples
+                                     (format "MORE EXAMPLES (%d)" (length exp-list))
+                                     (with-temp-buffer
+                                       (dolist (ex exp-list)
+                                         (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                         (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                                         (insert "\n"))
+                                       (buffer-string))))
+                         tab-group)))))
+                (setq deriv-index (1+ deriv-index)))))
           ;; Create overlay for background
           (when (> (point) section-start)
             (let ((ov (make-overlay section-start (point))))

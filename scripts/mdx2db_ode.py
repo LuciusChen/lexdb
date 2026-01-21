@@ -809,9 +809,12 @@ class ODEParser:
                     if ind:
                         deriv_entry['definition'] = clean_text(ind.get_text())
 
-                    # Get examples
+                    # Get inline examples (direct exg > ex, not inside .examples)
                     examples = []
-                    for exg in def_semb.find_all(class_='exg'):
+                    for exg in def_semb.find_all('div', class_='exg', recursive=True):
+                        # Skip if this exg is inside .examples (those are expanded examples)
+                        if exg.find_parent(class_='examples'):
+                            continue
                         ex = exg.find(class_='ex')
                         if ex:
                             ex_text = extract_example_text(ex)
@@ -819,6 +822,19 @@ class ODEParser:
                                 examples.append(ex_text)
                     if examples:
                         deriv_entry['examples'] = examples
+
+                    # Get expanded examples (inside .examples > .exg > ul > li.ex)
+                    expanded_examples = []
+                    examples_div = def_semb.find(class_='examples')
+                    if examples_div:
+                        exg = examples_div.find(class_='exg')
+                        if exg:
+                            for li in exg.find_all('li', class_='ex'):
+                                ex_text = extract_example_text(li)
+                                if ex_text:
+                                    expanded_examples.append(ex_text)
+                    if expanded_examples:
+                        deriv_entry['expanded_examples'] = expanded_examples
 
                 if deriv_entry.get('headword'):
                     derivatives_data.append(deriv_entry)
