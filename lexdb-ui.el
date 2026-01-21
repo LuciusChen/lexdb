@@ -1866,6 +1866,33 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
         (lexdb-ui--insert-linked-relations cross-refs 'lexdb-crossref-face adapter-id)
         (insert "\n\n")))))
 
+(defun lexdb-ui--render-phrase-synonyms (syn-list)
+  "Render SYN-LIST as clickable synonyms for PHRASES/PHRASAL VERBS.
+Returns a string with text properties preserved for insertion."
+  (with-temp-buffer
+    (dolist (group (if (vectorp syn-list) (append syn-list nil) syn-list))
+      (let ((register (lexdb-ui--alist-get 'register group))
+            (words (lexdb-ui--alist-get 'words group)))
+        (when (lexdb--non-empty-string-p register)
+          (insert "    " (propertize register 'face 'lexdb-label-face) " "))
+        (let ((word-list (if (vectorp words) (append words nil) words))
+              (first t))
+          (dolist (w word-list)
+            (unless first (insert ", "))
+            (setq first nil)
+            (let ((word (lexdb-ui--alist-get 'word w))
+                  (clickable (lexdb-ui--alist-get 'clickable w)))
+              (if clickable
+                  (insert-text-button word
+                                      'face 'lexdb-link-face
+                                      'action (lambda (_)
+                                                (lexdb-search word))
+                                      'help-echo (format "Look up: %s" word))
+                (insert (propertize word 'face 'lexdb-synonym-descriptive-face))))))
+        (insert "\n")))
+    ;; Return with text properties preserved
+    (buffer-substring (point-min) (point-max))))
+
 (defun lexdb-ui--insert-linked-relations (relations face &optional adapter-id)
   "Insert RELATIONS with clickable links using FACE.
 Uses fragment storage format: prefix + clickable + suffix.
@@ -2949,24 +2976,7 @@ ADAPTER-ID is used for crossref navigation."
                       (when (> (length syn-list) 0)
                         (push (list 'synonyms
                                     "SYNONYMS"
-                                    (with-temp-buffer
-                                      (dolist (group syn-list)
-                                        (let ((register (lexdb-ui--alist-get 'register group))
-                                              (words (lexdb-ui--alist-get 'words group)))
-                                          (when register
-                                            (insert "    " (propertize register 'face 'lexdb-label-face) " "))
-                                          (let ((word-list (if (vectorp words) (append words nil) words))
-                                                (first t))
-                                            (dolist (w word-list)
-                                              (unless first (insert ", "))
-                                              (setq first nil)
-                                              (let ((word (lexdb-ui--alist-get 'word w))
-                                                    (clickable (lexdb-ui--alist-get 'clickable w)))
-                                                (if clickable
-                                                    (insert (propertize word 'face 'lexdb-link-face))
-                                                  (insert (propertize word 'face 'lexdb-definition-face))))))
-                                          (insert "\n")))
-                                      (buffer-string)))
+                                    (lexdb-ui--render-phrase-synonyms syn-list))
                               tabs))))
                   ;; Insert tab bar if we have tabs
                   (when tabs
@@ -3021,24 +3031,7 @@ ADAPTER-ID is used for crossref navigation."
                       (when (> (length syn-list) 0)
                         (push (list 'synonyms
                                     "SYNONYMS"
-                                    (with-temp-buffer
-                                      (dolist (group syn-list)
-                                        (let ((register (lexdb-ui--alist-get 'register group))
-                                              (words (lexdb-ui--alist-get 'words group)))
-                                          (when register
-                                            (insert "    " (propertize register 'face 'lexdb-label-face) " "))
-                                          (let ((word-list (if (vectorp words) (append words nil) words))
-                                                (first t))
-                                            (dolist (w word-list)
-                                              (unless first (insert ", "))
-                                              (setq first nil)
-                                              (let ((word (lexdb-ui--alist-get 'word w))
-                                                    (clickable (lexdb-ui--alist-get 'clickable w)))
-                                                (if clickable
-                                                    (insert (propertize word 'face 'lexdb-link-face))
-                                                  (insert (propertize word 'face 'lexdb-definition-face))))))
-                                          (insert "\n")))
-                                      (buffer-string)))
+                                    (lexdb-ui--render-phrase-synonyms syn-list))
                               tabs))))
                   (when tabs
                     (insert "    ")
