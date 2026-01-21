@@ -1836,12 +1836,12 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                             (insert "\n"))
                           (buffer-string)))
                   tabs)))
-        ;; Insert tab bar if we have any tabs (with indentation)
+        ;; Insert tab bar if we have any tabs (aligned with examples - 4 spaces)
         (when tabs
-          ;; Extra indent for subsenses (sense numbers containing ".")
+          ;; Subsenses get extra 2-space indent since sense line is already indented
           (if (string-match-p "\\." ode-sense-num)
-              (insert "    ")  ; Subsense indent (4 spaces)
-            (insert "  "))     ; Main sense indent (2 spaces)
+              (insert "      ")  ; Subsense: 4 + 2 = 6 spaces (example 4 + subsense indent 2)
+            (insert "    "))     ; Main sense: 4 spaces (same as examples)
           (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) ode-sense-num)))
             (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))))
 
@@ -2226,22 +2226,27 @@ ADAPTER-ID is used for intra-dictionary jumps."
                                   'face 'lexdb-phrase-face) "\n"))
     (buffer-string)))
 
+(defun lexdb-ui--alist-get (key alist)
+  "Get value for KEY from ALIST, trying both symbol and string keys."
+  (or (cdr (assoc key alist))
+      (cdr (assoc (if (symbolp key) (symbol-name key) (intern key)) alist))))
+
 (defun lexdb-ui--build-ode-phrases-content (phrases)
   "Build content string for ODE PHRASES tab.
 PHRASES is a list of alists with 'phrase', 'definition', and 'examples' keys."
   (with-temp-buffer
     (let ((phrase-list (if (vectorp phrases) (append phrases nil) phrases)))
       (dolist (phrase phrase-list)
-        (let ((phrase-text (cdr (assoc 'phrase phrase)))
-              (definition (cdr (assoc 'definition phrase)))
-              (examples (cdr (assoc 'examples phrase))))
+        (let ((phrase-text (lexdb-ui--alist-get 'phrase phrase))
+              (definition (lexdb-ui--alist-get 'definition phrase))
+              (examples (lexdb-ui--alist-get 'examples phrase)))
           (when phrase-text
             (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
             (when (lexdb--non-empty-string-p definition)
               (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
             (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
               (dolist (ex ex-list)
-                (let ((ex-text (cdr (assoc 'text ex))))
+                (let ((ex-text (lexdb-ui--alist-get 'text ex)))
                   (when (lexdb--non-empty-string-p ex-text)
                     (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n")))))))))
     (buffer-string)))
@@ -2536,8 +2541,11 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
              (origin-text (cond
                            (origin-full origin-full)
                            ((and origin-alist (listp origin-alist))
-                            (let ((text (cdr (assoc 'text origin-alist)))
-                                  (appendix (cdr (assoc 'appendix origin-alist))))
+                            ;; Try both symbol and string keys for compatibility
+                            (let ((text (or (cdr (assoc 'text origin-alist))
+                                            (cdr (assoc "text" origin-alist))))
+                                  (appendix (or (cdr (assoc 'appendix origin-alist))
+                                                (cdr (assoc "appendix" origin-alist)))))
                               (if (and appendix (not (string-empty-p appendix)))
                                   (concat text " " appendix)
                                 text)))

@@ -30,6 +30,7 @@
 
 (require 'lexdb)
 (require 'sqlite)
+(require 'json)
 
 ;;;; ============================================================
 ;;;; Configuration
