@@ -586,6 +586,9 @@ Returns list of lexdb-entry structs."
 (defvar lexdb--last-word nil
   "Last searched word.")
 
+(defvar lexdb--search-history nil
+  "Minibuffer history for `lexdb-search'.")
+
 (defvar lexdb--history nil
   "History of searched words. List of (word . position) pairs.")
 
@@ -688,13 +691,13 @@ If nil, search only the current/default dictionary."
 If `lexdb-multi-dict-mode' is non-nil, search all enabled dictionaries.
 Otherwise, search only the current/default dictionary."
   (interactive
-   (let ((default (thing-at-point 'word t)))
-     (list (read-string
-            (format "Lexdb%s: "
-                    (if (and (not lexdb-multi-dict-mode) lexdb-current-adapter)
-                        (format " [%s]" lexdb-current-adapter)
-                      ""))
-            default))))
+   (let* ((default (thing-at-point 'word t))
+          (prompt (format "Lexdb%s: "
+                          (if (and (not lexdb-multi-dict-mode) lexdb-current-adapter)
+                              (format " [%s]" lexdb-current-adapter)
+                            "")))
+          (input (read-string prompt nil 'lexdb--search-history default)))
+     (list (if (string-empty-p input) default input))))
   (when (or (null word) (not (stringp word)) (string-empty-p word))
     (user-error "No word specified"))
   (setq lexdb--last-word word)
@@ -721,11 +724,11 @@ Otherwise, search only the current/default dictionary."
 (defun lexdb-search-single (word)
   "Search for WORD in current dictionary only (single-dict mode)."
   (interactive
-   (let ((default (thing-at-point 'word t)))
-     (list (read-string
-            (format "Lexdb [%s]: "
-                    (or lexdb-current-adapter lexdb-default-adapter "?"))
-            default))))
+   (let* ((default (thing-at-point 'word t))
+          (prompt (format "Lexdb [%s]: "
+                          (or lexdb-current-adapter lexdb-default-adapter "?")))
+          (input (read-string prompt nil 'lexdb--search-history default)))
+     (list (if (string-empty-p input) default input))))
   (when (or (null word) (not (stringp word)) (string-empty-p word))
     (user-error "No word specified"))
   (setq lexdb--last-word word)
