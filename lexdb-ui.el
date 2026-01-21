@@ -1740,55 +1740,57 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (overlay-put ov 'lexdb-registerbox t))
             (insert "\n"))))))
 
-    ;; ODE: Synonyms (foldable with clickable words)
-    ;; Note: This code is outside the main let scope, so we define local variables
+    ;; ODE: Sense-level tabs (SYNONYMS, MORE EXAMPLES)
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
       (let* ((ode-sense-num (or (lexdb-sense-number sense) "0"))
              (sense-synonyms (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_synonyms"))
              (synonyms (when sense-synonyms
-                         (cdr (assoc ode-sense-num sense-synonyms #'string=)))))
-        (when synonyms
-          (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
-            (lexdb-ui--insert-foldable
-             "Synonyms"
-             (lambda ()
-               (dolist (group syn-list)
-                 (let ((register (cdr (assoc 'register group)))
-                       (words (cdr (assoc 'words group))))
-                   (when words
-                     (insert "  ")
-                     (when (and register (not (string-empty-p register)))
-                       (insert (propertize register 'face 'lexdb-register-face) " "))
-                     ;; Insert each word as clickable button
-                     (let ((word-list (if (vectorp words) (append words nil) words))
-                           (first t))
-                       (dolist (word word-list)
-                         (unless first (insert ", "))
-                         (setq first nil)
-                         (insert-text-button word
-                                             'face 'lexdb-synonym-face
-                                             'action (lambda (_)
-                                                       (lexdb-search-and-goto-sense word nil 'ode))
-                                             'help-echo (format "Look up: %s [ode]" word))))
-                     (insert "\n")))))
-             t)))))  ; Initially collapsed
-
-    ;; ODE: More Examples (foldable with bullet list)
-    (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
-      (let* ((ode-sense-num (or (lexdb-sense-number sense) "0"))
+                         (cdr (assoc ode-sense-num sense-synonyms #'string=))))
              (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
              (expanded-examples (when sense-expanded
-                                  (cdr (assoc ode-sense-num sense-expanded #'string=)))))
+                                  (cdr (assoc ode-sense-num sense-expanded #'string=))))
+             (tabs nil))
+        ;; Build SYNONYMS tab content
+        (when synonyms
+          (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
+            (push (list 'synonyms "SYNONYMS"
+                        (with-temp-buffer
+                          (dolist (group syn-list)
+                            (let ((register (cdr (assoc 'register group)))
+                                  (words (cdr (assoc 'words group))))
+                              (when words
+                                (insert "  ")
+                                (when (and register (not (string-empty-p register)))
+                                  (insert (propertize register 'face 'lexdb-register-face) " "))
+                                ;; Insert each word as clickable button
+                                (let ((word-list (if (vectorp words) (append words nil) words))
+                                      (first t))
+                                  (dolist (word word-list)
+                                    (unless first (insert ", "))
+                                    (setq first nil)
+                                    (insert-text-button word
+                                                        'face 'lexdb-synonym-face
+                                                        'action (lambda (_)
+                                                                  (lexdb-search-and-goto-sense word nil 'ode))
+                                                        'help-echo (format "Look up: %s [ode]" word))))
+                                (insert "\n"))))
+                          (buffer-string)))
+                  tabs)))
+        ;; Build MORE EXAMPLES tab content
         (when expanded-examples
           (let ((ex-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
-            (lexdb-ui--insert-foldable
-             (format "More Examples (%d)" (length ex-list))
-             (lambda ()
-               (dolist (ex ex-list)
-                 (insert "    " (propertize "• " 'face 'lexdb-definition-face))
-                 (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
-                 (insert "\n")))
-             t))))))  ; Initially collapsed
+            (push (list 'more-examples (format "MORE EXAMPLES (%d)" (length ex-list))
+                        (with-temp-buffer
+                          (dolist (ex ex-list)
+                            (insert "  " (propertize "• " 'face 'lexdb-definition-face))
+                            (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                            (insert "\n"))
+                          (buffer-string)))
+                  tabs)))
+        ;; Insert tab bar if we have any tabs
+        (when tabs
+          (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) ode-sense-num)))
+            (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))))
 
 (defun lexdb-ui--render-synonyms-and-crossrefs (entry adapter)
   "Render synonyms and cross-refs for ENTRY (inline, not in tabs)."
