@@ -352,6 +352,11 @@ class ODEParser:
         ind = trg.find(class_='ind')
         if ind and not ind.find_parent(class_='subSense'):
             sense_data['definition'] = clean_text(ind.get_text())
+        elif not sense_data['definition']:
+            # For combining forms, the definition might be in crossReference
+            xref = trg.find(class_='crossReference')
+            if xref and not xref.find_parent(class_='subSense'):
+                sense_data['definition'] = clean_text(xref.get_text())
 
         # Helper to check if element is inside synonyms/examples containers
         def is_in_excluded_container(elem):
