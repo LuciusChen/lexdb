@@ -2596,16 +2596,28 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
   (let ((ode-pos-keywords '("adjective" "noun" "verb" "adverb" "preposition"
                             "conjunction" "pronoun" "determiner" "exclamation"
                             "prefix" "suffix" "combining form"))
-        (sense-index 0))
-    (dolist (sense (lexdb-entry-senses entry))
-      ;; For ODE: Show POS section header when signpost contains a part of speech
-      (when (eq (lexdb-adapter-id adapter) 'ode)
+        (sense-index 0)
+        (shown-pos nil))  ; Track which POS headers we've shown
+    ;; Count unique POS sections to decide if we need section headers
+    (let ((pos-count 0))
+      (dolist (sense (lexdb-entry-senses entry))
         (when-let ((signpost (lexdb-sense-signpost sense)))
           (when (member (downcase signpost) ode-pos-keywords)
-            ;; Insert POS header as a section divider
-            (insert (propertize signpost 'face 'lexdb-pos-face) "\n"))))
-      (lexdb-ui--render-sense sense adapter entry sense-index)
-      (setq sense-index (1+ sense-index))))
+            (setq pos-count (1+ pos-count)))))
+      ;; Only show POS section headers if there are multiple POS sections
+      (dolist (sense (lexdb-entry-senses entry))
+        ;; For ODE: Show POS section header when signpost contains a part of speech
+        ;; but only if there are multiple POS sections (to avoid duplication with header)
+        (when (and (eq (lexdb-adapter-id adapter) 'ode)
+                   (> pos-count 1))
+          (when-let ((signpost (lexdb-sense-signpost sense)))
+            (when (and (member (downcase signpost) ode-pos-keywords)
+                       (not (member signpost shown-pos)))
+              ;; Insert POS header as a section divider
+              (insert (propertize signpost 'face 'lexdb-pos-face) "\n")
+              (push signpost shown-pos))))
+        (lexdb-ui--render-sense sense adapter entry sense-index)
+        (setq sense-index (1+ sense-index)))))
   (insert "\n"))
 
 (defun lexdb-ui--slot-entry-grammar-box (entry adapter)
