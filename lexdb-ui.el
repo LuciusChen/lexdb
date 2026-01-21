@@ -42,12 +42,13 @@
     (phrasal-verbs   . lexdb-ui--slot-phrasal-verbs)
     (synonyms        . lexdb-ui--slot-synonyms)
     (runons          . lexdb-ui--slot-runons)
+    (ode-phrases-origin . lexdb-ui--slot-ode-phrases-origin)
     (separator       . lexdb-ui--slot-separator))
   "Alist mapping slot names to rendering functions.
 Each function takes (entry adapter) and renders content at point.")
 
 (defcustom lexdb-ui-default-template
-  '(header tabs senses entry-grammar-box idioms usage phrasal-verbs synonyms runons separator)
+  '(header tabs senses entry-grammar-box idioms usage phrasal-verbs synonyms runons ode-phrases-origin separator)
   "Default slot order for rendering entries.
 This is a list of slot names from `lexdb-ui-slot-functions'."
   :type '(repeat symbol)
@@ -2533,30 +2534,14 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
         (push (list 'entry-menu "ENTRY MENU"
                     (lexdb-ui--build-entry-menu-content entry-menu))
               tabs)))
-    ;; WORD ORIGIN tab
-    (when (lexdb-adapter-has-capability-p adapter 'origin)
+    ;; WORD ORIGIN tab (skip for ODE - rendered inline via ode-phrases-origin slot)
+    (when (and (lexdb-adapter-has-capability-p adapter 'origin)
+               (not (eq (lexdb-adapter-id adapter) 'ode)))
       (let* ((origin-full (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin_full"))
-             ;; ODE stores origin as alist with 'text' and 'appendix' keys
-             (origin-alist (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin"))
-             (origin-text (cond
-                           (origin-full origin-full)
-                           ((and origin-alist (listp origin-alist))
-                            ;; Try both symbol and string keys for compatibility
-                            (let ((text (or (cdr (assoc 'text origin-alist))
-                                            (cdr (assoc "text" origin-alist))))
-                                  (appendix (or (cdr (assoc 'appendix origin-alist))
-                                                (cdr (assoc "appendix" origin-alist)))))
-                              (if (and appendix (not (string-empty-p appendix)))
-                                  (concat text " " appendix)
-                                text)))
-                           (t nil)))
-             ;; ODE gets background overlay like grammar boxes
-             (bg-face (when (eq (lexdb-adapter-id adapter) 'ode)
-                        'lexdb-grambox-background-face)))
+             (origin-text origin-full))
         (when (lexdb--non-empty-string-p origin-text)
           (push (list 'origin "WORD ORIGIN"
-                      (concat "  " (propertize origin-text 'face 'lexdb-origin-face) "\n")
-                      bg-face)
+                      (concat "  " (propertize origin-text 'face 'lexdb-origin-face) "\n"))
                 tabs))))
     ;; VERB TABLE tab
     (let ((verb-table (lexdb-meta-get (lexdb-entry-metadata entry) ns "verb_table")))
@@ -2589,20 +2574,13 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
             (setq content (concat content (lexdb-ui--build-popup-collocations-content popup-colls))))
           (when (not (string-empty-p content))
             (push (list 'collocations "COLLOCATIONS" content) tabs)))))
-    ;; PHRASES tab
-    (let ((popup-phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "popup_phrases"))
-          ;; ODE stores phrases differently
-          (ode-phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases")))
-      (cond
-       ((and popup-phrases (> (length popup-phrases) 0))
-        (push (list 'phrases "PHRASES"
-                    (lexdb-ui--build-popup-phrases-content popup-phrases))
-              tabs))
-       ((and ode-phrases (> (length ode-phrases) 0))
-        (push (list 'phrases "PHRASES"
-                    (lexdb-ui--build-ode-phrases-content ode-phrases)
-                    'lexdb-grambox-background-face)  ; ODE Phrases get background
-              tabs))))
+    ;; PHRASES tab (skip for ODE - rendered inline via ode-phrases-origin slot)
+    (unless (eq (lexdb-adapter-id adapter) 'ode)
+      (let ((popup-phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "popup_phrases")))
+        (when (and popup-phrases (> (length popup-phrases) 0))
+          (push (list 'phrases "PHRASES"
+                      (lexdb-ui--build-popup-phrases-content popup-phrases))
+                tabs))))
     ;; WORD FAMILY tab
     (let ((word-family (lexdb-meta-get (lexdb-entry-metadata entry) ns "word_family")))
       (when (and word-family (> (length word-family) 0))
@@ -2902,6 +2880,55 @@ ADAPTER-ID is used for crossref navigation."
                 (when (and pos (not (string-empty-p pos)))
                   (insert " " (propertize pos 'face 'lexdb-pos-face)))
                 (insert "\n")))))))))
+
+(defun lexdb-ui--slot-ode-phrases-origin (entry adapter)
+  "Slot: Render ODE Phrases and Origin sections with background overlay."
+  (when (eq (lexdb-adapter-id adapter) 'ode)
+    (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+           (phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases"))
+           (origin-alist (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin")))
+      ;; Phrases section
+      (when (and phrases (> (length phrases) 0))
+        (let ((section-start (point))
+              (phrase-list (if (vectorp phrases) (append phrases nil) phrases)))
+          (insert "\n")
+          (insert (propertize "PHRASES" 'face 'lexdb-grambox-heading-face) "\n")
+          (dolist (phrase phrase-list)
+            (let ((phrase-text (lexdb-ui--alist-get 'phrase phrase))
+                  (definition (lexdb-ui--alist-get 'definition phrase))
+                  (examples (lexdb-ui--alist-get 'examples phrase)))
+              (when phrase-text
+                (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
+                (when (lexdb--non-empty-string-p definition)
+                  (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
+                (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
+                  (dolist (ex ex-list)
+                    (let ((ex-text (lexdb-ui--alist-get 'text ex)))
+                      (when (lexdb--non-empty-string-p ex-text)
+                        (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n"))))))))
+          ;; Create overlay for background
+          (when (> (point) section-start)
+            (let ((ov (make-overlay section-start (point))))
+              (overlay-put ov 'face 'lexdb-grambox-background-face)
+              (overlay-put ov 'lexdb-ode-phrases t)))))
+      ;; Origin section
+      (when (and origin-alist (listp origin-alist))
+        (let ((section-start (point))
+              (text (or (cdr (assoc 'text origin-alist))
+                        (cdr (assoc "text" origin-alist))))
+              (appendix (or (cdr (assoc 'appendix origin-alist))
+                            (cdr (assoc "appendix" origin-alist)))))
+          (when (lexdb--non-empty-string-p text)
+            (insert "\n")
+            (insert (propertize "ORIGIN" 'face 'lexdb-grambox-heading-face) "\n")
+            (insert "  " (propertize text 'face 'lexdb-origin-face))
+            (when (and appendix (not (string-empty-p appendix)))
+              (insert " " (propertize appendix 'face 'lexdb-origin-face)))
+            (insert "\n")
+            ;; Create overlay for background
+            (let ((ov (make-overlay section-start (point))))
+              (overlay-put ov 'face 'lexdb-grambox-background-face)
+              (overlay-put ov 'lexdb-ode-origin t))))))))
 
 (defun lexdb-ui--slot-separator (_entry _adapter)
   "Slot: Render entry separator line."
