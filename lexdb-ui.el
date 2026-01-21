@@ -1759,20 +1759,30 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                             (let ((register (cdr (assoc 'register group)))
                                   (words (cdr (assoc 'words group))))
                               (when words
-                                (insert "  ")
+                                (insert "    ")  ; Extra indent for content
                                 (when (and register (not (string-empty-p register)))
                                   (insert (propertize register 'face 'lexdb-register-face) " "))
-                                ;; Insert each word as clickable button
+                                ;; Insert each word - clickable or not based on data
                                 (let ((word-list (if (vectorp words) (append words nil) words))
                                       (first t))
-                                  (dolist (word word-list)
+                                  (dolist (word-obj word-list)
                                     (unless first (insert ", "))
                                     (setq first nil)
-                                    (insert-text-button word
-                                                        'face 'lexdb-synonym-face
-                                                        'action (lambda (_)
-                                                                  (lexdb-search-and-goto-sense word nil 'ode))
-                                                        'help-echo (format "Look up: %s [ode]" word))))
+                                    ;; word-obj can be string (old format) or alist with word/clickable
+                                    (let* ((word-text (if (stringp word-obj)
+                                                          word-obj
+                                                        (cdr (assoc 'word word-obj))))
+                                           (clickable (if (stringp word-obj)
+                                                          t  ; Old format: assume clickable
+                                                        (eq (cdr (assoc 'clickable word-obj)) t))))
+                                      (if clickable
+                                          (insert-text-button word-text
+                                                              'face 'lexdb-synonym-face
+                                                              'action (lambda (_)
+                                                                        (lexdb-search-and-goto-sense word-text nil 'ode))
+                                                              'help-echo (format "Look up: %s [ode]" word-text))
+                                        ;; Non-clickable: just styled text
+                                        (insert (propertize word-text 'face 'lexdb-synonym-face))))))
                                 (insert "\n"))))
                           (buffer-string)))
                   tabs)))
@@ -1782,13 +1792,14 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (push (list 'more-examples (format "MORE EXAMPLES (%d)" (length ex-list))
                         (with-temp-buffer
                           (dolist (ex ex-list)
-                            (insert "  " (propertize "• " 'face 'lexdb-definition-face))
+                            (insert "    " (propertize "• " 'face 'lexdb-definition-face))
                             (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                             (insert "\n"))
                           (buffer-string)))
                   tabs)))
-        ;; Insert tab bar if we have any tabs
+        ;; Insert tab bar if we have any tabs (with indentation)
         (when tabs
+          (insert "  ")  ; Indent tab bar
           (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) ode-sense-num)))
             (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))))
 

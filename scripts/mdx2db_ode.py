@@ -324,7 +324,15 @@ class ODEParser:
         return sense_data if sense_data['definition'] else None
 
     def _parse_synonyms(self, synonyms_div):
-        """Parse synonyms from div.synonyms element."""
+        """Parse synonyms from div.synonyms element.
+
+        Returns a list of groups, each with:
+        - register: optional register label (e.g., 'technical')
+        - words: list of word objects with 'word' and 'clickable' fields
+
+        Clickable words are those wrapped in <a href="entry://..."> tags.
+        Non-clickable words are wrapped in <strong> tags.
+        """
         synonyms_groups = []
 
         # Find all exs divs (each may have a register label)
@@ -339,17 +347,19 @@ class ODEParser:
             if reg:
                 group['register'] = clean_text(reg.get_text())
 
-            # Extract synonym words (links and strong text)
+            # Extract synonym words (links are clickable, strong text is not)
             for elem in exs.children:
                 if hasattr(elem, 'name'):
                     if elem.name == 'a':
+                        # Links are clickable - can look up in dictionary
                         word = clean_text(elem.get_text())
                         if word:
-                            group['words'].append(word)
+                            group['words'].append({'word': word, 'clickable': True})
                     elif elem.name == 'strong':
+                        # Strong text is not clickable (descriptive terms)
                         word = clean_text(elem.get_text())
                         if word:
-                            group['words'].append(word)
+                            group['words'].append({'word': word, 'clickable': False})
 
             if group['words']:
                 synonyms_groups.append(group)
