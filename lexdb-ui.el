@@ -1740,7 +1740,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
               (overlay-put ov 'lexdb-registerbox t))
             (insert "\n"))))))
 
-    ;; ODE: Synonyms (foldable)
+    ;; ODE: Synonyms (foldable with clickable words)
     ;; Note: This code is outside the main let scope, so we define local variables
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
       (let* ((ode-sense-num (or (lexdb-sense-number sense) "0"))
@@ -1759,12 +1759,21 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
                      (insert "  ")
                      (when (and register (not (string-empty-p register)))
                        (insert (propertize register 'face 'lexdb-register-face) " "))
-                     (let ((word-list (if (vectorp words) (append words nil) words)))
-                       (insert (propertize (string-join word-list ", ") 'face 'lexdb-synonym-face)))
+                     ;; Insert each word as clickable button
+                     (let ((word-list (if (vectorp words) (append words nil) words))
+                           (first t))
+                       (dolist (word word-list)
+                         (unless first (insert ", "))
+                         (setq first nil)
+                         (insert-text-button word
+                                             'face 'lexdb-synonym-face
+                                             'action (lambda (_)
+                                                       (lexdb-search-and-goto-sense word nil 'ode))
+                                             'help-echo (format "Look up: %s [ode]" word))))
                      (insert "\n")))))
              t)))))  ; Initially collapsed
 
-    ;; ODE: Expanded examples (foldable)
+    ;; ODE: More Examples (foldable with bullet list)
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
       (let* ((ode-sense-num (or (lexdb-sense-number sense) "0"))
              (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
@@ -1776,7 +1785,7 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
              (format "More Examples (%d)" (length ex-list))
              (lambda ()
                (dolist (ex ex-list)
-                 (insert "    ")
+                 (insert "    " (propertize "• " 'face 'lexdb-definition-face))
                  (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                  (insert "\n")))
              t))))))  ; Initially collapsed
