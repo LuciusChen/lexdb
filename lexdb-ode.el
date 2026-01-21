@@ -210,16 +210,23 @@
 
 (defun lexdb-ode--lookup (word)
   "Look up WORD in ODE database.
-Also searches for combining forms like -WORD."
+First tries exact match, then combining forms (-WORD), then prefix match."
   (let* ((db (lexdb-ode--ensure-db))
          (word-lower (downcase word))
          (combining-form (concat "-" word-lower))
-         ;; Search for exact match and combining form (e.g., "logic" and "-logic")
+         ;; First try exact match and combining form (e.g., "logic" and "-logic")
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
                  FROM entries WHERE (headword_lower = ? OR headword_lower = ?) AND dict_id = 'ode'
                  ORDER BY headword_lower"
                 (list word-lower combining-form))))
+    ;; If no results, try prefix match (like OALD)
+    (unless rows
+      (setq rows (sqlite-select db
+                  "SELECT id, dict_id, headword, headword_lower, headword_display
+                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ode'
+                   ORDER BY headword_lower LIMIT 20"
+                  (list (concat word-lower "%")))))
     (mapcar #'lexdb-ode--row-to-entry rows)))
 
 (defun lexdb-ode--get-phrases (entry-id)
