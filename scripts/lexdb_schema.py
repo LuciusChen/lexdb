@@ -248,7 +248,7 @@ class AttrType:
 
 def clean_text(text: Optional[str]) -> str:
     """
-    清理文本：去除多余空白和换行。
+    清理文本：去除多余空白和换行，修复编码问题。
 
     Args:
         text: 输入文本
@@ -258,6 +258,22 @@ def clean_text(text: Optional[str]) -> str:
     """
     if not text:
         return ''
+    # Fix Windows-1252 encoding issues (common in MDX dictionaries)
+    # These characters often appear as raw bytes instead of proper Unicode
+    # Use chr() to ensure correct character codes
+    win1252_to_unicode = {
+        chr(0x91): '\u2018',  # Left single quote '
+        chr(0x92): '\u2019',  # Right single quote ' (apostrophe)
+        chr(0x93): '\u201c',  # Left double quote "
+        chr(0x94): '\u201d',  # Right double quote "
+        chr(0x95): '\u2022',  # Bullet •
+        chr(0x96): '\u2013',  # En dash –
+        chr(0x97): '\u2014',  # Em dash —
+        chr(0x99): '\u2122',  # Trademark ™
+        chr(0xa0): ' ',       # Non-breaking space
+    }
+    for old, new in win1252_to_unicode.items():
+        text = text.replace(old, new)
     return re.sub(r'\s+', ' ', text).strip()
 
 

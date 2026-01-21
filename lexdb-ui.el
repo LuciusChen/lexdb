@@ -1181,10 +1181,16 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
 (defun lexdb-ui--render-sense (sense adapter &optional entry)
   "Render a single SENSE using ADAPTER.
 Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
-  (let ((caps (lexdb-adapter-capabilities adapter))
-        (audio-dir (lexdb-adapter-audio-dir adapter))
-        (ns (symbol-name (lexdb-adapter-id adapter)))
-        (sense-num-str (or (lexdb-sense-number sense) "0")))
+  (let* ((caps (lexdb-adapter-capabilities adapter))
+         (audio-dir (lexdb-adapter-audio-dir adapter))
+         (ns (symbol-name (lexdb-adapter-id adapter)))
+         (sense-num-str (or (lexdb-sense-number sense) "0"))
+         ;; Check if this is a subsense (contains ".") for ODE
+         (is-subsense (and (eq (lexdb-adapter-id adapter) 'ode)
+                           (string-match-p "\\." sense-num-str))))
+    ;; Subsense indentation for ODE
+    (when is-subsense
+      (insert "  "))
     ;; Sense number
     (when-let ((num (lexdb-sense-number sense)))
       (when (lexdb--non-empty-string-p num)
