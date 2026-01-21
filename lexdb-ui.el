@@ -1738,7 +1738,45 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (let ((ov (make-overlay regbox-start (point))))
               (overlay-put ov 'face 'lexdb-grambox-background-face)
               (overlay-put ov 'lexdb-registerbox t))
-            (insert "\n")))))))
+            (insert "\n"))))))
+
+    ;; ODE: Synonyms (foldable)
+    (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
+      (let* ((sense-synonyms (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_synonyms"))
+             (synonyms (when sense-synonyms
+                         (cdr (assoc sense-num-str sense-synonyms #'string=)))))
+        (when synonyms
+          (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
+            (lexdb-ui--insert-foldable
+             "Synonyms"
+             (lambda ()
+               (dolist (group syn-list)
+                 (let ((register (cdr (assoc 'register group)))
+                       (words (cdr (assoc 'words group))))
+                   (when words
+                     (insert "  ")
+                     (when (and register (not (string-empty-p register)))
+                       (insert (propertize register 'face 'lexdb-register-face) " "))
+                     (let ((word-list (if (vectorp words) (append words nil) words)))
+                       (insert (propertize (string-join word-list ", ") 'face 'lexdb-synonym-face)))
+                     (insert "\n")))))
+             t)))))  ; Initially collapsed
+
+    ;; ODE: Expanded examples (foldable)
+    (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
+      (let* ((sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_expanded_examples"))
+             (expanded-examples (when sense-expanded
+                                  (cdr (assoc sense-num-str sense-expanded #'string=)))))
+        (when expanded-examples
+          (let ((ex-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
+            (lexdb-ui--insert-foldable
+             (format "More Examples (%d)" (length ex-list))
+             (lambda ()
+               (dolist (ex ex-list)
+                 (insert "    ")
+                 (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                 (insert "\n")))
+             t))))))  ; Initially collapsed
 
 (defun lexdb-ui--render-synonyms-and-crossrefs (entry adapter)
   "Render synonyms and cross-refs for ENTRY (inline, not in tabs)."

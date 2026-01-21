@@ -247,10 +247,16 @@ class ODEParser:
         if ind and not ind.find_parent(class_='subSense'):
             sense_data['definition'] = clean_text(ind.get_text())
 
+        # Helper to check if element is inside synonyms/examples containers
+        def is_in_excluded_container(elem):
+            return (elem.find_parent(class_='subSense') or
+                    elem.find_parent(class_='synonyms') or
+                    elem.find_parent(class_='examples'))
+
         # Register labels (technical, informal, etc.)
-        # Only collect labels NOT inside subSenses
+        # Only collect labels NOT inside subSenses, synonyms, or examples
         for reg in trg.find_all(class_='sense-registers'):
-            if reg.find_parent(class_='subSense'):
+            if is_in_excluded_container(reg):
                 continue
             reg_text = clean_text(reg.get_text())
             if reg_text:
@@ -261,7 +267,7 @@ class ODEParser:
 
         # Domain labels (Astronomy, Medicine, etc.)
         for domain in trg.find_all(class_='sense-regions'):
-            if domain.find_parent(class_='subSense'):
+            if is_in_excluded_container(domain):
                 continue
             domain_text = clean_text(domain.get_text())
             if domain_text:
@@ -272,7 +278,7 @@ class ODEParser:
 
         # Grammar notes
         for gram in trg.find_all(class_='grammatical_note'):
-            if gram.find_parent(class_='subSense'):
+            if is_in_excluded_container(gram):
                 continue
             gram_text = clean_text(gram.get_text())
             if gram_text:
@@ -281,11 +287,9 @@ class ODEParser:
                     'value': gram_text
                 })
 
-        # Examples (exg > ex) - only those NOT inside subSenses
+        # Basic examples (exg > ex) - those directly under trg, NOT in subSenses/synonyms/examples containers
         ex_order = 0
-        for exg in trg.find_all(class_='exg'):
-            if exg.find_parent(class_='subSense'):
-                continue
+        for exg in trg.find_all(class_='exg', recursive=False):
             ex = exg.find(class_='ex')
             if ex:
                 ex_text = extract_example_text(ex)
@@ -298,16 +302,59 @@ class ODEParser:
                     })
                     ex_order += 1
 
-        # Synonyms (stored as cross_refs for now)
-        synonyms = trg.find(class_='synonyms')
-        if synonyms:
-            syn_text = clean_text(synonyms.get_text())
-            # Remove "Synonyms" prefix
-            syn_text = re.sub(r'^Synonyms\s*', '', syn_text)
-            if syn_text:
-                sense_data['synonyms_text'] = syn_text
+        # Expanded examples (inside div.examples > div.exg)
+        examples_div = trg.find(class_='examples', recursive=False)
+        if examples_div:
+            expanded_examples = []
+            for exg in examples_div.find_all(class_='exg'):
+                for ex in exg.find_all(class_='ex'):
+                    ex_text = extract_example_text(ex)
+                    if ex_text:
+                        expanded_examples.append(ex_text)
+            if expanded_examples:
+                sense_data['expanded_examples'] = expanded_examples
+
+        # Synonyms - parse structured format
+        synonyms_div = trg.find(class_='synonyms', recursive=False)
+        if synonyms_div:
+            synonyms_data = self._parse_synonyms(synonyms_div)
+            if synonyms_data:
+                sense_data['synonyms'] = synonyms_data
 
         return sense_data if sense_data['definition'] else None
+
+    def _parse_synonyms(self, synonyms_div):
+        """Parse synonyms from div.synonyms element."""
+        synonyms_groups = []
+
+        # Find all exs divs (each may have a register label)
+        for exs in synonyms_div.find_all(class_='exs'):
+            group = {
+                'register': '',
+                'words': []
+            }
+
+            # Check for register label in this group
+            reg = exs.find(class_='sense-registers')
+            if reg:
+                group['register'] = clean_text(reg.get_text())
+
+            # Extract synonym words (links and strong text)
+            for elem in exs.children:
+                if hasattr(elem, 'name'):
+                    if elem.name == 'a':
+                        word = clean_text(elem.get_text())
+                        if word:
+                            group['words'].append(word)
+                    elif elem.name == 'strong':
+                        word = clean_text(elem.get_text())
+                        if word:
+                            group['words'].append(word)
+
+            if group['words']:
+                synonyms_groups.append(group)
+
+        return synonyms_groups if synonyms_groups else None
 
     def _parse_subsense(self, subsense, sort_order):
         """Parse a subsense element."""
@@ -332,8 +379,13 @@ class ODEParser:
         if ind:
             sense_data['definition'] = clean_text(ind.get_text())
 
-        # Register labels
-        for reg in subsense.find_all(class_='sense-registers'):
+        # Helper to check if element is inside synonyms/examples containers
+        def is_in_excluded_container(elem):
+            return (elem.find_parent(class_='synonyms') or
+                    elem.find_parent(class_='examples'))
+
+        # Register labels - exclude those inside synonyms/examples
+        for reg in subsense.find_all(class_='sense-registers', recursive=False):
             reg_text = clean_text(reg.get_text())
             if reg_text:
                 sense_data['labels'].append({
@@ -341,8 +393,8 @@ class ODEParser:
                     'value': reg_text
                 })
 
-        # Domain labels
-        for domain in subsense.find_all(class_='sense-regions'):
+        # Domain labels - these are direct children with class 'sense-regions domain_labels'
+        for domain in subsense.find_all(class_='sense-regions', recursive=False):
             domain_text = clean_text(domain.get_text())
             if domain_text:
                 sense_data['labels'].append({
@@ -351,7 +403,7 @@ class ODEParser:
                 })
 
         # Grammar notes
-        for gram in subsense.find_all(class_='grammatical_note'):
+        for gram in subsense.find_all(class_='grammatical_note', recursive=False):
             gram_text = clean_text(gram.get_text())
             if gram_text:
                 sense_data['labels'].append({
@@ -359,9 +411,16 @@ class ODEParser:
                     'value': gram_text
                 })
 
-        # Examples
+        # Find trg inside subsense for examples and synonyms
+        trg = subsense.find(class_='trg')
+
+        # Basic examples - from exg elements not inside examples/synonyms containers
         ex_order = 0
-        for exg in subsense.find_all(class_='exg'):
+        exg_container = trg if trg else subsense
+        for exg in exg_container.find_all(class_='exg'):
+            # Skip if inside examples or synonyms div
+            if exg.find_parent(class_='examples') or exg.find_parent(class_='synonyms'):
+                continue
             ex = exg.find(class_='ex')
             if ex:
                 ex_text = extract_example_text(ex)
@@ -373,6 +432,25 @@ class ODEParser:
                         'sort_order': ex_order
                     })
                     ex_order += 1
+
+        # Expanded examples (inside div.examples)
+        examples_div = exg_container.find(class_='examples') if exg_container else None
+        if examples_div:
+            expanded_examples = []
+            for exg in examples_div.find_all(class_='exg'):
+                for ex in exg.find_all(class_='ex'):
+                    ex_text = extract_example_text(ex)
+                    if ex_text:
+                        expanded_examples.append(ex_text)
+            if expanded_examples:
+                sense_data['expanded_examples'] = expanded_examples
+
+        # Synonyms
+        synonyms_div = exg_container.find(class_='synonyms') if exg_container else None
+        if synonyms_div:
+            synonyms_data = self._parse_synonyms(synonyms_div)
+            if synonyms_data:
+                sense_data['synonyms'] = synonyms_data
 
         return sense_data if sense_data['definition'] else None
 
@@ -534,19 +612,33 @@ class LexDBWriter:
                 idx
             ))
 
+        # Collect sense-level synonyms and expanded_examples for later storage
+        sense_synonyms_map = {}
+        sense_expanded_examples_map = {}
+
         # Insert senses
         for sense_data in entry_data.get('senses', []):
+            sense_number = sense_data.get('number', '')
+
             self.cursor.execute("""
                 INSERT INTO senses (entry_id, sense_number, signpost, definition, sort_order)
                 VALUES (?, ?, ?, ?, ?)
             """, (
                 entry_id,
-                sense_data.get('number'),
+                sense_number,
                 sense_data.get('signpost'),
                 sense_data.get('definition', ''),
                 sense_data.get('sort_order', 0)
             ))
             sense_id = self.cursor.lastrowid
+
+            # Collect synonyms for this sense
+            if sense_data.get('synonyms'):
+                sense_synonyms_map[sense_number] = sense_data['synonyms']
+
+            # Collect expanded_examples for this sense
+            if sense_data.get('expanded_examples'):
+                sense_expanded_examples_map[sense_number] = sense_data['expanded_examples']
 
             # Sense-level labels
             for idx, label in enumerate(sense_data.get('labels', [])):
@@ -670,6 +762,12 @@ class LexDBWriter:
                     example['text'],
                     example.get('sort_order', 0)
                 ))
+
+        # Store sense-level synonyms and expanded_examples as entry attributes
+        if sense_synonyms_map:
+            entry_data.setdefault('attributes', {})['sense_synonyms'] = sense_synonyms_map
+        if sense_expanded_examples_map:
+            entry_data.setdefault('attributes', {})['sense_expanded_examples'] = sense_expanded_examples_map
 
         # Insert extension attributes (EAV)
         for key, value in entry_data.get('attributes', {}).items():
