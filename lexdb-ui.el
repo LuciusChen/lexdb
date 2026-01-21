@@ -1741,10 +1741,12 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
             (insert "\n"))))))
 
     ;; ODE: Synonyms (foldable)
+    ;; Note: This code is outside the main let scope, so we define local variables
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
-      (let* ((sense-synonyms (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_synonyms"))
+      (let* ((ode-sense-num (or (lexdb-sense-number sense) "0"))
+             (sense-synonyms (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_synonyms"))
              (synonyms (when sense-synonyms
-                         (cdr (assoc sense-num-str sense-synonyms #'string=)))))
+                         (cdr (assoc ode-sense-num sense-synonyms #'string=)))))
         (when synonyms
           (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
             (lexdb-ui--insert-foldable
@@ -1764,9 +1766,10 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox."
 
     ;; ODE: Expanded examples (foldable)
     (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
-      (let* ((sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_expanded_examples"))
+      (let* ((ode-sense-num (or (lexdb-sense-number sense) "0"))
+             (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
              (expanded-examples (when sense-expanded
-                                  (cdr (assoc sense-num-str sense-expanded #'string=)))))
+                                  (cdr (assoc ode-sense-num sense-expanded #'string=)))))
         (when expanded-examples
           (let ((ex-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
             (lexdb-ui--insert-foldable
