@@ -330,15 +330,11 @@ class ODEParser:
                 # Add section POS to first sense's signpost for header display
                 if first_sense_in_section and section_pos:
                     sense_data['section_pos'] = section_pos
+                # Add section-level register to first sense (shown on separate line)
+                if first_sense_in_section and section_register:
+                    sense_data['section_register'] = section_register
+                if first_sense_in_section:
                     first_sense_in_section = False
-                # Add section-level register to first sense if not already present
-                if section_register and not any(
-                    l.get('type') == LabelType.REGISTER for l in sense_data.get('labels', [])
-                ):
-                    sense_data['labels'].insert(0, {
-                        'type': LabelType.REGISTER,
-                        'value': section_register
-                    })
                 entry['senses'].append(sense_data)
                 sense_order += 1
 
@@ -1002,11 +998,12 @@ class LexDBWriter:
                 idx
             ))
 
-        # Collect sense-level synonyms, expanded_examples, and form_groups for later storage
+        # Collect sense-level synonyms, expanded_examples, form_groups, and section_registers for later storage
         # Use sort_order as key (unique per entry) instead of sense_number (can repeat across POS)
         sense_synonyms_map = {}
         sense_expanded_examples_map = {}
         sense_form_groups_map = {}
+        sense_section_registers_map = {}
 
         # Insert senses
         for sense_data in entry_data.get('senses', []):
@@ -1033,6 +1030,10 @@ class LexDBWriter:
             # Collect form_groups for this sense (e.g., "also days")
             if sense_data.get('form_groups'):
                 sense_form_groups_map[sort_key] = sense_data['form_groups']
+
+            # Collect section_register for this sense (e.g., "informal" at section level)
+            if sense_data.get('section_register'):
+                sense_section_registers_map[sort_key] = sense_data['section_register']
 
             # Collect synonyms for this sense
             if sense_data.get('synonyms'):
@@ -1165,13 +1166,15 @@ class LexDBWriter:
                     example.get('sort_order', 0)
                 ))
 
-        # Store sense-level synonyms, expanded_examples, and form_groups as entry attributes
+        # Store sense-level synonyms, expanded_examples, form_groups, and section_registers as entry attributes
         if sense_synonyms_map:
             entry_data.setdefault('attributes', {})['sense_synonyms'] = sense_synonyms_map
         if sense_expanded_examples_map:
             entry_data.setdefault('attributes', {})['sense_expanded_examples'] = sense_expanded_examples_map
         if sense_form_groups_map:
             entry_data.setdefault('attributes', {})['sense_form_groups'] = sense_form_groups_map
+        if sense_section_registers_map:
+            entry_data.setdefault('attributes', {})['sense_section_registers'] = sense_section_registers_map
 
         # Insert extension attributes (EAV)
         for key, value in entry_data.get('attributes', {}).items():

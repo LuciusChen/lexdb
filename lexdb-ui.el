@@ -1243,6 +1243,15 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
               (setq formatted (replace-regexp-in-string " +(" "(" formatted))
               (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
             (insert (propertize formatted 'face 'lexdb-signpost-face) " ")))))
+    ;; ODE: Section-level register (e.g., "informal") - on its own line before definition
+    ;; Uses sense-index (sort_order) as key
+    (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
+      (let* ((section-registers-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_section_registers"))
+             (sort-key (number-to-string sense-index))
+             (section-register (when section-registers-map
+                                 (cdr (assoc sort-key section-registers-map #'string=)))))
+        (when (lexdb--non-empty-string-p section-register)
+          (insert (propertize section-register 'face 'lexdb-register-face) "\n"))))
     ;; ODE: Form groups (e.g., "also days") - after sense number, before definition
     ;; Uses sense-index (sort_order) as key, not sense number (which can repeat across POS)
     (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
