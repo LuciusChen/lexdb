@@ -232,7 +232,7 @@ class ODEParser:
         if variant_elem:
             variant_text = clean_text(variant_elem.get_text())
             if variant_text:
-                entry['attributes']['ode/variant'] = variant_text
+                entry['attributes']['variant'] = variant_text
 
         # === Part of speech ===
         pos_elem = soup.find(class_='pos')
