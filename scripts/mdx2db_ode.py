@@ -868,7 +868,7 @@ class ODEParser:
     def _handle_origin(self, inner, entry):
         """Handle origin section content.
 
-        Structure: p (main text) + ul.origin_appendix > li > p (appendix)
+        Structure: p (main text) + ul.origin_appendix > li > p.p9h (multiple paragraphs)
         """
         main_p = inner.find('p', recursive=False)
         main_origin = ''
@@ -878,9 +878,13 @@ class ODEParser:
         appendix = inner.find(class_='origin_appendix')
         appendix_text = ''
         if appendix:
-            appendix_p = appendix.find('p')
-            if appendix_p:
-                appendix_text = self._extract_origin_text(appendix_p)
+            # Extract ALL paragraphs from appendix, not just the first one
+            appendix_paragraphs = []
+            for p in appendix.find_all('p'):
+                p_text = self._extract_origin_text(p)
+                if p_text:
+                    appendix_paragraphs.append(p_text)
+            appendix_text = '\n\n'.join(appendix_paragraphs)
 
         if main_origin:
             entry['attributes']['origin'] = {

@@ -1479,7 +1479,10 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                   (sub-def-zh (cdr (assoc 'definition_zh sub)))
                   (sub-grammar (cdr (assoc 'grammar sub)))
                   (sub-labels (cdr (assoc 'labels sub)))
-                  (sub-examples (cdr (assoc 'examples sub))))
+                  (sub-examples (cdr (assoc 'examples sub)))
+                  (sub-expanded-examples (cdr (assoc 'expanded_examples sub)))
+                  (sub-synonyms (cdr (assoc 'synonyms sub)))
+                  (sub-index (cdr (assoc 'sort_order sub))))
               ;; Subsense number
               (insert "  ")
               (when sub-num
@@ -1552,7 +1555,62 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                            (t
                             (insert "    "))))
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-                        (insert "\n")))))))))))
+                        (insert "\n"))))))
+              ;; Subsense tabs: expanded examples and synonyms
+              (let ((sub-tabs nil))
+                ;; Build expanded examples tab
+                (when sub-expanded-examples
+                  (let ((ex-list (if (vectorp sub-expanded-examples)
+                                     (append sub-expanded-examples nil)
+                                   sub-expanded-examples)))
+                    (push (list 'more-examples (format "Example sentences (%d)" (length ex-list))
+                                (with-temp-buffer
+                                  (dolist (ex ex-list)
+                                    (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                    (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                                    (insert "\n"))
+                                  (buffer-string)))
+                          sub-tabs)))
+                ;; Build synonyms tab
+                (when sub-synonyms
+                  (let ((syn-list (if (vectorp sub-synonyms) (append sub-synonyms nil) sub-synonyms)))
+                    (push (list 'synonyms "SYNONYMS"
+                                (with-temp-buffer
+                                  (dolist (group syn-list)
+                                    (let ((register (cdr (assoc 'register group)))
+                                          (words (cdr (assoc 'words group))))
+                                      (when words
+                                        (insert "    ")
+                                        (when (and register (not (string-empty-p register)))
+                                          (insert (propertize register 'face 'lexdb-register-face) " "))
+                                        (let ((word-list (if (vectorp words) (append words nil) words))
+                                              (first t))
+                                          (dolist (word-obj word-list)
+                                            (unless first (insert ", "))
+                                            (setq first nil)
+                                            (let* ((word-text (if (stringp word-obj)
+                                                                  word-obj
+                                                                (cdr (assoc 'word word-obj))))
+                                                   (clickable (if (stringp word-obj)
+                                                                  t
+                                                                (eq (cdr (assoc 'clickable word-obj)) t))))
+                                              (if clickable
+                                                  (insert-text-button word-text
+                                                                      'face 'lexdb-link-face
+                                                                      'action (lambda (_)
+                                                                                (lexdb-search-and-goto-sense word-text nil 'ode))
+                                                                      'help-echo (format "Look up: %s [ode]" word-text))
+                                                (insert (propertize word-text 'face 'default))))))
+                                        (insert "\n"))))
+                                  (buffer-string)))
+                          sub-tabs)))
+                ;; Insert tab bar aligned with examples (4 spaces)
+                (when sub-tabs
+                  (insert "    ")
+                  (let ((tab-group (format "lexdb-ode-subsense-%d-%s"
+                                           (lexdb-entry-id entry)
+                                           (or sub-index sub-num "0"))))
+                    (lexdb-ui--insert-tab-bar (nreverse sub-tabs) tab-group)))))))))
 
     ;; Regular examples BEFORE grammar patterns (position=0)
     (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))
