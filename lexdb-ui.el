@@ -2949,12 +2949,29 @@ ADAPTER-ID is used for crossref navigation."
           (insert "\n")
           (dolist (runon runon-list)
             (let ((word (cdr (assoc 'word runon)))
-                  (pos (cdr (assoc 'pos runon))))
+                  (pos (cdr (assoc 'pos runon)))
+                  (gram (cdr (assoc 'gram runon)))
+                  (pron-uk (cdr (assoc 'pron_uk runon)))
+                  (pron-us (cdr (assoc 'pron_us runon))))
               (when word
                 (insert (propertize "—" 'face 'lexdb-label-face))
                 (insert (propertize word 'face 'lexdb-headword-face))
+                ;; Pronunciation (format: /UK $ US/ or just /UK/)
+                (when (or pron-uk pron-us)
+                  (insert " ")
+                  (insert (propertize
+                           (cond
+                            ((and pron-uk pron-us)
+                             (format "/%s $ %s/" pron-uk pron-us))
+                            (pron-uk (format "/%s/" pron-uk))
+                            (pron-us (format "/%s/" pron-us)))
+                           'face 'lexdb-pron-face)))
+                ;; Part of speech
                 (when (and pos (not (string-empty-p pos)))
                   (insert " " (propertize pos 'face 'lexdb-pos-face)))
+                ;; Grammar info (e.g., [countable])
+                (when (and gram (not (string-empty-p gram)))
+                  (insert " " (propertize gram 'face 'lexdb-grammar-face)))
                 (insert "\n")))))))))
 
 (defun lexdb-ui--slot-ode-phrases-origin (entry adapter)

@@ -1372,17 +1372,40 @@ class LDOCEParser:
             for runon in tail.find_all(class_='runon'):
                 deriv = runon.find(class_='deriv')
                 pos = runon.find(class_='pos')
+                gram = runon.find(class_='gram')
+                proncodes = runon.find(class_='proncodes')
                 if deriv:
                     deriv_text = clean_text(deriv.get_text())
                     # Remove leading dash if present
                     if deriv_text.startswith('—') or deriv_text.startswith('-'):
                         deriv_text = deriv_text[1:].strip()
                     pos_text = clean_text(pos.get_text()) if pos else ''
+                    gram_text = clean_text(gram.get_text()) if gram else ''
+                    # Extract pronunciation (UK and US)
+                    pron_uk = ''
+                    pron_us = ''
+                    if proncodes:
+                        pron_elem = proncodes.find(class_='pron')
+                        amevarpron = proncodes.find(class_='amevarpron')
+                        if pron_elem:
+                            pron_uk = clean_text(pron_elem.get_text())
+                        if amevarpron:
+                            pron_us = clean_text(amevarpron.get_text())
+                            # Remove leading "$ " if present
+                            if pron_us.startswith('$'):
+                                pron_us = pron_us[1:].strip()
                     if deriv_text:
-                        runons.append({
+                        runon_data = {
                             'word': deriv_text,
                             'pos': pos_text
-                        })
+                        }
+                        if gram_text:
+                            runon_data['gram'] = gram_text
+                        if pron_uk:
+                            runon_data['pron_uk'] = pron_uk
+                        if pron_us:
+                            runon_data['pron_us'] = pron_us
+                        runons.append(runon_data)
             if runons:
                 entry['attributes']['runons'] = runons
 
