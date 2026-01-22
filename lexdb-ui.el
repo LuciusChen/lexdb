@@ -1503,31 +1503,33 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                    (has-translation (and ex-zh (lexdb--non-empty-string-p ex-zh) lexdb-ui-translation-indicator)))
               (when (and (lexdb--non-empty-string-p ex-text) (= position 0))
                 ;; Build indicator string: [audio][translation]
-                (cond
-                 ((and has-audio has-translation)
-                  (insert (propertize "  🔊"
-                                      'face 'lexdb-audio-indicator-face
-                                      'lexdb-audio-path audio-path
-                                      'lexdb-audio-dir audio-dir
-                                      'help-echo "C-c C-c to play"))
-                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                      'face 'lexdb-translation-indicator-face
-                                      'lexdb-translation ex-zh
-                                      'help-echo "Press t to peek translation")))
-                 (has-audio
-                  (insert (propertize "  🔊 "
-                                      'face 'lexdb-audio-indicator-face
-                                      'lexdb-audio-path audio-path
-                                      'lexdb-audio-dir audio-dir
-                                      'help-echo "C-c C-c to play")))
-                 (has-translation
-                  (insert "  ")
-                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                      'face 'lexdb-translation-indicator-face
-                                      'lexdb-translation ex-zh
-                                      'help-echo "Press t to peek translation")))
-                 (t
-                  (insert "    ")))
+                ;; ODE uses 2-space indent for examples without subsenses
+                (let ((indent (if (eq (lexdb-adapter-id adapter) 'ode) "  " "    ")))
+                  (cond
+                   ((and has-audio has-translation)
+                    (insert (propertize (concat (substring indent 0 (- (length indent) 1)) "🔊")
+                                        'face 'lexdb-audio-indicator-face
+                                        'lexdb-audio-path audio-path
+                                        'lexdb-audio-dir audio-dir
+                                        'help-echo "C-c C-c to play"))
+                    (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                        'face 'lexdb-translation-indicator-face
+                                        'lexdb-translation ex-zh
+                                        'help-echo "Press t to peek translation")))
+                   (has-audio
+                    (insert (propertize (concat indent "🔊 ")
+                                        'face 'lexdb-audio-indicator-face
+                                        'lexdb-audio-path audio-path
+                                        'lexdb-audio-dir audio-dir
+                                        'help-echo "C-c C-c to play")))
+                   (has-translation
+                    (insert indent)
+                    (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                        'face 'lexdb-translation-indicator-face
+                                        'lexdb-translation ex-zh
+                                        'help-echo "Press t to peek translation")))
+                   (t
+                    (insert indent))))
                 (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                 (insert "\n")))))))
     ;; Grammar patterns
@@ -1571,32 +1573,33 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                    (has-audio (and (memq 'audio-example caps) audio-path (lexdb--non-empty-string-p audio-path)))
                    (has-translation (and ex-zh (lexdb--non-empty-string-p ex-zh) lexdb-ui-translation-indicator)))
               (when (and (lexdb--non-empty-string-p ex-text) (= position 1))
-                ;; Build indicator string: [audio][translation]
-                (cond
-                 ((and has-audio has-translation)
-                  (insert (propertize "  🔊"
-                                      'face 'lexdb-audio-indicator-face
-                                      'lexdb-audio-path audio-path
-                                      'lexdb-audio-dir audio-dir
-                                      'help-echo "C-c C-c to play"))
-                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                      'face 'lexdb-translation-indicator-face
-                                      'lexdb-translation ex-zh
-                                      'help-echo "Press t to peek translation")))
-                 (has-audio
-                  (insert (propertize "  🔊 "
-                                      'face 'lexdb-audio-indicator-face
-                                      'lexdb-audio-path audio-path
-                                      'lexdb-audio-dir audio-dir
-                                      'help-echo "C-c C-c to play")))
-                 (has-translation
-                  (insert "  ")
-                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                      'face 'lexdb-translation-indicator-face
-                                      'lexdb-translation ex-zh
-                                      'help-echo "Press t to peek translation")))
-                 (t
-                  (insert "    ")))
+                ;; ODE uses 2-space indent for examples without subsenses
+                (let ((indent (if (eq (lexdb-adapter-id adapter) 'ode) "  " "    ")))
+                  (cond
+                   ((and has-audio has-translation)
+                    (insert (propertize (concat (substring indent 0 (- (length indent) 1)) "🔊")
+                                        'face 'lexdb-audio-indicator-face
+                                        'lexdb-audio-path audio-path
+                                        'lexdb-audio-dir audio-dir
+                                        'help-echo "C-c C-c to play"))
+                    (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                        'face 'lexdb-translation-indicator-face
+                                        'lexdb-translation ex-zh
+                                        'help-echo "Press t to peek translation")))
+                   (has-audio
+                    (insert (propertize (concat indent "🔊 ")
+                                        'face 'lexdb-audio-indicator-face
+                                        'lexdb-audio-path audio-path
+                                        'lexdb-audio-dir audio-dir
+                                        'help-echo "C-c C-c to play")))
+                   (has-translation
+                    (insert indent)
+                    (insert (propertize (concat lexdb-ui-translation-indicator " ")
+                                        'face 'lexdb-translation-indicator-face
+                                        'lexdb-translation ex-zh
+                                        'help-echo "Press t to peek translation")))
+                   (t
+                    (insert indent))))
                 (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                 (insert "\n")))))))
     ;; Lexunits (sub-phrases like "call a doctor/the police")
@@ -1818,6 +1821,9 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
              (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
              (expanded-examples (when sense-expanded
                                   (cdr (assq ode-sense-key sense-expanded))))
+             (subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses"))
+             ;; Align with examples: 4 spaces if subsenses, 2 spaces if no subsenses
+             (tab-indent (if subsenses "    " "  "))
              (tabs nil))
         ;; Build SYNONYMS tab content
         (when synonyms
@@ -1828,7 +1834,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                             (let ((register (cdr (assoc 'register group)))
                                   (words (cdr (assoc 'words group))))
                               (when words
-                                (insert "    ")  ; Extra indent for content
+                                (insert tab-indent)
                                 (when (and register (not (string-empty-p register)))
                                   (insert (propertize register 'face 'lexdb-register-face) " "))
                                 ;; Insert each word - clickable or not based on data
@@ -1861,14 +1867,14 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
             (push (list 'more-examples (format "Example sentences (%d)" (length ex-list))
                         (with-temp-buffer
                           (dolist (ex ex-list)
-                            (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                            (insert tab-indent (propertize "• " 'face 'lexdb-definition-face))
                             (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                             (insert "\n"))
                           (buffer-string)))
                   tabs)))
-        ;; Insert tab bar if we have any tabs (aligned with examples - always 4 spaces)
+        ;; Insert tab bar aligned with examples
         (when tabs
-          (insert "    ")  ; 4 spaces to align with examples
+          (insert tab-indent)
           (let ((tab-group (format "lexdb-ode-sense-%d-%s" (lexdb-entry-id entry) (symbol-name ode-sense-key))))
             (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))))
 
@@ -3016,7 +3022,7 @@ ADAPTER-ID is used for crossref navigation."
                                     (format "Example sentences (%d)" (length exp-list))
                                     (with-temp-buffer
                                       (dolist (ex exp-list)
-                                        (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                        (insert "      " (propertize "• " 'face 'lexdb-definition-face))
                                         (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                                         (insert "\n"))
                                       (buffer-string)))
@@ -3028,9 +3034,9 @@ ADAPTER-ID is used for crossref navigation."
                                     "SYNONYMS"
                                     (lexdb-ui--render-phrase-synonyms syn-list))
                               tabs))))
-                  ;; Insert tab bar if we have tabs
+                  ;; Insert tab bar if we have tabs (align with examples - 6 spaces)
                   (when tabs
-                    (insert "    ")
+                    (insert "      ")
                     (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group)))
                 (setq phrase-index (1+ phrase-index)))))
           ;; Create overlay for background
@@ -3071,7 +3077,7 @@ ADAPTER-ID is used for crossref navigation."
                                     (format "Example sentences (%d)" (length exp-list))
                                     (with-temp-buffer
                                       (dolist (ex exp-list)
-                                        (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                        (insert "      " (propertize "• " 'face 'lexdb-definition-face))
                                         (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                                         (insert "\n"))
                                       (buffer-string)))
@@ -3083,8 +3089,9 @@ ADAPTER-ID is used for crossref navigation."
                                     "SYNONYMS"
                                     (lexdb-ui--render-phrase-synonyms syn-list))
                               tabs))))
+                  ;; Insert tab bar aligned with examples (6 spaces)
                   (when tabs
-                    (insert "    ")
+                    (insert "      ")
                     (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group)))
                 (setq pv-index (1+ pv-index)))))
           ;; Create overlay for background
@@ -3126,14 +3133,14 @@ ADAPTER-ID is used for crossref navigation."
                 (when expanded-examples
                   (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
                     (when (> (length exp-list) 0)
-                      (insert "    ")  ; Align with definition
+                      (insert "      ")  ; Align with examples (6 spaces)
                       (let ((tab-group (format "lexdb-ode-deriv-%d-%d" (lexdb-entry-id entry) deriv-index)))
                         (lexdb-ui--insert-tab-bar
                          (list (list 'more-examples
                                      (format "Example sentences (%d)" (length exp-list))
                                      (with-temp-buffer
                                        (dolist (ex exp-list)
-                                         (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                         (insert "      " (propertize "• " 'face 'lexdb-definition-face))
                                          (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                                          (insert "\n"))
                                        (buffer-string))))
