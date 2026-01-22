@@ -3621,33 +3621,36 @@ Index includes entries (headwords) and senses."
 
 (defun lexdb-ui-play-audio-at-point ()
   "Play audio at point if available.
-Only searches within the current line to avoid playing wrong audio."
+Only searches within the current line to avoid playing wrong audio.
+Supports both local audio (with audio-dir) and online audio (path only)."
   (interactive)
   (let ((audio-path (get-text-property (point) 'lexdb-audio-path))
         (audio-dir (get-text-property (point) 'lexdb-audio-dir)))
-    (if (and audio-path audio-dir)
+    (if audio-path
+        ;; Found audio at point - play it (audio-dir can be nil for online)
         (lexdb-ui--play-audio audio-path audio-dir)
       ;; Try to find audio on current line only
-      (let ((found nil)
+      (let ((found-path nil)
+            (found-dir nil)
             (line-start (line-beginning-position))
             (line-end (line-end-position)))
         ;; Search backward to line start
         (save-excursion
-          (while (and (not found) (>= (point) line-start))
-            (when-let* ((path (get-text-property (point) 'lexdb-audio-path))
-                       (dir (get-text-property (point) 'lexdb-audio-dir)))
-              (setq found (cons path dir)))
-            (unless found (backward-char))))
+          (while (and (not found-path) (>= (point) line-start))
+            (when-let* ((path (get-text-property (point) 'lexdb-audio-path)))
+              (setq found-path path)
+              (setq found-dir (get-text-property (point) 'lexdb-audio-dir)))
+            (unless found-path (backward-char))))
         ;; Search forward to line end if not found
-        (unless found
+        (unless found-path
           (save-excursion
-            (while (and (not found) (<= (point) line-end))
-              (when-let* ((path (get-text-property (point) 'lexdb-audio-path))
-                         (dir (get-text-property (point) 'lexdb-audio-dir)))
-                (setq found (cons path dir)))
-              (unless found (forward-char)))))
-        (if found
-            (lexdb-ui--play-audio (car found) (cdr found))
+            (while (and (not found-path) (<= (point) line-end))
+              (when-let* ((path (get-text-property (point) 'lexdb-audio-path)))
+                (setq found-path path)
+                (setq found-dir (get-text-property (point) 'lexdb-audio-dir)))
+              (unless found-path (forward-char)))))
+        (if found-path
+            (lexdb-ui--play-audio found-path found-dir)
           (message "No audio on this line"))))))
 
 (defface lexdb-fold-indicator-face
