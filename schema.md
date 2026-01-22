@@ -781,3 +781,83 @@ flowchart LR
 ```
 
 ---
+
+## Emacs Lisp 适配器架构
+
+LexDB Emacs 客户端使用统一的适配器架构来支持多词典。
+
+### 核心模块 (lexdb.el)
+
+#### 数据库连接管理
+
+```elisp
+;; 统一的数据库连接池
+(defvar lexdb--database-connections (make-hash-table :test 'eq))
+(defvar lexdb--query-caches (make-hash-table :test 'eq))
+
+;; 公共 API
+(lexdb-db-ensure adapter-id db-file)   ; 确保连接打开
+(lexdb-db-get adapter-id)              ; 获取连接
+(lexdb-db-close adapter-id)            ; 关闭连接并清空缓存
+
+;; 缓存 API
+(lexdb-db-cache-get adapter-id key)    ; 获取缓存
+(lexdb-db-cache-put adapter-id key value) ; 设置缓存
+```
+
+#### 共享数据处理函数
+
+```elisp
+;; JSON 解压（用于 json.gz 类型的 attr_value）
+(lexdb--decompress-json-value compressed-data)
+
+;; 发音构建（从标准 pronunciations 表）
+(lexdb--build-pronunciations-from-db entry-id db)
+
+;; 词形还原
+(lexdb--find-lemma-with-lookup word lookup-fn)
+```
+
+### 适配器实现模式
+
+每个词典适配器（如 `lexdb-ode.el`、`lexdb-oald.el`、`lexdb-ldoce.el`）遵循统一模式：
+
+```elisp
+;; 1. 数据库连接 - 使用共享模块
+(defun lexdb-{dict}--ensure-db ()
+  (lexdb-db-ensure '{dict} lexdb-{dict}-db-file))
+
+(defun lexdb-{dict}--close ()
+  (lexdb-db-close '{dict}))
+
+;; 2. 数据处理 - 使用共享函数
+(defalias 'lexdb-{dict}--decompress-json #'lexdb--decompress-json-value)
+(defalias 'lexdb-{dict}--build-pronunciations #'lexdb--build-pronunciations-from-db)
+
+;; 3. 查询 - 适配器特定逻辑
+(defun lexdb-{dict}--lookup (word) ...)
+(defun lexdb-{dict}--row-to-entry (row) ...)
+
+;; 4. 注册
+(lexdb-register-adapter-type '{dict} #'lexdb-{dict}--register-from-config)
+```
+
+### 能力与元数据
+
+适配器通过 `lexdb-adapter-create` 声明能力：
+
+```elisp
+(lexdb-adapter-create
+ :id 'ode
+ :name "Oxford Dictionary of English"
+ :capabilities '(lookup definition pronunciation
+                 pos grammar register domain examples
+                 phrases origin lemmatization
+                 audio-uk audio-us)
+ :db-file lexdb-ode-db-file
+ :lookup-fn #'lexdb-ode--lookup
+ :close-fn #'lexdb-ode--close
+ :lemma-fn #'lexdb-ode--find-lemma)
+```
+
+---

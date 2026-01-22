@@ -309,6 +309,14 @@ Returns alist of (adapter-id . (entries . adapter))."
   "Face for clickable inflection words."
   :group 'lexdb)
 
+;; Links and clickable elements
+(defface lexdb-link-face
+  '((((background dark))  :foreground "#7CB8FF" :underline t)
+    (((background light)) :foreground "#0066CC" :underline t))
+  "Face for general clickable links (synonyms, cross-references, etc.).
+This is the base face for all clickable text that jumps to another entry."
+  :group 'lexdb)
+
 (defface lexdb-grammar-face
   '((((background dark))  :foreground "#6B8E23")
     (((background light)) :foreground "#6B8E23"))
@@ -425,11 +433,12 @@ Same color as example-highlight-face for consistency."
   "Face for bad examples (what NOT to say) in GRAMMAR box."
   :group 'lexdb)
 
-;; Relations
+;; Relations - cross references are clickable links
 (defface lexdb-crossref-face
-  '((((background dark))  :foreground "#6B8E23")
-    (((background light)) :foreground "#6B8E23"))
-  "Face for cross references."
+  '((((background dark))  :foreground "#7CB8FF" :underline t)
+    (((background light)) :foreground "#0066CC" :underline t))
+  "Face for cross references (clickable links to other entries).
+Uses link-like styling for visual consistency with other clickable elements."
   :group 'lexdb)
 
 ;; Dictionary Tab faces
