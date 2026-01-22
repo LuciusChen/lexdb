@@ -746,26 +746,46 @@ Format markers:
       (when (< start (length text))
         (insert (propertize (substring text start) 'face default-face))))))
 
-(defun lexdb-ui--insert-formatted-origin (text)
+(defun lexdb-ui--insert-formatted-origin (text &optional adapter-id)
   "Insert origin TEXT with format markers for ODE etymology.
 Format markers:
   <<date>>...<</date>> - date/era (e.g., 'Early 17th century')
-  <<etym>>...<</etym>> - etymological words (e.g., 'indicat-', 'indicare')"
+  <<etym>>...<</etym>> - etymological words (e.g., 'indicat-', 'indicare')
+  <<link:TARGET>>...<</link>> - cross-reference links (e.g., 'Latin')
+If ADAPTER-ID is provided, links will jump within the same dictionary."
   (when (and text (not (string-empty-p text)))
-    (let ((start 0))
-      (while (string-match "<<\\(date\\|etym\\)>>\\([^<]*\\)<</\\1>>" text start)
-        (let ((before-match (substring text start (match-beginning 0)))
-              (marker-type (match-string 1 text))
-              (content (match-string 2 text)))
+    (let ((start 0)
+          ;; Regex matches: date/etym markers OR link markers
+          (marker-regex "<<\\(date\\|etym\\)>>\\([^<]*\\)<</\\1>>\\|<<link:\\([^>]+\\)>>\\([^<]*\\)<</link>>"))
+      (while (string-match marker-regex text start)
+        (let ((before-match (substring text start (match-beginning 0))))
           ;; Insert text before marker with default origin face
           (when (> (length before-match) 0)
             (insert (propertize before-match 'face 'lexdb-origin-face)))
-          ;; Insert marked content with appropriate face
-          (insert (propertize content 'face
-                              (pcase marker-type
-                                ("date" 'lexdb-origin-date-face)
-                                ("etym" 'lexdb-origin-etym-face)
-                                (_ 'lexdb-origin-face))))
+          ;; Check which type of marker matched
+          (if (match-string 1 text)
+              ;; date/etym marker
+              (let ((marker-type (match-string 1 text))
+                    (content (match-string 2 text)))
+                (insert (propertize content 'face
+                                    (pcase marker-type
+                                      ("date" 'lexdb-origin-date-face)
+                                      ("etym" 'lexdb-origin-etym-face)
+                                      (_ 'lexdb-origin-face)))))
+            ;; link marker
+            (let ((target (match-string 3 text))
+                  (content (match-string 4 text))
+                  (jump-adapter adapter-id))
+              (insert-text-button content
+                                  'face 'lexdb-crossref-face
+                                  'action (lambda (_)
+                                            (lexdb-search-and-goto-sense
+                                             (downcase target) nil jump-adapter))
+                                  'help-echo (format "Look up: %s%s"
+                                                     target
+                                                     (if jump-adapter
+                                                         (format " [%s]" jump-adapter)
+                                                       "")))))
           (setq start (match-end 0))))
       ;; Insert remaining text
       (when (< start (length text))
@@ -3226,11 +3246,11 @@ ADAPTER-ID is used for crossref navigation."
             (insert "\n")
             (insert (propertize "ORIGIN" 'face 'lexdb-grambox-heading-face) "\n")
             (insert "  ")
-            (lexdb-ui--insert-formatted-origin text)
+            (lexdb-ui--insert-formatted-origin text (lexdb-adapter-id adapter))
             (insert "\n")
             (when (and appendix (not (string-empty-p appendix)))
               (insert "  ")
-              (lexdb-ui--insert-formatted-origin appendix)
+              (lexdb-ui--insert-formatted-origin appendix (lexdb-adapter-id adapter))
               (insert "\n"))
             ;; Create overlay for background
             (let ((ov (make-overlay section-start (point))))

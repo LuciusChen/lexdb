@@ -828,6 +828,7 @@ class ODEParser:
         Preserves:
         - <span class="q5j"> (date/era) as <<date>>...<</date>>
         - <em> (etymological words) as <<etym>>...<</etym>>
+        - <a href="entry://..."> (cross-references) as <<link:TARGET>>...<</link>>
         """
         if not element:
             return ""
@@ -836,6 +837,19 @@ class ODEParser:
 
         # Make a copy
         elem_copy = BeautifulSoup(str(element), 'html.parser')
+
+        # Format cross-reference links (a href="entry://...")
+        for link in elem_copy.find_all('a', href=True):
+            href = link.get('href', '')
+            if href.startswith('entry://'):
+                # Extract target word from href (e.g., "entry://Latin#Latin__2" -> "Latin")
+                target = href[8:]  # Remove "entry://" prefix
+                # Remove anchor part if present (e.g., "Latin#Latin__2" -> "Latin")
+                if '#' in target:
+                    target = target.split('#')[0]
+                text = link.get_text().strip()
+                if text:
+                    link.replace_with(f'<<link:{target}>>{text}<</link>>')
 
         # Format date/era spans (class="q5j")
         for date_span in elem_copy.find_all('span', class_='q5j'):
