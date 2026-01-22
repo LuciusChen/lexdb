@@ -1626,8 +1626,11 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                    (has-translation (and ex-zh (lexdb--non-empty-string-p ex-zh) lexdb-ui-translation-indicator)))
               (when (and (lexdb--non-empty-string-p ex-text) (= position 0))
                 ;; Build indicator string: [audio][translation]
-                ;; ODE uses 2-space indent for examples without subsenses
-                (let ((indent (if (eq (lexdb-adapter-id adapter) 'ode) "  " "    ")))
+                ;; ODE: 2-space for main senses, 4-space for subsenses (sense number contains ".")
+                (let ((indent (cond
+                               ((and (eq (lexdb-adapter-id adapter) 'ode) is-subsense) "    ")
+                               ((eq (lexdb-adapter-id adapter) 'ode) "  ")
+                               (t "    "))))
                   (cond
                    ((and has-audio has-translation)
                     (insert (propertize (concat (substring indent 0 (- (length indent) 1)) "🔊")
@@ -1944,9 +1947,8 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
              (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
              (expanded-examples (when sense-expanded
                                   (cdr (assq ode-sense-key sense-expanded))))
-             (subsenses (lexdb-meta-get (lexdb-sense-metadata sense) "ode" "subsenses"))
-             ;; Align with examples: 4 spaces if subsenses, 2 spaces if no subsenses
-             (tab-indent (if subsenses "    " "  "))
+             ;; Align with examples: 4 spaces for subsenses (sense number contains "."), 2 spaces otherwise
+             (tab-indent (if is-subsense "    " "  "))
              (tabs nil))
         ;; Build SYNONYMS tab content
         (when synonyms
