@@ -1947,8 +1947,11 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
              (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
              (expanded-examples (when sense-expanded
                                   (cdr (assq ode-sense-key sense-expanded))))
-             ;; Align with examples: 4 spaces for subsenses (sense number contains "."), 2 spaces otherwise
-             (tab-indent (if is-subsense "    " "  "))
+             ;; Check if this is a subsense (sense number contains ".")
+             (sense-num-str (or (lexdb-sense-number sense) "0"))
+             (is-ode-subsense (string-match-p "\\." sense-num-str))
+             ;; Align with examples: 4 spaces for subsenses, 2 spaces otherwise
+             (tab-indent (if is-ode-subsense "    " "  "))
              (tabs nil))
         ;; Build SYNONYMS tab content
         (when synonyms
