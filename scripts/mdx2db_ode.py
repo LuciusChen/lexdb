@@ -757,14 +757,20 @@ class ODEParser:
                 nested_semb = li.find('ul', class_='semb')
 
             if nested_semb:
-                for phrase_sense in nested_semb.find_all(class_='phrase_sense'):
+                for phrase_sense in nested_semb.find_all(class_='phrase_sense', recursive=False):
                     phrase_entry = {
                         'phrase': phrase_text,
+                        'sense_number': '',
                         'definition': '',
                         'examples': [],
                         'expanded_examples': [],
                         'synonyms': None
                     }
+
+                    # Sense number (iteration)
+                    iteration = phrase_sense.find(class_='iteration')
+                    if iteration:
+                        phrase_entry['sense_number'] = clean_text(iteration.get_text())
 
                     # Definition
                     ps_ind = phrase_sense.find(class_='ind')
@@ -813,6 +819,69 @@ class ODEParser:
 
                     if phrase_entry['definition']:
                         phrases_data.append(phrase_entry)
+
+                    # Handle subsenses (inside ol.subSenses > li.subSense)
+                    subsenses_ol = phrase_sense.find('ol', class_='subSenses')
+                    if subsenses_ol:
+                        for subsense in subsenses_ol.find_all('li', class_='subSense'):
+                            sub_entry = {
+                                'phrase': phrase_text,
+                                'sense_number': '',
+                                'definition': '',
+                                'examples': [],
+                                'expanded_examples': [],
+                                'synonyms': None
+                            }
+
+                            # Subsense number (e.g., "1.1")
+                            sub_iter = subsense.find(class_='subsenseIteration')
+                            if sub_iter:
+                                sub_entry['sense_number'] = clean_text(sub_iter.get_text())
+
+                            # Definition
+                            sub_ind = subsense.find(class_='ind')
+                            if sub_ind:
+                                sub_entry['definition'] = clean_text(sub_ind.get_text())
+
+                            # Inline examples
+                            sub_ex_order = 0
+                            for exg in subsense.find_all(class_='exg'):
+                                if exg.find_parent(class_='examples') or exg.find_parent(class_='synonyms'):
+                                    continue
+                                ex = exg.find(class_='ex')
+                                if ex:
+                                    ex_text = extract_example_text(ex)
+                                    if ex_text:
+                                        sub_entry['examples'].append({
+                                            'text': ex_text,
+                                            'sort_order': sub_ex_order
+                                        })
+                                        sub_ex_order += 1
+
+                            # Expanded examples
+                            sub_examples_div = subsense.find(class_='examples')
+                            if sub_examples_div:
+                                for exg in sub_examples_div.find_all(class_='exg'):
+                                    for ex in exg.find_all(class_='ex'):
+                                        ex_text = extract_example_text(ex)
+                                        if ex_text:
+                                            sub_entry['expanded_examples'].append(ex_text)
+
+                            # Synonyms
+                            sub_synonyms_div = subsense.find(class_='synonyms')
+                            if sub_synonyms_div:
+                                sub_synonyms_data = self._parse_synonyms(sub_synonyms_div)
+                                if sub_synonyms_data:
+                                    sub_entry['synonyms'] = sub_synonyms_data
+
+                            # Clean up empty fields
+                            if not sub_entry['expanded_examples']:
+                                del sub_entry['expanded_examples']
+                            if not sub_entry['synonyms']:
+                                del sub_entry['synonyms']
+
+                            if sub_entry['definition']:
+                                phrases_data.append(sub_entry)
 
         if phrases_data:
             entry['attributes'][attr_key] = phrases_data

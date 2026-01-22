@@ -1799,14 +1799,12 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                       (let* ((search-word (lexdb-ui--normalize-search-word
                                            (or target-word clickable)))
                              ;; Convert trailing numbers to superscript for display
-                             (display-clickable (lexdb-ui--number-to-superscript clickable))
-                             ;; Full display text including suffix
-                             (full-display (concat display-clickable (or suffix ""))))
-                        ;; Prefix (e.g., "→ live from day to day ") - normal text color
+                             (display-clickable (lexdb-ui--number-to-superscript clickable)))
+                        ;; Prefix (e.g., "Compare with ") - normal text color
                         (when (and prefix (not (string-empty-p prefix)))
                           (insert (propertize prefix 'face 'lexdb-definition-face)))
-                        ;; Clickable part including suffix (e.g., "at care²(8)" - all clickable)
-                        (insert-text-button full-display
+                        ;; Clickable part only (e.g., "well" - just the link)
+                        (insert-text-button display-clickable
                                             'face 'lexdb-crossref-face
                                             'action (lambda (_)
                                                       (lexdb-search-and-goto-sense
@@ -1814,7 +1812,10 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                             'help-echo (format "Look up: %s%s [%s]"
                                                                search-word
                                                                (if target-sense (format " sense %s" target-sense) "")
-                                                               jump-adapter)))
+                                                               jump-adapter))
+                        ;; Suffix (e.g., "(sense 4 of the noun)") - normal text color
+                        (when (and suffix (not (string-empty-p suffix)))
+                          (insert (propertize suffix 'face 'lexdb-definition-face))))
                     ;; Legacy format - use target directly
                     (when target
                       (insert (propertize "→ " 'face 'lexdb-crossref-face))
@@ -3140,50 +3141,63 @@ ADAPTER-ID is used for crossref navigation."
               (phrase-index 0))
           (insert "\n")
           (insert (propertize "PHRASES" 'face 'lexdb-grambox-heading-face) "\n")
+          (let ((current-phrase nil))
           (dolist (phrase phrase-list)
             (let ((phrase-text (lexdb-ui--alist-get 'phrase phrase))
+                  (sense-number (lexdb-ui--alist-get 'sense_number phrase))
                   (definition (lexdb-ui--alist-get 'definition phrase))
                   (examples (lexdb-ui--alist-get 'examples phrase))
                   (expanded-examples (lexdb-ui--alist-get 'expanded_examples phrase))
                   (synonyms (lexdb-ui--alist-get 'synonyms phrase)))
               (when phrase-text
-                (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
-                (when (lexdb--non-empty-string-p definition)
-                  (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
-                ;; Inline examples
-                (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
-                  (dolist (ex ex-list)
-                    (let ((ex-text (lexdb-ui--alist-get 'text ex)))
-                      (when (lexdb--non-empty-string-p ex-text)
-                        (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n")))))
-                ;; Example sentences and SYNONYMS tabs
-                (let ((tabs nil)
-                      (tab-group (format "lexdb-ode-phrase-%d-%d" (lexdb-entry-id entry) phrase-index)))
-                  ;; Build tabs list
-                  (when expanded-examples
-                    (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
-                      (when (> (length exp-list) 0)
-                        (push (list 'more-examples
-                                    (format "Example sentences (%d)" (length exp-list))
-                                    (with-temp-buffer
-                                      (dolist (ex exp-list)
-                                        (insert "      " (propertize "• " 'face 'lexdb-definition-face))
-                                        (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
-                                        (insert "\n"))
-                                      (buffer-string)))
-                              tabs))))
-                  (when synonyms
-                    (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
-                      (when (> (length syn-list) 0)
-                        (push (list 'synonyms
-                                    "SYNONYMS"
-                                    (lexdb-ui--render-phrase-synonyms syn-list))
-                              tabs))))
-                  ;; Insert tab bar if we have tabs (align with examples - 6 spaces)
-                  (when tabs
-                    (insert "      ")
-                    (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group)))
-                (setq phrase-index (1+ phrase-index)))))
+                ;; Only insert phrase header if it's different from the previous one
+                (unless (equal phrase-text current-phrase)
+                  (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
+                  (setq current-phrase phrase-text))
+                ;; Calculate indent based on subsense
+                (let* ((is-subsense (and sense-number (string-match-p "\\." sense-number)))
+                       (def-indent (if is-subsense "      " "    "))
+                       (ex-indent (if is-subsense "        " "      ")))
+                  ;; Insert sense number + definition
+                  (when (lexdb--non-empty-string-p definition)
+                    (if (lexdb--non-empty-string-p sense-number)
+                        (insert def-indent (propertize sense-number 'face 'lexdb-sense-number-face) " "
+                                (propertize definition 'face 'lexdb-definition-face) "\n")
+                      (insert def-indent (propertize definition 'face 'lexdb-definition-face) "\n")))
+                  ;; Inline examples
+                  (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
+                    (dolist (ex ex-list)
+                      (let ((ex-text (lexdb-ui--alist-get 'text ex)))
+                        (when (lexdb--non-empty-string-p ex-text)
+                          (insert ex-indent (propertize ex-text 'face 'lexdb-example-face) "\n")))))
+                  ;; Example sentences and SYNONYMS tabs
+                  (let ((tabs nil)
+                        (tab-group (format "lexdb-ode-phrase-%d-%d" (lexdb-entry-id entry) phrase-index)))
+                    ;; Build tabs list
+                    (when expanded-examples
+                      (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
+                        (when (> (length exp-list) 0)
+                          (push (list 'more-examples
+                                      (format "Example sentences (%d)" (length exp-list))
+                                      (with-temp-buffer
+                                        (dolist (ex exp-list)
+                                          (insert ex-indent (propertize "• " 'face 'lexdb-definition-face))
+                                          (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                                          (insert "\n"))
+                                        (buffer-string)))
+                                tabs))))
+                    (when synonyms
+                      (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
+                        (when (> (length syn-list) 0)
+                          (push (list 'synonyms
+                                      "SYNONYMS"
+                                      (lexdb-ui--render-phrase-synonyms syn-list))
+                                tabs))))
+                    ;; Insert tab bar if we have tabs
+                    (when tabs
+                      (insert ex-indent)
+                      (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))
+                (setq phrase-index (1+ phrase-index))))))
           ;; Create overlay for background
           (when (> (point) section-start)
             (let ((ov (make-overlay section-start (point))))
@@ -3196,49 +3210,62 @@ ADAPTER-ID is used for crossref navigation."
               (pv-index 0))
           (insert "\n")
           (insert (propertize "PHRASAL VERBS" 'face 'lexdb-grambox-heading-face) "\n")
+          (let ((current-pv nil))
           (dolist (pv pv-list)
             (let ((pv-text (lexdb-ui--alist-get 'phrase pv))
+                  (sense-number (lexdb-ui--alist-get 'sense_number pv))
                   (definition (lexdb-ui--alist-get 'definition pv))
                   (examples (lexdb-ui--alist-get 'examples pv))
                   (expanded-examples (lexdb-ui--alist-get 'expanded_examples pv))
                   (synonyms (lexdb-ui--alist-get 'synonyms pv)))
               (when pv-text
-                (insert "  " (propertize pv-text 'face 'lexdb-phrase-face) "\n")
-                (when (lexdb--non-empty-string-p definition)
-                  (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
-                ;; Inline examples
-                (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
-                  (dolist (ex ex-list)
-                    (let ((ex-text (lexdb-ui--alist-get 'text ex)))
-                      (when (lexdb--non-empty-string-p ex-text)
-                        (insert "      " (propertize ex-text 'face 'lexdb-example-face) "\n")))))
-                ;; Example sentences and SYNONYMS tabs
-                (let ((tabs nil)
-                      (tab-group (format "lexdb-ode-pv-%d-%d" (lexdb-entry-id entry) pv-index)))
-                  (when expanded-examples
-                    (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
-                      (when (> (length exp-list) 0)
-                        (push (list 'more-examples
-                                    (format "Example sentences (%d)" (length exp-list))
-                                    (with-temp-buffer
-                                      (dolist (ex exp-list)
-                                        (insert "      " (propertize "• " 'face 'lexdb-definition-face))
-                                        (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
-                                        (insert "\n"))
-                                      (buffer-string)))
-                              tabs))))
-                  (when synonyms
-                    (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
-                      (when (> (length syn-list) 0)
-                        (push (list 'synonyms
-                                    "SYNONYMS"
-                                    (lexdb-ui--render-phrase-synonyms syn-list))
-                              tabs))))
-                  ;; Insert tab bar aligned with examples (6 spaces)
-                  (when tabs
-                    (insert "      ")
-                    (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group)))
-                (setq pv-index (1+ pv-index)))))
+                ;; Only insert phrasal verb header if it's different from the previous one
+                (unless (equal pv-text current-pv)
+                  (insert "  " (propertize pv-text 'face 'lexdb-phrase-face) "\n")
+                  (setq current-pv pv-text))
+                ;; Calculate indent based on subsense
+                (let* ((is-subsense (and sense-number (string-match-p "\\." sense-number)))
+                       (def-indent (if is-subsense "      " "    "))
+                       (ex-indent (if is-subsense "        " "      ")))
+                  ;; Insert sense number + definition
+                  (when (lexdb--non-empty-string-p definition)
+                    (if (lexdb--non-empty-string-p sense-number)
+                        (insert def-indent (propertize sense-number 'face 'lexdb-sense-number-face) " "
+                                (propertize definition 'face 'lexdb-definition-face) "\n")
+                      (insert def-indent (propertize definition 'face 'lexdb-definition-face) "\n")))
+                  ;; Inline examples
+                  (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
+                    (dolist (ex ex-list)
+                      (let ((ex-text (lexdb-ui--alist-get 'text ex)))
+                        (when (lexdb--non-empty-string-p ex-text)
+                          (insert ex-indent (propertize ex-text 'face 'lexdb-example-face) "\n")))))
+                  ;; Example sentences and SYNONYMS tabs
+                  (let ((tabs nil)
+                        (tab-group (format "lexdb-ode-pv-%d-%d" (lexdb-entry-id entry) pv-index)))
+                    (when expanded-examples
+                      (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
+                        (when (> (length exp-list) 0)
+                          (push (list 'more-examples
+                                      (format "Example sentences (%d)" (length exp-list))
+                                      (with-temp-buffer
+                                        (dolist (ex exp-list)
+                                          (insert ex-indent (propertize "• " 'face 'lexdb-definition-face))
+                                          (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
+                                          (insert "\n"))
+                                        (buffer-string)))
+                                tabs))))
+                    (when synonyms
+                      (let ((syn-list (if (vectorp synonyms) (append synonyms nil) synonyms)))
+                        (when (> (length syn-list) 0)
+                          (push (list 'synonyms
+                                      "SYNONYMS"
+                                      (lexdb-ui--render-phrase-synonyms syn-list))
+                                tabs))))
+                    ;; Insert tab bar
+                    (when tabs
+                      (insert ex-indent)
+                      (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))
+                (setq pv-index (1+ pv-index))))))
           ;; Create overlay for background
           (when (> (point) section-start)
             (let ((ov (make-overlay section-start (point))))
