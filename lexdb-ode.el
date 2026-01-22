@@ -172,16 +172,17 @@
 
 (defun lexdb-ode--lookup (word)
   "Look up WORD in ODE database.
-Uses exact match and combining forms (-WORD) only, consistent with original dictionary."
+Matches exact word, combining forms (-WORD), and compound words ending with -WORD."
   (let* ((db (lexdb-ode--ensure-db))
          (word-lower (downcase word))
          (combining-form (concat "-" word-lower))
-         ;; Exact match and combining form (e.g., "logic" and "-logic")
+         (compound-suffix (concat "%-" word-lower))
+         ;; Exact match, combining form (-logic), and compounds ending with -word (high-vis)
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
-                 FROM entries WHERE (headword_lower = ? OR headword_lower = ?) AND dict_id = 'ode'
+                 FROM entries WHERE (headword_lower = ? OR headword_lower = ? OR headword_lower LIKE ?) AND dict_id = 'ode'
                  ORDER BY headword_lower"
-                (list word-lower combining-form))))
+                (list word-lower combining-form compound-suffix))))
     (mapcar #'lexdb-ode--row-to-entry rows)))
 
 (defun lexdb-ode--get-phrases (entry-id)
