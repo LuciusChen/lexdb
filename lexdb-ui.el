@@ -627,6 +627,18 @@ Set to nil to disable translation indicators."
   "Face for word origin."
   :group 'lexdb)
 
+(defface lexdb-origin-date-face
+  '((((background dark))  :foreground "#87CEEB")
+    (((background light)) :foreground "#4169E1"))
+  "Face for date/era in word origin (e.g., 'Early 17th century')."
+  :group 'lexdb)
+
+(defface lexdb-origin-etym-face
+  '((((background dark))  :foreground "#DDA0DD" :slant italic)
+    (((background light)) :foreground "#8B008B" :slant italic))
+  "Face for etymological words in origin (e.g., 'indicat-', 'indicare')."
+  :group 'lexdb)
+
 ;; UI elements
 (defface lexdb-button-face
   '((((background dark))  :foreground "#B8B8B8")
@@ -733,6 +745,31 @@ Format markers:
       ;; Insert remaining text
       (when (< start (length text))
         (insert (propertize (substring text start) 'face default-face))))))
+
+(defun lexdb-ui--insert-formatted-origin (text)
+  "Insert origin TEXT with format markers for ODE etymology.
+Format markers:
+  <<date>>...<</date>> - date/era (e.g., 'Early 17th century')
+  <<etym>>...<</etym>> - etymological words (e.g., 'indicat-', 'indicare')"
+  (when (and text (not (string-empty-p text)))
+    (let ((start 0))
+      (while (string-match "<<\\(date\\|etym\\)>>\\([^<]*\\)<</\\1>>" text start)
+        (let ((before-match (substring text start (match-beginning 0)))
+              (marker-type (match-string 1 text))
+              (content (match-string 2 text)))
+          ;; Insert text before marker with default origin face
+          (when (> (length before-match) 0)
+            (insert (propertize before-match 'face 'lexdb-origin-face)))
+          ;; Insert marked content with appropriate face
+          (insert (propertize content 'face
+                              (pcase marker-type
+                                ("date" 'lexdb-origin-date-face)
+                                ("etym" 'lexdb-origin-etym-face)
+                                (_ 'lexdb-origin-face))))
+          (setq start (match-end 0))))
+      ;; Insert remaining text
+      (when (< start (length text))
+        (insert (propertize (substring text start) 'face 'lexdb-origin-face))))))
 
 ;;;; ============================================================
 ;;;; Audio Playback
@@ -1252,6 +1289,15 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                  (cdr (assoc sort-key section-registers-map #'string=)))))
         (when (lexdb--non-empty-string-p section-register)
           (insert (propertize section-register 'face 'lexdb-register-face) "\n"))))
+    ;; ODE: Transitivity (e.g., "[with object]") - inline before definition
+    ;; Uses sense-index (sort_order) as key
+    (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
+      (let* ((transitivity-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_transitivity"))
+             (sort-key (number-to-string sense-index))
+             (transitivity (when transitivity-map
+                             (cdr (assoc sort-key transitivity-map #'string=)))))
+        (when (lexdb--non-empty-string-p transitivity)
+          (insert (propertize (upcase transitivity) 'face 'lexdb-grammar-face) " "))))
     ;; ODE: Form groups (e.g., "also days") - after sense number, before definition
     ;; Uses sense-index (sort_order) as key, not sense number (which can repeat across POS)
     (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
@@ -3172,9 +3218,13 @@ ADAPTER-ID is used for crossref navigation."
           (when (lexdb--non-empty-string-p text)
             (insert "\n")
             (insert (propertize "ORIGIN" 'face 'lexdb-grambox-heading-face) "\n")
-            (insert "  " (propertize text 'face 'lexdb-origin-face) "\n")
+            (insert "  ")
+            (lexdb-ui--insert-formatted-origin text)
+            (insert "\n")
             (when (and appendix (not (string-empty-p appendix)))
-              (insert "  " (propertize appendix 'face 'lexdb-origin-face) "\n"))
+              (insert "  ")
+              (lexdb-ui--insert-formatted-origin appendix)
+              (insert "\n"))
             ;; Create overlay for background
             (let ((ov (make-overlay section-start (point))))
               (overlay-put ov 'face 'lexdb-grambox-background-face)

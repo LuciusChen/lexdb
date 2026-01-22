@@ -308,6 +308,12 @@ class ODEParser:
                     section_register = clean_text(child.get_text())
                     break
 
+        # Extract transitivity (e.g., "[with object]", "[no object]") - directly under gramb
+        transitivity = None
+        trans_elem = gramb.find(class_='transitivity')
+        if trans_elem:
+            transitivity = clean_text(trans_elem.get_text())
+
         # Find semb (sense block)
         semb = gramb.find(class_='semb')
         if not semb:
@@ -333,6 +339,9 @@ class ODEParser:
                 # Add section-level register to first sense (shown on separate line)
                 if first_sense_in_section and section_register:
                     sense_data['section_register'] = section_register
+                # Add transitivity to first sense (e.g., "[with object]")
+                if first_sense_in_section and transitivity:
+                    sense_data['transitivity'] = transitivity
                 if first_sense_in_section:
                     first_sense_in_section = False
                 entry['senses'].append(sense_data)
@@ -813,6 +822,35 @@ class ODEParser:
                 if usage_text:
                     entry['attributes']['usage'] = usage_text
 
+    def _extract_origin_text(self, element):
+        """Extract origin text preserving format markers.
+
+        Preserves:
+        - <span class="q5j"> (date/era) as <<date>>...<</date>>
+        - <em> (etymological words) as <<etym>>...<</etym>>
+        """
+        if not element:
+            return ""
+
+        from bs4 import BeautifulSoup, NavigableString
+
+        # Make a copy
+        elem_copy = BeautifulSoup(str(element), 'html.parser')
+
+        # Format date/era spans (class="q5j")
+        for date_span in elem_copy.find_all('span', class_='q5j'):
+            text = date_span.get_text().strip()
+            if text:
+                date_span.replace_with(f'<<date>>{text}<</date>>')
+
+        # Format etymological words (em elements)
+        for em in elem_copy.find_all('em'):
+            text = em.get_text().strip()
+            if text:
+                em.replace_with(f'<<etym>>{text}<</etym>>')
+
+        return clean_text(elem_copy.get_text())
+
     def _handle_origin(self, inner, entry):
         """Handle origin section content.
 
@@ -821,14 +859,14 @@ class ODEParser:
         main_p = inner.find('p', recursive=False)
         main_origin = ''
         if main_p:
-            main_origin = clean_text(main_p.get_text())
+            main_origin = self._extract_origin_text(main_p)
 
         appendix = inner.find(class_='origin_appendix')
         appendix_text = ''
         if appendix:
             appendix_p = appendix.find('p')
             if appendix_p:
-                appendix_text = clean_text(appendix_p.get_text())
+                appendix_text = self._extract_origin_text(appendix_p)
 
         if main_origin:
             entry['attributes']['origin'] = {
@@ -998,12 +1036,13 @@ class LexDBWriter:
                 idx
             ))
 
-        # Collect sense-level synonyms, expanded_examples, form_groups, and section_registers for later storage
+        # Collect sense-level synonyms, expanded_examples, form_groups, section_registers, and transitivity for later storage
         # Use sort_order as key (unique per entry) instead of sense_number (can repeat across POS)
         sense_synonyms_map = {}
         sense_expanded_examples_map = {}
         sense_form_groups_map = {}
         sense_section_registers_map = {}
+        sense_transitivity_map = {}
 
         # Insert senses
         for sense_data in entry_data.get('senses', []):
@@ -1034,6 +1073,10 @@ class LexDBWriter:
             # Collect section_register for this sense (e.g., "informal" at section level)
             if sense_data.get('section_register'):
                 sense_section_registers_map[sort_key] = sense_data['section_register']
+
+            # Collect transitivity for this sense (e.g., "[with object]")
+            if sense_data.get('transitivity'):
+                sense_transitivity_map[sort_key] = sense_data['transitivity']
 
             # Collect synonyms for this sense
             if sense_data.get('synonyms'):
@@ -1166,7 +1209,7 @@ class LexDBWriter:
                     example.get('sort_order', 0)
                 ))
 
-        # Store sense-level synonyms, expanded_examples, form_groups, and section_registers as entry attributes
+        # Store sense-level synonyms, expanded_examples, form_groups, section_registers, and transitivity as entry attributes
         if sense_synonyms_map:
             entry_data.setdefault('attributes', {})['sense_synonyms'] = sense_synonyms_map
         if sense_expanded_examples_map:
@@ -1175,6 +1218,8 @@ class LexDBWriter:
             entry_data.setdefault('attributes', {})['sense_form_groups'] = sense_form_groups_map
         if sense_section_registers_map:
             entry_data.setdefault('attributes', {})['sense_section_registers'] = sense_section_registers_map
+        if sense_transitivity_map:
+            entry_data.setdefault('attributes', {})['sense_transitivity'] = sense_transitivity_map
 
         # Insert extension attributes (EAV)
         for key, value in entry_data.get('attributes', {}).items():
