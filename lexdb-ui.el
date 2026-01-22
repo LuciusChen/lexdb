@@ -1298,7 +1298,10 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
       (when (lexdb--non-empty-string-p signpost)
         (let ((ode-pos-keywords '("adjective" "noun" "verb" "adverb" "preposition"
                                   "conjunction" "pronoun" "determiner" "exclamation"
-                                  "prefix" "suffix" "combining form"))
+                                  "prefix" "suffix" "combining form"
+                                  "proper noun" "mass noun" "count noun"
+                                  "modal verb" "auxiliary verb" "linking verb"
+                                  "abbreviation" "contraction" "symbol"))
               (formatted (upcase signpost)))
           ;; Skip POS signpost for ODE (already shown as section header)
           (unless (and (eq (lexdb-adapter-id adapter) 'ode)
@@ -3287,6 +3290,16 @@ ADAPTER-ID is used for crossref navigation."
             (let ((ov (make-overlay section-start (point))))
               (overlay-put ov 'face 'lexdb-grambox-background-face)
               (overlay-put ov 'lexdb-ode-derivatives t)))))
+      ;; Encyclopedic note section (e.g., for proper nouns like Scotland)
+      (let ((enc-note (lexdb-meta-get (lexdb-entry-metadata entry) ns "encyclopedic_note")))
+        (when (lexdb--non-empty-string-p enc-note)
+          (let ((section-start (point)))
+            (insert "\n")
+            (insert "  " (propertize enc-note 'face 'lexdb-origin-face) "\n")
+            ;; Create overlay for background
+            (let ((ov (make-overlay section-start (point))))
+              (overlay-put ov 'face 'lexdb-grambox-background-face)
+              (overlay-put ov 'lexdb-ode-encyclopedic t)))))
       ;; Usage section
       (let ((usage-text (lexdb-meta-get (lexdb-entry-metadata entry) ns "usage")))
         (when (lexdb--non-empty-string-p usage-text)

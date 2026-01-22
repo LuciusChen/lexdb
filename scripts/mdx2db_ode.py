@@ -356,6 +356,13 @@ class ODEParser:
                         entry['senses'].append(sub_data)
                         sense_order += 1
 
+        # Parse encyclopedic note (p.note) directly under gramb
+        note_elem = gramb.find('p', class_='note', recursive=False)
+        if note_elem:
+            note_text = clean_text(note_elem.get_text())
+            if note_text:
+                entry['attributes']['encyclopedic_note'] = note_text
+
     def _parse_sense_block(self, trg, sort_order):
         """Parse a single sense block (trg element)."""
         sense_data = {
@@ -493,8 +500,9 @@ class ODEParser:
                 'words': []
             }
 
-            # Check for register label in this group
-            reg = exs.find(class_='sense-registers')
+            # Check for register/region label in this group
+            # Can be sense-registers (e.g., "informal") or sense-regions (e.g., "British")
+            reg = exs.find(class_='sense-registers') or exs.find(class_='sense-regions')
             if reg:
                 group['register'] = clean_text(reg.get_text())
 
