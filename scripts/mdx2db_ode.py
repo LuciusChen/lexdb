@@ -761,7 +761,9 @@ class ODEParser:
                     phrase_entry = {
                         'phrase': phrase_text,
                         'sense_number': '',
+                        'labels': [],
                         'definition': '',
+                        'cross_refs': [],
                         'examples': [],
                         'expanded_examples': [],
                         'synonyms': None
@@ -772,10 +774,23 @@ class ODEParser:
                     if iteration:
                         phrase_entry['sense_number'] = clean_text(iteration.get_text())
 
+                    # Labels (sense-registers: proverb, informal, dated, etc.)
+                    sense_reg = phrase_sense.find(class_='sense-registers')
+                    if sense_reg:
+                        label_text = clean_text(sense_reg.get_text())
+                        if label_text:
+                            phrase_entry['labels'].append(label_text)
+
                     # Definition
                     ps_ind = phrase_sense.find(class_='ind')
                     if ps_ind:
                         phrase_entry['definition'] = clean_text(ps_ind.get_text())
+
+                    # Cross-references (Compare with..., See also..., etc.)
+                    for xref_div in phrase_sense.find_all(class_='crossReference'):
+                        xref_data = self._parse_cross_reference(xref_div)
+                        if xref_data:
+                            phrase_entry['cross_refs'].append(xref_data)
 
                     # Search in phrase_sense for examples and synonyms
                     # Structure: phrase_sense > trg (def) + trg (examples/synonyms)
@@ -812,6 +827,10 @@ class ODEParser:
                             phrase_entry['synonyms'] = synonyms_data
 
                     # Clean up empty fields
+                    if not phrase_entry['labels']:
+                        del phrase_entry['labels']
+                    if not phrase_entry['cross_refs']:
+                        del phrase_entry['cross_refs']
                     if not phrase_entry['expanded_examples']:
                         del phrase_entry['expanded_examples']
                     if not phrase_entry['synonyms']:
@@ -827,7 +846,9 @@ class ODEParser:
                             sub_entry = {
                                 'phrase': phrase_text,
                                 'sense_number': '',
+                                'labels': [],
                                 'definition': '',
+                                'cross_refs': [],
                                 'examples': [],
                                 'expanded_examples': [],
                                 'synonyms': None
@@ -838,10 +859,23 @@ class ODEParser:
                             if sub_iter:
                                 sub_entry['sense_number'] = clean_text(sub_iter.get_text())
 
+                            # Labels (sense-registers)
+                            sub_reg = subsense.find(class_='sense-registers')
+                            if sub_reg:
+                                sub_label = clean_text(sub_reg.get_text())
+                                if sub_label:
+                                    sub_entry['labels'].append(sub_label)
+
                             # Definition
                             sub_ind = subsense.find(class_='ind')
                             if sub_ind:
                                 sub_entry['definition'] = clean_text(sub_ind.get_text())
+
+                            # Cross-references
+                            for xref_div in subsense.find_all(class_='crossReference'):
+                                xref_data = self._parse_cross_reference(xref_div)
+                                if xref_data:
+                                    sub_entry['cross_refs'].append(xref_data)
 
                             # Inline examples
                             sub_ex_order = 0
@@ -875,6 +909,10 @@ class ODEParser:
                                     sub_entry['synonyms'] = sub_synonyms_data
 
                             # Clean up empty fields
+                            if not sub_entry['labels']:
+                                del sub_entry['labels']
+                            if not sub_entry['cross_refs']:
+                                del sub_entry['cross_refs']
                             if not sub_entry['expanded_examples']:
                                 del sub_entry['expanded_examples']
                             if not sub_entry['synonyms']:
