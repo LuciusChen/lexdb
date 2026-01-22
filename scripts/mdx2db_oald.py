@@ -620,6 +620,17 @@ def _parse_mainentry(main_entry, headword_hint=None):
     if not entry['headword']:
         return None
 
+    # === Variant spellings (e.g., "also Visc" from "Vis (also Visc)") ===
+    hg = main_entry.find('div', class_='hg')
+    if hg:
+        # Get full text and look for "(also ...)" pattern
+        hg_text = clean_text(hg.get_text())
+        # Match patterns like "(also Visc)" or "(also hi-vis)"
+        import re
+        variant_match = re.search(r'\(also\s+([^)]+)\)', hg_text)
+        if variant_match:
+            entry['attributes']['variant'] = f"(also {variant_match.group(1)})"
+
     # === Part of Speech ===
     pos_elem = main_entry.find('span', class_='pos')
     if pos_elem:
