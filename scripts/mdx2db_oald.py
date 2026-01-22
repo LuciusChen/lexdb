@@ -1476,7 +1476,9 @@ def insert_entry(conn, dict_id, entry):
         ))
 
     # Insert entry attributes (compressed JSON for complex data)
+    # Add namespace prefix for consistency with ODE
     for key, value in entry.get('attributes', {}).items():
+        full_key = f"{dict_id}/{key}"
         if isinstance(value, (list, dict)):
             # Compress JSON for complex data
             json_str = json.dumps(value, ensure_ascii=False)
@@ -1484,12 +1486,12 @@ def insert_entry(conn, dict_id, entry):
             cursor.execute("""
                 INSERT OR REPLACE INTO entry_attributes (entry_id, attr_key, attr_value, attr_type)
                 VALUES (?, ?, ?, 'json_compressed')
-            """, (entry_id, key, compressed))
+            """, (entry_id, full_key, compressed))
         else:
             cursor.execute("""
                 INSERT OR REPLACE INTO entry_attributes (entry_id, attr_key, attr_value, attr_type)
                 VALUES (?, ?, ?, 'text')
-            """, (entry_id, key, str(value)))
+            """, (entry_id, full_key, str(value)))
 
     return entry_id
 
