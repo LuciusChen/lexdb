@@ -2034,6 +2034,45 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
         (lexdb-ui--insert-linked-relations cross-refs 'lexdb-crossref-face adapter-id)
         (insert "\n\n")))))
 
+(defun lexdb-ui--insert-crossref-fragments (xref adapter-id)
+  "Insert cross-reference XREF with clickable links.
+Uses fragments if available, otherwise falls back to prefix/clickable/suffix.
+ADAPTER-ID is used for navigation."
+  (let ((fragments (cdr (assoc 'fragments xref))))
+    (if fragments
+        ;; New format with fragments
+        (let ((frag-list (if (vectorp fragments) (append fragments nil) fragments)))
+          (dolist (frag frag-list)
+            (let ((frag-type (cdr (assoc 'type frag)))
+                  (frag-value (cdr (assoc 'value frag)))
+                  (frag-target (cdr (assoc 'target frag))))
+              (cond
+               ((equal frag-type "link")
+                (insert-text-button frag-value
+                                    'face 'lexdb-crossref-face
+                                    'action (lambda (_)
+                                              (lexdb-search-and-goto-sense
+                                               (or frag-target frag-value) nil adapter-id))
+                                    'help-echo (format "Look up: %s" (or frag-target frag-value))))
+               ((equal frag-type "text")
+                (insert (propertize frag-value 'face 'lexdb-definition-face)))))))
+      ;; Legacy format with prefix/clickable/suffix
+      (let ((prefix (cdr (assoc 'prefix xref)))
+            (clickable (cdr (assoc 'clickable xref)))
+            (suffix (cdr (assoc 'suffix xref)))
+            (target-word (cdr (assoc 'target_word xref))))
+        (when (lexdb--non-empty-string-p prefix)
+          (insert (propertize prefix 'face 'lexdb-definition-face)))
+        (when (lexdb--non-empty-string-p clickable)
+          (insert-text-button clickable
+                              'face 'lexdb-crossref-face
+                              'action (lambda (_)
+                                        (lexdb-search-and-goto-sense
+                                         (or target-word clickable) nil adapter-id))
+                              'help-echo (format "Look up: %s" (or target-word clickable))))
+        (when (lexdb--non-empty-string-p suffix)
+          (insert (propertize suffix 'face 'lexdb-definition-face)))))))
+
 (defun lexdb-ui--render-phrase-synonyms (syn-list)
   "Render SYN-LIST as clickable synonyms for PHRASES/PHRASAL VERBS.
 Returns a string with text properties preserved for insertion."
@@ -3185,21 +3224,7 @@ ADAPTER-ID is used for crossref navigation."
                         (dolist (xref xref-list)
                           (unless first (insert ", "))
                           (setq first nil)
-                          (let ((prefix (cdr (assoc 'prefix xref)))
-                                (clickable (cdr (assoc 'clickable xref)))
-                                (suffix (cdr (assoc 'suffix xref)))
-                                (target-word (cdr (assoc 'target_word xref))))
-                            (when (lexdb--non-empty-string-p prefix)
-                              (insert (propertize prefix 'face 'lexdb-definition-face)))
-                            (when (lexdb--non-empty-string-p clickable)
-                              (insert-text-button clickable
-                                                  'face 'lexdb-crossref-face
-                                                  'action (lambda (_)
-                                                            (lexdb-search-and-goto-sense
-                                                             (or target-word clickable) nil 'ode))
-                                                  'help-echo (format "Look up: %s" (or target-word clickable))))
-                            (when (lexdb--non-empty-string-p suffix)
-                              (insert (propertize suffix 'face 'lexdb-definition-face))))))
+                          (lexdb-ui--insert-crossref-fragments xref 'ode)))
                       (insert "\n")))
                   ;; Example sentences and SYNONYMS tabs
                   (let ((tabs nil)
@@ -3285,21 +3310,7 @@ ADAPTER-ID is used for crossref navigation."
                         (dolist (xref xref-list)
                           (unless first (insert ", "))
                           (setq first nil)
-                          (let ((prefix (cdr (assoc 'prefix xref)))
-                                (clickable (cdr (assoc 'clickable xref)))
-                                (suffix (cdr (assoc 'suffix xref)))
-                                (target-word (cdr (assoc 'target_word xref))))
-                            (when (lexdb--non-empty-string-p prefix)
-                              (insert (propertize prefix 'face 'lexdb-definition-face)))
-                            (when (lexdb--non-empty-string-p clickable)
-                              (insert-text-button clickable
-                                                  'face 'lexdb-crossref-face
-                                                  'action (lambda (_)
-                                                            (lexdb-search-and-goto-sense
-                                                             (or target-word clickable) nil 'ode))
-                                                  'help-echo (format "Look up: %s" (or target-word clickable))))
-                            (when (lexdb--non-empty-string-p suffix)
-                              (insert (propertize suffix 'face 'lexdb-definition-face))))))
+                          (lexdb-ui--insert-crossref-fragments xref 'ode)))
                       (insert "\n")))
                   ;; Example sentences and SYNONYMS tabs
                   (let ((tabs nil)

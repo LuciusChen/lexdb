@@ -526,26 +526,25 @@ class ODEParser:
         return synonyms_groups if synonyms_groups else None
 
     def _parse_cross_reference(self, xref_div):
-        """Parse a crossReference element.
+        """Parse a crossReference element with multiple links.
 
         Returns a dict with:
         - type: RelationType.CROSS_REF
-        - prefix: text before the link (e.g., "Contrasted with ")
-        - clickable: the link text (e.g., "universal")
-        - target_word: the target word from href
-        - suffix: text after the link
+        - fragments: list of {'type': 'text'|'link', 'value': str, 'target': str (for links)}
+        - Also includes legacy fields for backward compatibility:
+          - prefix, clickable, suffix, target_word (from first link)
         """
         if not xref_div:
             return None
 
-        # Get the full text and find the link
-        link = xref_div.find('a')
-        if not link:
+        links = xref_div.find_all('a')
+        if not links:
             # No clickable link, just text - skip empty crossReferences
             text = clean_text(xref_div.get_text())
             if text:
                 return {
                     'type': RelationType.CROSS_REF,
+                    'fragments': [{'type': 'text', 'value': text}],
                     'prefix': text,
                     'clickable': '',
                     'target_word': '',
@@ -553,32 +552,55 @@ class ODEParser:
                 }
             return None
 
-        # Parse the link
-        link_text = clean_text(link.get_text())
-        href = link.get('href', '')
+        # Build fragments list by iterating through children
+        fragments = []
+        for child in xref_div.children:
+            if hasattr(child, 'name') and child.name == 'a':
+                # It's a link
+                link_text = child.get_text()
+                href = child.get('href', '')
+                target = href[8:] if href.startswith('entry://') else link_text
+                fragments.append({
+                    'type': 'link',
+                    'value': link_text,
+                    'target': target
+                })
+            else:
+                # It's text
+                text = str(child)
+                if text:
+                    fragments.append({
+                        'type': 'text',
+                        'value': text
+                    })
 
-        # Extract target word from href (e.g., "entry://universal" -> "universal")
-        target_word = ''
-        if href.startswith('entry://'):
-            target_word = href[8:]  # Remove "entry://"
+        # Build legacy fields from first link for backward compatibility
+        first_link = links[0]
+        link_text = clean_text(first_link.get_text())
+        href = first_link.get('href', '')
+        target_word = href[8:] if href.startswith('entry://') else ''
 
-        # Get text before and after the link
         full_text = xref_div.get_text()
-        link_pos = full_text.find(link.get_text())
+        link_pos = full_text.find(first_link.get_text())
 
         prefix = clean_text(full_text[:link_pos]) if link_pos > 0 else ''
-        # Add trailing space to prefix if original had whitespace before the link
         if prefix and link_pos > 0 and full_text[link_pos - 1].isspace():
             prefix = prefix + ' '
-        suffix = clean_text(full_text[link_pos + len(link.get_text()):]) if link_pos >= 0 else ''
-        # Add leading space to suffix if original had whitespace after the link
-        if suffix and link_pos >= 0:
-            after_link_pos = link_pos + len(link.get_text())
-            if after_link_pos < len(full_text) and full_text[after_link_pos].isspace():
+
+        # For suffix, find text after the LAST link
+        last_link = links[-1]
+        last_link_text = last_link.get_text()
+        last_link_pos = full_text.rfind(last_link_text)
+        suffix = ''
+        if last_link_pos >= 0:
+            after_pos = last_link_pos + len(last_link_text)
+            suffix = clean_text(full_text[after_pos:])
+            if suffix and after_pos < len(full_text) and full_text[after_pos].isspace():
                 suffix = ' ' + suffix
 
         return {
             'type': RelationType.CROSS_REF,
+            'fragments': fragments,
             'prefix': prefix,
             'clickable': link_text,
             'target_word': target_word or link_text,
