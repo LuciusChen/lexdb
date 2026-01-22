@@ -1821,7 +1821,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
              (sense-expanded (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_expanded_examples"))
              (expanded-examples (when sense-expanded
                                   (cdr (assq ode-sense-key sense-expanded))))
-             (subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses"))
+             (subsenses (lexdb-meta-get (lexdb-sense-metadata sense) "ode" "subsenses"))
              ;; Align with examples: 4 spaces if subsenses, 2 spaces if no subsenses
              (tab-indent (if subsenses "    " "  "))
              (tabs nil))
