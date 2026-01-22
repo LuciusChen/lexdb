@@ -227,6 +227,13 @@ class ODEParser:
         if not entry['headword']:
             entry['headword'] = word_key
 
+        # === Variant spellings (e.g., "also hi-vis") ===
+        variant_elem = soup.find(class_='variant')
+        if variant_elem:
+            variant_text = clean_text(variant_elem.get_text())
+            if variant_text:
+                entry['attributes']['ode/variant'] = variant_text
+
         # === Part of speech ===
         pos_elem = soup.find(class_='pos')
         if pos_elem:
@@ -293,6 +300,14 @@ class ODEParser:
                 if pos_elem and 'ps' not in (pos_elem.get('class') or []):
                     section_pos = clean_text(pos_elem.get_text())
 
+        # Extract section-level register (e.g., "informal") - directly under gramb, not inside semb
+        section_register = None
+        for child in gramb.children:
+            if hasattr(child, 'get') and child.get('class'):
+                if 'sense-registers' in child.get('class', []):
+                    section_register = clean_text(child.get_text())
+                    break
+
         # Find semb (sense block)
         semb = gramb.find(class_='semb')
         if not semb:
@@ -316,6 +331,14 @@ class ODEParser:
                 if first_sense_in_section and section_pos:
                     sense_data['section_pos'] = section_pos
                     first_sense_in_section = False
+                # Add section-level register to first sense if not already present
+                if section_register and not any(
+                    l.get('type') == LabelType.REGISTER for l in sense_data.get('labels', [])
+                ):
+                    sense_data['labels'].insert(0, {
+                        'type': LabelType.REGISTER,
+                        'value': section_register
+                    })
                 entry['senses'].append(sense_data)
                 sense_order += 1
 

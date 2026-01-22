@@ -290,6 +290,12 @@ Returns alist of (adapter-id . (entries . adapter))."
   "Face for phonetic transcription."
   :group 'lexdb)
 
+(defface lexdb-variant-face
+  '((((background dark))  :foreground "#A0A0A0" :slant italic)
+    (((background light)) :foreground "#555555" :slant italic))
+  "Face for variant spellings (e.g., 'also hi-vis')."
+  :group 'lexdb)
+
 ;; Lexical information
 (defface lexdb-pos-face
   '((((background dark))  :foreground "#FF69B4")
@@ -2548,11 +2554,17 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 
 (defun lexdb-ui--slot-header (entry adapter)
   "Slot: Render entry header (headword, pronunciation, POS, etc.)."
-  (let ((caps (lexdb-adapter-capabilities adapter)))
+  (let ((caps (lexdb-adapter-capabilities adapter))
+        (ns (symbol-name (lexdb-adapter-id adapter)))
+        (meta (lexdb-entry-metadata entry)))
     (if-let* ((header-hook (lexdb-adapter-render-entry-header-fn adapter)))
         (funcall header-hook entry (current-buffer))
       ;; Default header rendering
       (lexdb-ui--render-headword entry)
+      ;; Variant spellings (e.g., "also hi-vis")
+      (when-let* ((variant (lexdb-meta-get meta ns "variant")))
+        (when (lexdb--non-empty-string-p variant)
+          (insert " " (propertize variant 'face 'lexdb-variant-face))))
       (when (memq 'pronunciation caps)
         (lexdb-ui--render-pronunciations entry adapter))
       (lexdb-ui--render-frequency entry adapter)
