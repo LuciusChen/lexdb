@@ -1531,7 +1531,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                                     lexdb-ui-translation-indicator)))
                           (cond
                            ((and has-audio has-translation)
-                            (insert (propertize "    🔊"
+                            (insert (propertize "      🔊"
                                                 'face 'lexdb-audio-indicator-face
                                                 'lexdb-audio-path ex-audio
                                                 'lexdb-audio-dir audio-dir
@@ -1541,19 +1541,19 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                                 'lexdb-translation ex-zh
                                                 'help-echo "Press t to peek translation")))
                            (has-audio
-                            (insert (propertize "    🔊 "
+                            (insert (propertize "      🔊 "
                                                 'face 'lexdb-audio-indicator-face
                                                 'lexdb-audio-path ex-audio
                                                 'lexdb-audio-dir audio-dir
                                                 'help-echo "C-c C-c to play")))
                            (has-translation
-                            (insert "    ")
+                            (insert "      ")
                             (insert (propertize (concat lexdb-ui-translation-indicator " ")
                                                 'face 'lexdb-translation-indicator-face
                                                 'lexdb-translation ex-zh
                                                 'help-echo "Press t to peek translation")))
                            (t
-                            (insert "    "))))
+                            (insert "      "))))
                         (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                         (insert "\n"))))))
               ;; Subsense tabs: expanded examples and synonyms
@@ -1566,7 +1566,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                     (push (list 'more-examples (format "Example sentences (%d)" (length ex-list))
                                 (with-temp-buffer
                                   (dolist (ex ex-list)
-                                    (insert "    " (propertize "• " 'face 'lexdb-definition-face))
+                                    (insert "      " (propertize "• " 'face 'lexdb-definition-face))
                                     (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                                     (insert "\n"))
                                   (buffer-string)))
@@ -1580,7 +1580,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                     (let ((register (cdr (assoc 'register group)))
                                           (words (cdr (assoc 'words group))))
                                       (when words
-                                        (insert "    ")
+                                        (insert "      ")
                                         (when (and register (not (string-empty-p register)))
                                           (insert (propertize register 'face 'lexdb-register-face) " "))
                                         (let ((word-list (if (vectorp words) (append words nil) words))
@@ -1604,9 +1604,9 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                         (insert "\n"))))
                                   (buffer-string)))
                           sub-tabs)))
-                ;; Insert tab bar aligned with examples (4 spaces)
+                ;; Insert tab bar aligned with subsense examples (6 spaces)
                 (when sub-tabs
-                  (insert "    ")
+                  (insert "      ")
                   (let ((tab-group (format "lexdb-ode-subsense-%d-%s"
                                            (lexdb-entry-id entry)
                                            (or sub-index sub-num "0"))))
