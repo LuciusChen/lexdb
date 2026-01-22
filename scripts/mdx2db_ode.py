@@ -571,6 +571,11 @@ class ODEParser:
         if prefix and link_pos > 0 and full_text[link_pos - 1].isspace():
             prefix = prefix + ' '
         suffix = clean_text(full_text[link_pos + len(link.get_text()):]) if link_pos >= 0 else ''
+        # Add leading space to suffix if original had whitespace after the link
+        if suffix and link_pos >= 0:
+            after_link_pos = link_pos + len(link.get_text())
+            if after_link_pos < len(full_text) and full_text[after_link_pos].isspace():
+                suffix = ' ' + suffix
 
         return {
             'type': RelationType.CROSS_REF,
