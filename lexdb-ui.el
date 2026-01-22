@@ -1155,7 +1155,15 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
            (pos (lexdb-meta-get (lexdb-entry-metadata entry) ns "pos")))
       (when (lexdb--non-empty-string-p pos)
-        (insert " " (propertize pos 'face 'lexdb-pos-face))))))
+        (insert " " (propertize pos 'face 'lexdb-pos-face))
+        ;; ODE: Add transitivity after POS (e.g., "[with object]")
+        (when (eq (lexdb-adapter-id adapter) 'ode)
+          (let* ((transitivity-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_transitivity"))
+                 ;; Get transitivity for first sense (sort_order = 0)
+                 (transitivity (when transitivity-map
+                                 (cdr (assoc "0" transitivity-map #'string=)))))
+            (when (lexdb--non-empty-string-p transitivity)
+              (insert " " (propertize (upcase transitivity) 'face 'lexdb-grammar-face)))))))))
 
 (defun lexdb-ui--render-audio-buttons (entry adapter)
   "Render audio indicators for ENTRY. Use C-c C-c to play."
@@ -1289,15 +1297,6 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                  (cdr (assoc sort-key section-registers-map #'string=)))))
         (when (lexdb--non-empty-string-p section-register)
           (insert (propertize section-register 'face 'lexdb-register-face) "\n"))))
-    ;; ODE: Transitivity (e.g., "[with object]") - inline before definition
-    ;; Uses sense-index (sort_order) as key
-    (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
-      (let* ((transitivity-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_transitivity"))
-             (sort-key (number-to-string sense-index))
-             (transitivity (when transitivity-map
-                             (cdr (assoc sort-key transitivity-map #'string=)))))
-        (when (lexdb--non-empty-string-p transitivity)
-          (insert (propertize (upcase transitivity) 'face 'lexdb-grammar-face) " "))))
     ;; ODE: Form groups (e.g., "also days") - after sense number, before definition
     ;; Uses sense-index (sort_order) as key, not sense number (which can repeat across POS)
     (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
@@ -2728,7 +2727,15 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
             (when (and (member (downcase signpost) ode-pos-keywords)
                        (not (member signpost shown-pos)))
               ;; Insert POS header as a section divider
-              (insert (propertize signpost 'face 'lexdb-pos-face) "\n")
+              (insert (propertize signpost 'face 'lexdb-pos-face))
+              ;; Add transitivity after POS if present (e.g., "[with object]")
+              (let* ((transitivity-map (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_transitivity"))
+                     (sort-key (number-to-string sense-index))
+                     (transitivity (when transitivity-map
+                                     (cdr (assoc sort-key transitivity-map #'string=)))))
+                (when (lexdb--non-empty-string-p transitivity)
+                  (insert " " (propertize (upcase transitivity) 'face 'lexdb-grammar-face))))
+              (insert "\n")
               (push signpost shown-pos))))
         (lexdb-ui--render-sense sense adapter entry sense-index)
         (setq sense-index (1+ sense-index)))))
