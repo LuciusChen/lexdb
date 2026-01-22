@@ -172,15 +172,25 @@
 
 (defun lexdb-ode--lookup (word)
   "Look up WORD in ODE database.
-Uses exact match and follows @@@LINK= aliases to find target entries."
+Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
   (let* ((db (lexdb-ode--ensure-db))
          (word-lower (downcase word))
+         ;; Also try with hyphen prefix for suffix entries (e.g., "ious" -> "-ious")
+         (suffix-word (unless (string-prefix-p "-" word-lower)
+                        (concat "-" word-lower)))
          ;; Direct entry matches (exact match only)
          (direct-rows (sqlite-select db
                        "SELECT id, dict_id, headword, headword_lower, headword_display
                         FROM entries WHERE dict_id = 'ode' AND headword_lower = ?
                         ORDER BY headword_lower"
                        (list word-lower)))
+         ;; Suffix entry matches (e.g., "-ious" for "ious")
+         (suffix-rows (when suffix-word
+                        (sqlite-select db
+                         "SELECT id, dict_id, headword, headword_lower, headword_display
+                          FROM entries WHERE dict_id = 'ode' AND headword_lower = ?
+                          ORDER BY headword_lower"
+                         (list suffix-word))))
          ;; Find alias targets and look up those entries
          (alias-targets (sqlite-select db
                          "SELECT target FROM aliases
@@ -195,7 +205,7 @@ Uses exact match and follows @@@LINK= aliases to find target entries."
                                   (mapconcat (lambda (_) "?") targets ","))
                           (mapcar #'downcase targets)))))
          ;; Combine and deduplicate by entry id
-         (all-rows (append direct-rows alias-rows))
+         (all-rows (append direct-rows suffix-rows alias-rows))
          (seen-ids (make-hash-table :test 'eq))
          (unique-rows (seq-filter (lambda (row)
                                     (let ((id (car row)))
