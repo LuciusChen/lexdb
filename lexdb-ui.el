@@ -3124,23 +3124,23 @@ ADAPTER-ID is used for crossref navigation."
                 ;; Definition
                 (when (lexdb--non-empty-string-p definition)
                   (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
-                ;; Inline examples
+                ;; Inline examples (align with headword - 2 spaces)
                 (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
                   (dolist (ex ex-list)
                     (when (lexdb--non-empty-string-p ex)
-                      (insert "      " (propertize ex 'face 'lexdb-example-face) "\n"))))
-                ;; Example sentences tab for expanded examples
+                      (insert "  " (propertize ex 'face 'lexdb-example-face) "\n"))))
+                ;; Example sentences tab for expanded examples (align with examples - 2 spaces)
                 (when expanded-examples
                   (let ((exp-list (if (vectorp expanded-examples) (append expanded-examples nil) expanded-examples)))
                     (when (> (length exp-list) 0)
-                      (insert "      ")  ; Align with examples (6 spaces)
+                      (insert "  ")
                       (let ((tab-group (format "lexdb-ode-deriv-%d-%d" (lexdb-entry-id entry) deriv-index)))
                         (lexdb-ui--insert-tab-bar
                          (list (list 'more-examples
                                      (format "Example sentences (%d)" (length exp-list))
                                      (with-temp-buffer
                                        (dolist (ex exp-list)
-                                         (insert "      " (propertize "• " 'face 'lexdb-definition-face))
+                                         (insert "  " (propertize "• " 'face 'lexdb-definition-face))
                                          (lexdb-ui--insert-highlighted-text ex 'lexdb-example-face)
                                          (insert "\n"))
                                        (buffer-string))))
