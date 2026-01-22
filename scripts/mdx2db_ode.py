@@ -1182,6 +1182,18 @@ class LexDBWriter:
         self.entry_count += 1
         return entry_id
 
+    def write_alias(self, alias, target):
+        """Write an alias/redirect entry (from @@@LINK=)."""
+        self.cursor.execute("""
+            INSERT INTO aliases (dict_id, alias, alias_lower, target)
+            VALUES (?, ?, ?, ?)
+        """, (
+            self.dict_id,
+            alias,
+            alias.lower(),
+            target
+        ))
+
     def commit(self):
         """Commit transaction."""
         if self.conn:
@@ -1307,11 +1319,15 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False):
     count = 0
     success = 0
 
+    alias_count = 0
     for word_key, html in decoded_items:
         count += 1
 
-        # Skip redirects (entries starting with @@@LINK)
-        if html.strip().startswith('@@@LINK'):
+        # Handle redirects (entries starting with @@@LINK=)
+        if html.strip().startswith('@@@LINK='):
+            target = html.strip()[8:]  # Remove '@@@LINK=' prefix
+            writer.write_alias(word_key, target)
+            alias_count += 1
             continue
 
         try:
@@ -1349,6 +1365,7 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False):
 ╠══════════════════════════════════════════════════════════════╣
 ║  Total entries:   {count:>10}
 ║  Parsed:          {success:>10}
+║  Aliases:         {alias_count:>10}
 ║  Time:            {elapsed:>10.1f}s ({rate:.0f} entries/sec)
 ║  Database:        {db_path}
 ║  Size:            {db_size:.2f} MB

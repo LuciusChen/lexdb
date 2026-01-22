@@ -172,20 +172,38 @@
 
 (defun lexdb-ode--lookup (word)
   "Look up WORD in ODE database.
-Matches exact word, combining forms (-WORD), and simple compounds (X-WORD, single hyphen only)."
+Uses exact match and follows @@@LINK= aliases to find target entries."
   (let* ((db (lexdb-ode--ensure-db))
          (word-lower (downcase word))
-         (combining-form (concat "-" word-lower))
-         (compound-suffix (concat "%-" word-lower))
-         ;; Exact match, combining form (-logic), and simple compounds (high-vis but not vis-à-vis)
-         (rows (sqlite-select db
-                "SELECT id, dict_id, headword, headword_lower, headword_display
-                 FROM entries WHERE dict_id = 'ode' AND
-                   (headword_lower = ? OR headword_lower = ?
-                    OR (headword_lower LIKE ? AND headword_lower NOT LIKE '%-%-%'))
-                 ORDER BY headword_lower"
-                (list word-lower combining-form compound-suffix))))
-    (mapcar #'lexdb-ode--row-to-entry rows)))
+         ;; Direct entry matches (exact match only)
+         (direct-rows (sqlite-select db
+                       "SELECT id, dict_id, headword, headword_lower, headword_display
+                        FROM entries WHERE dict_id = 'ode' AND headword_lower = ?
+                        ORDER BY headword_lower"
+                       (list word-lower)))
+         ;; Find alias targets and look up those entries
+         (alias-targets (sqlite-select db
+                         "SELECT target FROM aliases
+                          WHERE dict_id = 'ode' AND alias_lower = ?"
+                         (list word-lower)))
+         (alias-rows (when alias-targets
+                       (let ((targets (mapcar #'car alias-targets)))
+                         (sqlite-select db
+                          (format "SELECT id, dict_id, headword, headword_lower, headword_display
+                                   FROM entries WHERE dict_id = 'ode' AND headword_lower IN (%s)
+                                   ORDER BY headword_lower"
+                                  (mapconcat (lambda (_) "?") targets ","))
+                          (mapcar #'downcase targets)))))
+         ;; Combine and deduplicate by entry id
+         (all-rows (append direct-rows alias-rows))
+         (seen-ids (make-hash-table :test 'eq))
+         (unique-rows (seq-filter (lambda (row)
+                                    (let ((id (car row)))
+                                      (unless (gethash id seen-ids)
+                                        (puthash id t seen-ids)
+                                        t)))
+                                  all-rows)))
+    (mapcar #'lexdb-ode--row-to-entry unique-rows)))
 
 (defun lexdb-ode--get-phrases (entry-id)
   "Get phrases for ENTRY-ID."

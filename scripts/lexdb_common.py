@@ -27,7 +27,7 @@ from typing import Optional, Tuple, Dict, Any
 # Schema Version
 # =============================================================================
 
-SCHEMA_VERSION = "2.1"
+SCHEMA_VERSION = "2.2"
 
 # =============================================================================
 # Schema Definition
@@ -171,6 +171,16 @@ CREATE TABLE IF NOT EXISTS entry_attributes (
     UNIQUE(entry_id, attr_key)
 );
 
+-- Aliases table (别名/重定向表 - 用于 @@@LINK= 机制)
+CREATE TABLE IF NOT EXISTS aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dict_id TEXT NOT NULL,
+    alias TEXT NOT NULL,                  -- 查询词 (e.g., "vis")
+    alias_lower TEXT NOT NULL,            -- 小写形式用于匹配
+    target TEXT NOT NULL,                 -- 目标词条 (e.g., "high-vis")
+    FOREIGN KEY (dict_id) REFERENCES dictionaries(dict_id)
+);
+
 -- Meta info table
 CREATE TABLE IF NOT EXISTS _lexdb_meta (
     key TEXT PRIMARY KEY,
@@ -208,6 +218,8 @@ CREATE INDEX IF NOT EXISTS idx_collocation_examples_coll ON collocation_examples
 
 CREATE INDEX IF NOT EXISTS idx_entry_attributes_entry ON entry_attributes(entry_id);
 CREATE INDEX IF NOT EXISTS idx_entry_attributes_key ON entry_attributes(attr_key);
+
+CREATE INDEX IF NOT EXISTS idx_aliases_lookup ON aliases(dict_id, alias_lower);
 """
 
 

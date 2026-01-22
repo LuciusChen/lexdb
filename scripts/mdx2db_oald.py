@@ -1483,6 +1483,15 @@ def insert_entry(conn, dict_id, entry):
     return entry_id
 
 
+def insert_alias(conn, dict_id, alias, target):
+    """Insert an alias/redirect entry (from @@@LINK=)."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO aliases (dict_id, alias, alias_lower, target)
+        VALUES (?, ?, ?, ?)
+    """, (dict_id, alias, alias.lower(), target))
+
+
 # ============================================================
 # Main Conversion
 # ============================================================
@@ -1534,10 +1543,11 @@ def convert_oald4(mdx_path, output_dir=None):
     imported = 0
     skipped = 0
     errors = 0
+    alias_count = 0
 
     for i, (key, value) in enumerate(items):
         if i % 1000 == 0:
-            print(f"  Progress: {i}/{total} ({imported} imported, {skipped} skipped)")
+            print(f"  Progress: {i}/{total} ({imported} imported, {skipped} skipped, {alias_count} aliases)")
 
         try:
             key_str = key.decode('utf-8') if isinstance(key, bytes) else key
@@ -1548,9 +1558,11 @@ def convert_oald4(mdx_path, output_dir=None):
                 skipped += 1
                 continue
 
-            # Skip redirects
+            # Handle redirects (store as aliases)
             if html.strip().startswith('@@@LINK='):
-                skipped += 1
+                target = html.strip()[8:]  # Remove '@@@LINK=' prefix
+                insert_alias(conn, dict_id, key_str, target)
+                alias_count += 1
                 continue
 
             # Skip very short entries (likely just links)
@@ -1583,6 +1595,7 @@ def convert_oald4(mdx_path, output_dir=None):
 
     print(f"\nImport complete:")
     print(f"  Imported: {imported}")
+    print(f"  Aliases: {alias_count}")
     print(f"  Skipped: {skipped}")
     print(f"  Errors: {errors}")
 
@@ -1594,9 +1607,12 @@ def convert_oald4(mdx_path, output_dir=None):
     sense_count = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM examples")
     example_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM aliases WHERE dict_id = ?", (dict_id,))
+    alias_db_count = cursor.fetchone()[0]
 
     print(f"\nDatabase stats:")
     print(f"  Entries: {entry_count}")
+    print(f"  Aliases: {alias_db_count}")
     print(f"  Senses: {sense_count}")
     print(f"  Examples: {example_count}")
 

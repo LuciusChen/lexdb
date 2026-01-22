@@ -16,6 +16,7 @@ LexDB 采用 **"能力感知"** 设计：
 ```mermaid
 erDiagram
     dictionaries ||--o{ entries : contains
+    dictionaries ||--o{ aliases : "redirects"
     entries ||--o{ senses : has
     entries ||--o{ pronunciations : has
     entries ||--o{ labels : "entry-level"
@@ -444,6 +445,54 @@ CREATE TABLE entry_attributes (
 | `sense_register_boxes` | 语域框 |
 | `sense_lexunit_prefixes` | 词组前缀（含地域变体） |
 | `sense_lexunits` | 词组用法 |
+
+---
+
+## 别名表 (Alias/Redirect)
+
+MDX 词典使用 `@@@LINK=` 机制实现词条重定向。例如，查询 "vis" 时，原词典会通过别名指向 "high-vis" 和 "Vis" 词条。
+
+```mermaid
+erDiagram
+    aliases {
+        int id PK
+        text dict_id FK
+        text alias "查询词"
+        text alias_lower "小写形式"
+        text target "目标词条"
+    }
+
+    dictionaries ||--o{ aliases : contains
+```
+
+### `aliases` - 别名/重定向表
+
+```sql
+CREATE TABLE aliases (
+    id INTEGER PRIMARY KEY,
+    dict_id TEXT NOT NULL,
+    alias TEXT NOT NULL,           -- 查询词 (e.g., "vis")
+    alias_lower TEXT NOT NULL,     -- 小写形式用于匹配
+    target TEXT NOT NULL,          -- 目标词条 (e.g., "high-vis")
+    FOREIGN KEY (dict_id) REFERENCES dictionaries(dict_id)
+);
+
+CREATE INDEX idx_aliases_lookup ON aliases(dict_id, alias_lower);
+```
+
+### 查询逻辑
+
+```elisp
+;; 1. 直接匹配 entries 表
+;; 2. 查询 aliases 表获取目标词条
+;; 3. 根据目标词条查询 entries 表
+;; 4. 合并去重
+```
+
+**示例：** 查询 "vis" 在 ODE 中：
+- 直接匹配：无
+- 别名匹配：`vis → high-vis`, `vis → vis.`
+- 最终返回：`high-vis` 和 `Vis` 词条
 
 ---
 

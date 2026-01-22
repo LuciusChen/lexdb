@@ -181,14 +181,38 @@
 
 (defun lexdb-oald--lookup (word)
   "Look up WORD in OALD database.
-Uses exact match only, consistent with original dictionary behavior."
+Uses exact match and follows @@@LINK= aliases to find target entries."
   (let* ((db (lexdb-oald--ensure-db))
          (word-lower (downcase word))
-         (rows (sqlite-select db
-                "SELECT id, dict_id, headword, headword_lower, headword_display
-                 FROM entries WHERE headword_lower = ? AND dict_id = 'oald'"
-                (list word-lower))))
-    (mapcar #'lexdb-oald--row-to-entry rows)))
+         ;; Direct entry matches (exact match only)
+         (direct-rows (sqlite-select db
+                       "SELECT id, dict_id, headword, headword_lower, headword_display
+                        FROM entries WHERE dict_id = 'oald' AND headword_lower = ?
+                        ORDER BY headword_lower"
+                       (list word-lower)))
+         ;; Find alias targets and look up those entries
+         (alias-targets (sqlite-select db
+                         "SELECT target FROM aliases
+                          WHERE dict_id = 'oald' AND alias_lower = ?"
+                         (list word-lower)))
+         (alias-rows (when alias-targets
+                       (let ((targets (mapcar #'car alias-targets)))
+                         (sqlite-select db
+                          (format "SELECT id, dict_id, headword, headword_lower, headword_display
+                                   FROM entries WHERE dict_id = 'oald' AND headword_lower IN (%s)
+                                   ORDER BY headword_lower"
+                                  (mapconcat (lambda (_) "?") targets ","))
+                          (mapcar #'downcase targets)))))
+         ;; Combine and deduplicate by entry id
+         (all-rows (append direct-rows alias-rows))
+         (seen-ids (make-hash-table :test 'eq))
+         (unique-rows (seq-filter (lambda (row)
+                                    (let ((id (car row)))
+                                      (unless (gethash id seen-ids)
+                                        (puthash id t seen-ids)
+                                        t)))
+                                  all-rows)))
+    (mapcar #'lexdb-oald--row-to-entry unique-rows)))
 
 (defun lexdb-oald--get-idioms (entry-id)
   "Get idioms for ENTRY-ID."
