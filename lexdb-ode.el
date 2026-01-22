@@ -172,23 +172,16 @@
 
 (defun lexdb-ode--lookup (word)
   "Look up WORD in ODE database.
-First tries exact match, then combining forms (-WORD), then prefix match."
+Uses exact match and combining forms (-WORD) only, consistent with original dictionary."
   (let* ((db (lexdb-ode--ensure-db))
          (word-lower (downcase word))
          (combining-form (concat "-" word-lower))
-         ;; First try exact match and combining form (e.g., "logic" and "-logic")
+         ;; Exact match and combining form (e.g., "logic" and "-logic")
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
                  FROM entries WHERE (headword_lower = ? OR headword_lower = ?) AND dict_id = 'ode'
                  ORDER BY headword_lower"
                 (list word-lower combining-form))))
-    ;; If no results, try prefix match (like OALD)
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ode'
-                   ORDER BY headword_lower LIMIT 20"
-                  (list (concat word-lower "%")))))
     (mapcar #'lexdb-ode--row-to-entry rows)))
 
 (defun lexdb-ode--get-phrases (entry-id)

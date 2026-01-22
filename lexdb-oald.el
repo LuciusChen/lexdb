@@ -180,20 +180,14 @@
 ;;;; ============================================================
 
 (defun lexdb-oald--lookup (word)
-  "Look up WORD in OALD database."
+  "Look up WORD in OALD database.
+Uses exact match only, consistent with original dictionary behavior."
   (let* ((db (lexdb-oald--ensure-db))
          (word-lower (downcase word))
-         ;; First try exact match
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
                  FROM entries WHERE headword_lower = ? AND dict_id = 'oald'"
                 (list word-lower))))
-    ;; If no results, try fuzzy match
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'oald' LIMIT 20"
-                  (list (concat word-lower "%")))))
     (mapcar #'lexdb-oald--row-to-entry rows)))
 
 (defun lexdb-oald--get-idioms (entry-id)

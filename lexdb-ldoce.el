@@ -245,28 +245,15 @@ Uses fragment storage format: prefix + clickable + suffix."
 
 (defun lexdb-ldoce--lookup (word)
   "Look up WORD in LDOCE database.
-First tries exact match, then tries fuzzy match (LIKE) as fallback."
+Uses exact match only, consistent with original dictionary behavior."
   (let* ((db (lexdb-ldoce--ensure-db))
          ;; Normalize apostrophes before searching
          (word-normalized (lexdb-ldoce--normalize-apostrophe word))
          (word-lower (downcase word-normalized))
-         ;; First try exact match
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
                  FROM entries WHERE headword_lower = ? AND dict_id = 'ldoce'"
                 (list word-lower))))
-    ;; If no results, try fuzzy match (word at start, handles "Big Apple" -> "Big Apple, the")
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ldoce'"
-                  (list (concat word-lower "%")))))
-    ;; If still no results, try word anywhere
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ldoce'"
-                  (list (concat "%" word-lower "%")))))
     (mapcar #'lexdb-ldoce--v2-row-to-entry rows)))
 
 (defun lexdb-ldoce--get-collocations (entry-id)
