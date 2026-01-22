@@ -1411,7 +1411,11 @@ class LDOCEParser:
 
         # Parse crossref sections - handle reflex + link combinations
         # Now using fragment storage for cleaner rendering
+        # Skip crossrefs inside senses (those are handled by sense parsing)
         for crossref in soup.find_all(class_='crossref'):
+            # Skip if this crossref is inside a sense element
+            if crossref.find_parent(class_='sense'):
+                continue
             # Process children in order to properly associate reflex with following link
             children = list(crossref.children)
             i = 0
