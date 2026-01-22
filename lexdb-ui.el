@@ -1822,12 +1822,12 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                                         (eq (cdr (assoc 'clickable word-obj)) t))))
                                       (if clickable
                                           (insert-text-button word-text
-                                                              'face 'lexdb-synonym-face
+                                                              'face 'lexdb-link-face
                                                               'action (lambda (_)
                                                                         (lexdb-search-and-goto-sense word-text nil 'ode))
                                                               'help-echo (format "Look up: %s [ode]" word-text))
-                                        ;; Non-clickable: descriptive text with different face
-                                        (insert (propertize word-text 'face 'lexdb-synonym-descriptive-face))))))
+                                        ;; Non-clickable: normal text
+                                        (insert (propertize word-text 'face 'default))))))
                                 (insert "\n"))))
                           (buffer-string)))
                   tabs)))
@@ -1873,8 +1873,10 @@ Returns a string with text properties preserved for insertion."
     (dolist (group (if (vectorp syn-list) (append syn-list nil) syn-list))
       (let ((register (lexdb-ui--alist-get 'register group))
             (words (lexdb-ui--alist-get 'words group)))
+        ;; Always start with indent for alignment
+        (insert "    ")
         (when (lexdb--non-empty-string-p register)
-          (insert "    " (propertize register 'face 'lexdb-label-face) " "))
+          (insert (propertize register 'face 'lexdb-label-face) " "))
         (let ((word-list (if (vectorp words) (append words nil) words))
               (first t))
           (dolist (w word-list)
@@ -1888,7 +1890,8 @@ Returns a string with text properties preserved for insertion."
                                       'action (lambda (_)
                                                 (lexdb-search word))
                                       'help-echo (format "Look up: %s" word))
-                (insert (propertize word 'face 'lexdb-synonym-descriptive-face))))))
+                ;; Non-clickable: normal text
+                (insert (propertize word 'face 'default))))))
         (insert "\n")))
     ;; Return with text properties preserved
     (buffer-substring (point-min) (point-max))))
