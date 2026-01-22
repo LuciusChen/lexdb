@@ -770,6 +770,16 @@ def _parse_mainentry(main_entry, headword_hint=None):
                     sense_order += 1
                     sense_num += 1
 
+            # Also check for se3 elements directly under sg (like 'denote')
+            if not entry['senses']:
+                for se3 in sg.find_all('div', class_='se3', recursive=False):
+                    sense_data = parse_oald4_subsense(se3, sense_order)
+                    if sense_data:
+                        sense_data['number'] = str(sense_num)
+                        entry['senses'].append(sense_data)
+                        sense_order += 1
+                        sense_num += 1
+
         if not entry['senses']:
             for se in main_entry.find_all('div', class_='se', recursive=True):
                 sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
