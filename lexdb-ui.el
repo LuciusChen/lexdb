@@ -800,7 +800,7 @@ If ADAPTER-ID is provided, links will jump within the same dictionary."
   :type 'string
   :group 'lexdb)
 
-(defcustom lexdb-audio-ode-base-url "https://www.oxfordlearnersdictionaries.com"
+(defcustom lexdb-audio-ode-base-url "https://s3.amazonaws.com/audio.oxforddictionaries.com"
   "Base URL for online audio files from ODE."
   :type 'string
   :group 'lexdb)
