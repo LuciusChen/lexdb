@@ -3662,42 +3662,69 @@ The translation disappears on the next command."
 ;;;; Imenu Support
 ;;;; ============================================================
 
+(defun lexdb-imenu--pos-abbrev (pos)
+  "Return abbreviation for part of speech POS."
+  (pcase (downcase pos)
+    ("noun" "n.")
+    ("verb" "v.")
+    ("adjective" "adj.")
+    ("adverb" "adv.")
+    ("preposition" "prep.")
+    ("conjunction" "conj.")
+    ("pronoun" "pron.")
+    ("determiner" "det.")
+    ("interjection" "interj.")
+    (_ pos)))
+
 (defun lexdb-imenu-create-index ()
   "Create imenu index for lexdb buffer.
-Index includes entries (headwords) and senses."
-  (let ((index nil))
+Index includes entries (headwords) and senses with POS prefix."
+  (let ((index nil)
+        (current-pos nil))
     (save-excursion
       (goto-char (point-min))
-      ;; Find headwords - lines starting with a word followed by space and /
-      ;; e.g., "mother¹ /ˈmʌðə..." (with superscript) or "mother1 /..." (without)
-      (while (re-search-forward "^\\([a-zA-Z][-a-zA-Z']*[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]*\\) +/" nil t)
-        (let ((headword (match-string 1))
-              (pos (match-beginning 0)))
-          ;; Try to get POS from same line
-          (let ((line-end (line-end-position))
-                (entry-pos nil))
-            (save-excursion
-              (goto-char pos)
-              (if (re-search-forward "\\b\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b" line-end t)
-                  (setq entry-pos (match-string 1))))
-            (push (cons (if entry-pos
-                            (format "%s (%s)" headword entry-pos)
-                          headword)
+      ;; Single pass: find headwords, POS headers, and senses
+      (while (not (eobp))
+        (cond
+         ;; Headword line: word followed by space and /
+         ;; e.g., "mother¹ /ˈmʌðə..." or "mother1 /..."
+         ((looking-at "^\\([a-zA-Z][-a-zA-Z']*[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]*\\) +/")
+          (let ((headword (match-string 1))
+                (pos (point)))
+            ;; Try to get POS from same line
+            (let ((line-end (line-end-position))
+                  (entry-pos nil))
+              (save-excursion
+                (if (re-search-forward "\\b\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b" line-end t)
+                    (progn
+                      (setq entry-pos (match-string 1))
+                      (setq current-pos entry-pos))))
+              (push (cons (if entry-pos
+                              (format "%s (%s)" headword entry-pos)
+                            headword)
+                          pos)
+                    index))))
+         ;; POS header line: standalone part of speech (possibly with transitivity)
+         ;; e.g., "noun", "verb", "adjective", "verb [WITH OBJECT]"
+         ((looking-at "^\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b")
+          (setq current-pos (match-string 1)))
+         ;; Sense line: starts with number
+         ;; e.g., "1 PARENT" or "2 "
+         ((looking-at "^\\([0-9]+\\) +\\([A-Z][A-Z /]*\\)?")
+          (let ((num (match-string 1))
+                (signpost (match-string 2))
+                (pos (point)))
+            (push (cons (format "%s %s%s"
+                                (if current-pos
+                                    (lexdb-imenu--pos-abbrev current-pos)
+                                  "")
+                                num
+                                (if (and signpost (not (string-empty-p signpost)))
+                                    (concat " " (string-trim signpost))
+                                  ""))
                         pos)
                   index))))
-      ;; Find senses - lines starting with number
-      ;; e.g., "1 PARENT" or "2 "
-      (goto-char (point-min))
-      (while (re-search-forward "^\\([0-9]+\\) +\\([A-Z][A-Z /]*\\)?" nil t)
-        (let ((num (match-string 1))
-              (signpost (match-string 2))
-              (pos (match-beginning 0)))
-          (push (cons (format "  %s%s" num
-                              (if (and signpost (not (string-empty-p signpost)))
-                                  (concat " " (string-trim signpost))
-                                ""))
-                      pos)
-                index))))
+        (forward-line 1)))
     (nreverse index)))
 
 (defun lexdb-ui-play-audio-at-point ()
