@@ -3678,8 +3678,9 @@ The translation disappears on the next command."
 
 (defun lexdb-imenu-create-index ()
   "Create imenu index for lexdb buffer.
-Index includes entries (headwords) and senses with POS prefix."
+Index format: headword pos. number SIGNPOST (e.g., \"mother n. 1 PARENT\")."
   (let ((index nil)
+        (current-headword nil)
         (current-pos nil))
     (save-excursion
       (goto-char (point-min))
@@ -3689,21 +3690,12 @@ Index includes entries (headwords) and senses with POS prefix."
          ;; Headword line: word followed by space and /
          ;; e.g., "mother¹ /ˈmʌðə..." or "mother1 /..."
          ((looking-at "^\\([a-zA-Z][-a-zA-Z']*[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]*\\) +/")
-          (let ((headword (match-string 1))
-                (pos (point)))
-            ;; Try to get POS from same line
-            (let ((line-end (line-end-position))
-                  (entry-pos nil))
-              (save-excursion
-                (if (re-search-forward "\\b\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b" line-end t)
-                    (progn
-                      (setq entry-pos (match-string 1))
-                      (setq current-pos entry-pos))))
-              (push (cons (if entry-pos
-                              (format "%s (%s)" headword entry-pos)
-                            headword)
-                          pos)
-                    index))))
+          (setq current-headword (match-string 1))
+          ;; Try to get POS from same line
+          (let ((line-end (line-end-position)))
+            (save-excursion
+              (when (re-search-forward "\\b\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b" line-end t)
+                (setq current-pos (match-string 1))))))
          ;; POS header line: standalone part of speech (possibly with transitivity)
          ;; e.g., "noun", "verb", "adjective", "verb [WITH OBJECT]"
          ((looking-at "^\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b")
@@ -3714,9 +3706,10 @@ Index includes entries (headwords) and senses with POS prefix."
           (let ((num (match-string 1))
                 (signpost (match-string 2))
                 (pos (point)))
-            (push (cons (format "%s %s%s"
+            (push (cons (format "%s %s%s%s"
+                                (or current-headword "")
                                 (if current-pos
-                                    (lexdb-imenu--pos-abbrev current-pos)
+                                    (concat (lexdb-imenu--pos-abbrev current-pos) " ")
                                   "")
                                 num
                                 (if (and signpost (not (string-empty-p signpost)))
