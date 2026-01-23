@@ -108,11 +108,11 @@ python mdx2db.py LDOCE6.mdx --extract-audio
 
 ## 支持的词典
 
-| 词典 | 转换脚本 | 备注 |
+| 词典 | 转换脚本 | 说明 |
 |------|----------|------|
-| LDOCE 6 | mdx2db.py | 朗文当代英语词典 |
-| OALD 4 | mdx2db_oald.py | 牛津高阶英汉双解词典 |
-| ODE | mdx2db_ode.py | 牛津英语词典（在线版） |
+| LDOCE 6 | mdx2db.py | 朗文当代英语词典第6版，学习型词典，词频标注、搭配丰富 |
+| OALD 4 | mdx2db_oald.py | 牛津高阶英汉双解词典第4版，英汉双解 |
+| ODE | mdx2db_ode.py | 牛津英语词典在线版，数据来自 [Oxford Dictionaries Premium](https://premium.oxforddictionaries.com/)（现需付费），含词源信息 |
 
 ## 下载
 
