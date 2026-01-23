@@ -1186,34 +1186,34 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
               (insert " " (propertize (upcase transitivity) 'face 'lexdb-grammar-face)))))))))
 
 (defun lexdb-ui--render-audio-buttons (entry adapter)
-  "Render audio indicators for ENTRY. Use C-c C-c to play."
+  "Render audio indicators for ENTRY. Use C-c C-c to play.
+Supports both local audio (with audio-dir) and online audio (path only)."
   (let* ((caps (lexdb-adapter-capabilities adapter))
          (audio-dir (lexdb-adapter-audio-dir adapter))
          (ns (symbol-name (lexdb-adapter-id adapter)))
          (meta (lexdb-entry-metadata entry))
          (has-audio nil))
-    (when audio-dir
-      ;; UK audio
-      (when (memq 'audio-uk caps)
-        (when-let* ((path (lexdb-meta-get meta ns "audio-uk")))
-          (when (lexdb--non-empty-string-p path)
-            (setq has-audio t)
-            (insert (propertize "🔊 UK"
-                                'face 'lexdb-audio-indicator-face
-                                'lexdb-audio-path path
-                                'lexdb-audio-dir audio-dir
-                                'help-echo "C-c C-c to play UK pronunciation")))))
-      ;; US audio
-      (when (memq 'audio-us caps)
-        (when-let* ((path (lexdb-meta-get meta ns "audio-us")))
-          (when (lexdb--non-empty-string-p path)
-            (when has-audio (insert "  "))
-            (setq has-audio t)
-            (insert (propertize "🔊 US"
-                                'face 'lexdb-audio-indicator-face
-                                'lexdb-audio-path path
-                                'lexdb-audio-dir audio-dir
-                                'help-echo "C-c C-c to play US pronunciation"))))))
+    ;; UK audio - render if path exists (audio-dir can be nil for online)
+    (when (memq 'audio-uk caps)
+      (when-let* ((path (lexdb-meta-get meta ns "audio-uk")))
+        (when (lexdb--non-empty-string-p path)
+          (setq has-audio t)
+          (insert (propertize "🔊 UK"
+                              'face 'lexdb-audio-indicator-face
+                              'lexdb-audio-path path
+                              'lexdb-audio-dir audio-dir
+                              'help-echo "C-c C-c to play UK pronunciation")))))
+    ;; US audio
+    (when (memq 'audio-us caps)
+      (when-let* ((path (lexdb-meta-get meta ns "audio-us")))
+        (when (lexdb--non-empty-string-p path)
+          (when has-audio (insert "  "))
+          (setq has-audio t)
+          (insert (propertize "🔊 US"
+                              'face 'lexdb-audio-indicator-face
+                              'lexdb-audio-path path
+                              'lexdb-audio-dir audio-dir
+                              'help-echo "C-c C-c to play US pronunciation")))))
     (when has-audio (insert "\n"))))
 
 (defun lexdb-ui--render-inflections (entry adapter)
