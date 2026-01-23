@@ -138,6 +138,14 @@
         (pcase-let ((`(,ltype ,lvalue) label))
           (when (and (equal ltype "pos") (not (assq 'ode/pos metadata)))
             (push (cons 'ode/pos lvalue) metadata))))
+      ;; Add audio paths to metadata
+      (dolist (pron prons)
+        (when-let* ((audio (lexdb-pronunciation-audio pron)))
+          (pcase (lexdb-pronunciation-variant pron)
+            ('uk (unless (assq 'ode/audio-uk metadata)
+                   (push (cons 'ode/audio-uk audio) metadata)))
+            ('us (unless (assq 'ode/audio-us metadata)
+                   (push (cons 'ode/audio-us audio) metadata))))))
       ;; Fetch entry attributes (phrases, origin, frequency, etc.)
       (let ((attr-rows (sqlite-select db
                         "SELECT attr_key, attr_value, attr_type FROM entry_attributes WHERE entry_id = ?"

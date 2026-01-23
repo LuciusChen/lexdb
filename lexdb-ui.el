@@ -800,6 +800,11 @@ If ADAPTER-ID is provided, links will jump within the same dictionary."
   :type 'string
   :group 'lexdb)
 
+(defcustom lexdb-audio-ode-base-url "https://www.oxfordlearnersdictionaries.com"
+  "Base URL for online audio files from ODE."
+  :type 'string
+  :group 'lexdb)
+
 (defcustom lexdb-audio-prefer-online t
   "If non-nil, prefer online audio over local files.
 When nil, play local files first, fall back to online if not found."
@@ -809,18 +814,21 @@ When nil, play local files first, fall back to online if not found."
 (defun lexdb-ui--audio-path-to-url (path)
   "Convert local audio PATH to online URL.
 Handles different audio types:
-- hwd/bre/* -> breProns (British pronunciation)
-- hwd/ame/* -> ameProns (American pronunciation)
-- exa/bre/* or exa/ame/* -> exaProns (example sentences)"
+- LDOCE: hwd/bre/* -> breProns, hwd/ame/* -> ameProns, exa/* -> exaProns
+- ODE: /en/mp3/* -> direct path append"
   (when path
     (let ((filename (file-name-nondirectory path)))
       (cond
+       ;; LDOCE paths
        ((string-match-p "^hwd/bre/" path)
         (concat lexdb-audio-online-base-url "breProns/" filename))
        ((string-match-p "^hwd/ame/" path)
         (concat lexdb-audio-online-base-url "ameProns/" filename))
        ((string-match-p "^exa/" path)
         (concat lexdb-audio-online-base-url "exaProns/" filename))
+       ;; ODE paths (e.g., /en/mp3/home_gb_1.mp3)
+       ((string-match-p "^/en/mp3/" path)
+        (concat lexdb-audio-ode-base-url path))
        (t nil)))))
 
 (defun lexdb-ui--play-audio (path &optional audio-dir)
