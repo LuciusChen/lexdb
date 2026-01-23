@@ -16,6 +16,7 @@ LexDB 采用 **"能力感知"** 设计：
 ```mermaid
 erDiagram
     dictionaries ||--o{ entries : contains
+    dictionaries ||--o{ aliases : "redirects"
     entries ||--o{ senses : has
     entries ||--o{ pronunciations : has
     entries ||--o{ labels : "entry-level"
@@ -270,12 +271,47 @@ CREATE TABLE relations (
 );
 ```
 
-**渲染示例：**
+**渲染示例（简单格式）：**
 
 | 原文 | prefix | clickable | suffix | target_word | target_sense |
 |------|--------|-----------|--------|-------------|--------------|
 | `→ for all sb cares at care²(8)` | `→ for all sb cares at ` | `care²` | `(8)` | `care` | `8` |
 | `SYN happy` | `SYN ` | `happy` | | `happy` | |
+
+### 多链接交叉引用（Fragments 格式）
+
+当交叉引用包含多个可点击链接时（如 "Compare with go out (see go)"），使用 `fragments` 数组格式：
+
+```json
+{
+  "rel_type": "compare",
+  "prefix": "Compare with ",
+  "clickable": "go out",
+  "suffix": " (see go)",
+  "target": "go out",
+  "fragments": [
+    {"type": "text", "value": "Compare with "},
+    {"type": "link", "value": "go out", "target": "go out"},
+    {"type": "text", "value": " (see "},
+    {"type": "link", "value": "go", "target": "go"},
+    {"type": "text", "value": ")"}
+  ]
+}
+```
+
+**fragments 字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `type` | `"text"` 或 `"link"` |
+| `value` | 显示文本 |
+| `target` | 仅 `link` 类型需要，跳转目标词 |
+
+**渲染逻辑：**
+1. 如果存在 `fragments` 数组，遍历渲染每个片段
+2. `type: "text"` 渲染为普通文本
+3. `type: "link"` 渲染为可点击按钮，点击跳转到 `target`
+4. 如果没有 `fragments`，回退到 `prefix + clickable + suffix` 简单格式
 
 **relation_type 枚举：**
 
@@ -432,6 +468,9 @@ CREATE TABLE entry_attributes (
 | `oald4/usage` | json | 用法说明 NOTE OF USAGE |
 | `oald/idioms` | json | OALD 习语列表 |
 | `oald/phrasal-verbs` | json | OALD 短语动词 (PHR V) |
+| `ode/phrases` | json.gz | ODE 短语（PHRASES 板块） |
+| `ode/phrasal_verbs` | json.gz | ODE 短语动词（PHRASAL VERBS 板块） |
+| `ode/origin` | json.gz | ODE 词源（Origin 板块） |
 | `idioms` | json | 习语列表（通用） |
 | `phrasal_verbs` | json | 短语动词（通用） |
 | `entry_grammar_boxes` | json | 词条级语法框 |
@@ -444,6 +483,54 @@ CREATE TABLE entry_attributes (
 | `sense_register_boxes` | 语域框 |
 | `sense_lexunit_prefixes` | 词组前缀（含地域变体） |
 | `sense_lexunits` | 词组用法 |
+
+---
+
+## 别名表 (Alias/Redirect)
+
+MDX 词典使用 `@@@LINK=` 机制实现词条重定向。例如，查询 "vis" 时，原词典会通过别名指向 "high-vis" 和 "Vis" 词条。
+
+```mermaid
+erDiagram
+    aliases {
+        int id PK
+        text dict_id FK
+        text alias "查询词"
+        text alias_lower "小写形式"
+        text target "目标词条"
+    }
+
+    dictionaries ||--o{ aliases : contains
+```
+
+### `aliases` - 别名/重定向表
+
+```sql
+CREATE TABLE aliases (
+    id INTEGER PRIMARY KEY,
+    dict_id TEXT NOT NULL,
+    alias TEXT NOT NULL,           -- 查询词 (e.g., "vis")
+    alias_lower TEXT NOT NULL,     -- 小写形式用于匹配
+    target TEXT NOT NULL,          -- 目标词条 (e.g., "high-vis")
+    FOREIGN KEY (dict_id) REFERENCES dictionaries(dict_id)
+);
+
+CREATE INDEX idx_aliases_lookup ON aliases(dict_id, alias_lower);
+```
+
+### 查询逻辑
+
+```elisp
+;; 1. 直接匹配 entries 表
+;; 2. 查询 aliases 表获取目标词条
+;; 3. 根据目标词条查询 entries 表
+;; 4. 合并去重
+```
+
+**示例：** 查询 "vis" 在 ODE 中：
+- 直接匹配：无
+- 别名匹配：`vis → high-vis`, `vis → vis.`
+- 最终返回：`high-vis` 和 `Vis` 词条
 
 ---
 
@@ -634,6 +721,141 @@ OALD4 的 "PHR V 动词短语" 结构。
 | `senses[].definition_zh` | 中文释义 |
 | `senses[].examples` | 例句数组 |
 
+### ode/phrases（ODE 短语）
+
+ODE 特有的 PHRASES 板块结构，支持义项编号、子义项、标签和交叉引用。
+
+```json
+[
+  {
+    "text": "call someone/something to mind",
+    "senses": [
+      {
+        "sense_number": "1",
+        "definition": "remember or cause to think of.",
+        "examples": [
+          {"text": "the smell called to mind the fragrance of fresh-cut grass"}
+        ],
+        "labels": [],
+        "cross_refs": []
+      },
+      {
+        "sense_number": "2",
+        "definition": "evoke or invoke.",
+        "examples": [
+          {"text": "the film calls to mind classic Westerns of the 1950s"}
+        ],
+        "labels": [],
+        "cross_refs": []
+      }
+    ]
+  },
+  {
+    "text": "come home",
+    "senses": [
+      {
+        "definition": "(of the significance of something) become fully realized.",
+        "examples": [],
+        "labels": [
+          {"type": "register", "value": "proverb"}
+        ],
+        "cross_refs": [
+          {
+            "rel_type": "compare",
+            "prefix": "Compare with ",
+            "clickable": "go out",
+            "suffix": " (see go)",
+            "target": "go out",
+            "fragments": [
+              {"type": "text", "value": "Compare with "},
+              {"type": "link", "value": "go out", "target": "go out"},
+              {"type": "text", "value": " (see "},
+              {"type": "link", "value": "go", "target": "go"},
+              {"type": "text", "value": ")"}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+**字段说明：**
+
+| 字段 | 说明 |
+|------|------|
+| `text` | 短语文本 |
+| `senses` | 义项数组 |
+| `senses[].sense_number` | 义项编号（多义项时） |
+| `senses[].definition` | 英文释义 |
+| `senses[].examples` | 例句数组 |
+| `senses[].labels` | 标签数组（proverb, informal, dated 等） |
+| `senses[].cross_refs` | 交叉引用数组（支持 fragments 格式） |
+
+### ode/phrasal_verbs（ODE 短语动词）
+
+ODE 特有的 PHRASAL VERBS 板块结构，与 `ode/phrases` 结构相同。
+
+```json
+[
+  {
+    "text": "call someone away",
+    "senses": [
+      {
+        "definition": "summon someone from a place or occupation.",
+        "examples": [
+          {"text": "he was called away on urgent business"}
+        ],
+        "labels": [],
+        "cross_refs": []
+      }
+    ]
+  },
+  {
+    "text": "call for",
+    "senses": [
+      {
+        "sense_number": "1",
+        "definition": "require; demand.",
+        "examples": [
+          {"text": "desperate times call for desperate measures"}
+        ],
+        "labels": [],
+        "cross_refs": []
+      },
+      {
+        "sense_number": "2",
+        "definition": "make necessary.",
+        "examples": [
+          {"text": "there is no call for rudeness"}
+        ],
+        "labels": [],
+        "cross_refs": []
+      }
+    ]
+  }
+]
+```
+
+### ode/origin（ODE 词源）
+
+ODE 词源（Origin）板块的 HTML 结构，存储为压缩 JSON。
+
+```json
+{
+  "html": "<p>Old English <em>cald</em>, of Germanic origin; related to Dutch <em>koud</em> and German <em>kalt</em>.</p>"
+}
+```
+
+或者简单格式（纯文本）：
+
+```json
+"Old English cald, of Germanic origin; related to Dutch koud and German kalt."
+```
+
+**说明：** 词源内容可能包含 HTML 标记（如 `<em>` 表示语言词汇），由 UI 层负责解析和渲染。
+
 ### runons（派生词）
 
 ```json
@@ -778,6 +1000,86 @@ flowchart LR
     style labels_sense fill:#e3f2fd
     style lexunit_prefix fill:#fff3e0
     style labels_entry fill:#f3e5f5
+```
+
+---
+
+## Emacs Lisp 适配器架构
+
+LexDB Emacs 客户端使用统一的适配器架构来支持多词典。
+
+### 核心模块 (lexdb.el)
+
+#### 数据库连接管理
+
+```elisp
+;; 统一的数据库连接池
+(defvar lexdb--database-connections (make-hash-table :test 'eq))
+(defvar lexdb--query-caches (make-hash-table :test 'eq))
+
+;; 公共 API
+(lexdb-db-ensure adapter-id db-file)   ; 确保连接打开
+(lexdb-db-get adapter-id)              ; 获取连接
+(lexdb-db-close adapter-id)            ; 关闭连接并清空缓存
+
+;; 缓存 API
+(lexdb-db-cache-get adapter-id key)    ; 获取缓存
+(lexdb-db-cache-put adapter-id key value) ; 设置缓存
+```
+
+#### 共享数据处理函数
+
+```elisp
+;; JSON 解压（用于 json.gz 类型的 attr_value）
+(lexdb--decompress-json-value compressed-data)
+
+;; 发音构建（从标准 pronunciations 表）
+(lexdb--build-pronunciations-from-db entry-id db)
+
+;; 词形还原
+(lexdb--find-lemma-with-lookup word lookup-fn)
+```
+
+### 适配器实现模式
+
+每个词典适配器（如 `lexdb-ode.el`、`lexdb-oald.el`、`lexdb-ldoce.el`）遵循统一模式：
+
+```elisp
+;; 1. 数据库连接 - 使用共享模块
+(defun lexdb-{dict}--ensure-db ()
+  (lexdb-db-ensure '{dict} lexdb-{dict}-db-file))
+
+(defun lexdb-{dict}--close ()
+  (lexdb-db-close '{dict}))
+
+;; 2. 数据处理 - 使用共享函数
+(defalias 'lexdb-{dict}--decompress-json #'lexdb--decompress-json-value)
+(defalias 'lexdb-{dict}--build-pronunciations #'lexdb--build-pronunciations-from-db)
+
+;; 3. 查询 - 适配器特定逻辑
+(defun lexdb-{dict}--lookup (word) ...)
+(defun lexdb-{dict}--row-to-entry (row) ...)
+
+;; 4. 注册
+(lexdb-register-adapter-type '{dict} #'lexdb-{dict}--register-from-config)
+```
+
+### 能力与元数据
+
+适配器通过 `lexdb-adapter-create` 声明能力：
+
+```elisp
+(lexdb-adapter-create
+ :id 'ode
+ :name "Oxford Dictionary of English"
+ :capabilities '(lookup definition pronunciation
+                 pos grammar register domain examples
+                 phrases origin lemmatization
+                 audio-uk audio-us)
+ :db-file lexdb-ode-db-file
+ :lookup-fn #'lexdb-ode--lookup
+ :close-fn #'lexdb-ode--close
+ :lemma-fn #'lexdb-ode--find-lemma)
 ```
 
 ---

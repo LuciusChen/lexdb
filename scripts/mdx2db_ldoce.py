@@ -4,7 +4,7 @@
 MDX/MDD Dictionary to LexDB SQLite Database Converter (LDOCE)
 
 Supports multiple dictionaries in a single database using EAV pattern for extensibility.
-Uses unified schema from lexdb_schema module.
+Uses unified schema from lexdb_common module.
 """
 
 import sqlite3
@@ -31,8 +31,8 @@ except ImportError:
     HTML_PARSER = 'html.parser'
     print("Note: Install lxml for faster parsing: pip install lxml")
 
-# Import unified schema module
-from lexdb_schema import (
+# Import unified common module
+from lexdb_common import (
     SCHEMA_SQL,
     SCHEMA_VERSION,
     init_database,
@@ -41,7 +41,7 @@ from lexdb_schema import (
     make_relation_fragments,
     LabelType,
     RelationType,
-    AttrType
+    AttrType,
 )
 
 
@@ -1372,23 +1372,50 @@ class LDOCEParser:
             for runon in tail.find_all(class_='runon'):
                 deriv = runon.find(class_='deriv')
                 pos = runon.find(class_='pos')
+                gram = runon.find(class_='gram')
+                proncodes = runon.find(class_='proncodes')
                 if deriv:
                     deriv_text = clean_text(deriv.get_text())
                     # Remove leading dash if present
                     if deriv_text.startswith('—') or deriv_text.startswith('-'):
                         deriv_text = deriv_text[1:].strip()
                     pos_text = clean_text(pos.get_text()) if pos else ''
+                    gram_text = clean_text(gram.get_text()) if gram else ''
+                    # Extract pronunciation (UK and US)
+                    pron_uk = ''
+                    pron_us = ''
+                    if proncodes:
+                        pron_elem = proncodes.find(class_='pron')
+                        amevarpron = proncodes.find(class_='amevarpron')
+                        if pron_elem:
+                            pron_uk = clean_text(pron_elem.get_text())
+                        if amevarpron:
+                            pron_us = clean_text(amevarpron.get_text())
+                            # Remove leading "$ " if present
+                            if pron_us.startswith('$'):
+                                pron_us = pron_us[1:].strip()
                     if deriv_text:
-                        runons.append({
+                        runon_data = {
                             'word': deriv_text,
                             'pos': pos_text
-                        })
+                        }
+                        if gram_text:
+                            runon_data['gram'] = gram_text
+                        if pron_uk:
+                            runon_data['pron_uk'] = pron_uk
+                        if pron_us:
+                            runon_data['pron_us'] = pron_us
+                        runons.append(runon_data)
             if runons:
                 entry['attributes']['runons'] = runons
 
         # Parse crossref sections - handle reflex + link combinations
         # Now using fragment storage for cleaner rendering
+        # Skip crossrefs inside senses (those are handled by sense parsing)
         for crossref in soup.find_all(class_='crossref'):
+            # Skip if this crossref is inside a sense element
+            if crossref.find_parent(class_='sense'):
+                continue
             # Process children in order to properly associate reflex with following link
             children = list(crossref.children)
             i = 0

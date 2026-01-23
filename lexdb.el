@@ -128,7 +128,7 @@ Call this after setting up your dictionary configurations."
                    errors)))))))
     ;; Set default adapter to first enabled dictionary
     (unless lexdb-default-adapter
-      (when-let ((first-enabled (cl-find-if
+      (when-let* ((first-enabled (cl-find-if
                                  (lambda (c)
                                    (if (plist-member c :enabled)
                                        (plist-get c :enabled)
@@ -213,7 +213,7 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
   "Return description string for capability CAP."
   (catch 'found
     (dolist (group lexdb-capability-groups)
-      (when-let ((pair (assq cap (cdr group))))
+      (when-let* ((pair (assq cap (cdr group))))
         (throw 'found (cdr pair))))))
 
 ;;;; ============================================================
@@ -227,6 +227,169 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
 (defsubst lexdb--ensure-string (s &optional default)
   "Ensure S is a string, return DEFAULT if nil or empty."
   (if (lexdb--non-empty-string-p s) s (or default "")))
+
+;;;; ============================================================
+;;;; Generic Database Connection Module
+;;;; ============================================================
+
+(defvar lexdb--database-connections (make-hash-table :test 'eq)
+  "Hash table of database connections keyed by adapter ID.")
+
+(defvar lexdb--query-caches (make-hash-table :test 'eq)
+  "Hash table of query caches keyed by adapter ID.")
+
+(defun lexdb-db-ensure (adapter-id db-file)
+  "Ensure database connection for ADAPTER-ID using DB-FILE.
+Returns the database connection."
+  (unless db-file
+    (error "No database file configured for %s" adapter-id))
+  (unless (file-exists-p db-file)
+    (error "Database file not found: %s" db-file))
+  (let ((db (gethash adapter-id lexdb--database-connections)))
+    (unless (and db (sqlitep db))
+      (setq db (sqlite-open db-file))
+      (puthash adapter-id db lexdb--database-connections)
+      ;; Initialize cache for this adapter if needed
+      (unless (gethash adapter-id lexdb--query-caches)
+        (puthash adapter-id (make-hash-table :test 'eql) lexdb--query-caches)))
+    db))
+
+(defun lexdb-db-get (adapter-id)
+  "Get database connection for ADAPTER-ID.
+Returns nil if not connected."
+  (gethash adapter-id lexdb--database-connections))
+
+(defun lexdb-db-close (adapter-id)
+  "Close database connection and clear cache for ADAPTER-ID."
+  (when-let* ((db (gethash adapter-id lexdb--database-connections)))
+    (when (sqlitep db)
+      (sqlite-close db))
+    (remhash adapter-id lexdb--database-connections))
+  (when-let* ((cache (gethash adapter-id lexdb--query-caches)))
+    (clrhash cache)))
+
+(defun lexdb-db-cache-get (adapter-id key)
+  "Get VALUE for KEY from ADAPTER-ID's cache."
+  (when-let* ((cache (gethash adapter-id lexdb--query-caches)))
+    (gethash key cache)))
+
+(defun lexdb-db-cache-put (adapter-id key value)
+  "Store VALUE for KEY in ADAPTER-ID's cache."
+  (let ((cache (or (gethash adapter-id lexdb--query-caches)
+                   (let ((new-cache (make-hash-table :test 'eql)))
+                     (puthash adapter-id new-cache lexdb--query-caches)
+                     new-cache))))
+    (puthash key value cache)
+    value))
+
+;;;; ============================================================
+;;;; Shared Data Processing Functions
+;;;; ============================================================
+
+(defun lexdb--decompress-json-value (compressed-data)
+  "Decompress zlib-compressed JSON COMPRESSED-DATA and parse it.
+Returns nil on error or if data is empty."
+  (when (and compressed-data (not (string-empty-p compressed-data)))
+    (condition-case nil
+        (let ((decompressed
+               (with-temp-buffer
+                 (set-buffer-multibyte nil)
+                 (insert compressed-data)
+                 (zlib-decompress-region (point-min) (point-max))
+                 (buffer-string))))
+          (json-read-from-string (decode-coding-string decompressed 'utf-8)))
+      (error nil))))
+
+(defun lexdb--build-pronunciations-from-db (entry-id db)
+  "Build pronunciation list for ENTRY-ID from DB.
+Uses standard pronunciations table schema.
+Returns pronunciations that have either IPA or audio path."
+  (let ((rows (sqlite-select db
+               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
+               (list entry-id))))
+    (delq nil
+          (mapcar (lambda (row)
+                    (pcase-let ((`(,variant ,ipa ,audio) row))
+                      (when (or (lexdb--non-empty-string-p ipa)
+                                (lexdb--non-empty-string-p audio))
+                        (lexdb-pronunciation-create
+                         :ipa ipa
+                         :variant (when variant (intern variant))
+                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
+                  rows))))
+
+;;;; ============================================================
+;;;; Common Lemmatization
+;;;; ============================================================
+
+(defconst lexdb-lemma-rules
+  '(;; -ing forms (progressive/gerund)
+    ("ing" . "")        ; running -> runn -> run
+    ("ing" . "e")       ; making -> mak -> make
+    ("ning" . "n")      ; running -> run
+    ("ting" . "t")      ; hitting -> hit
+    ("ping" . "p")      ; stopping -> stop
+    ("bing" . "b")      ; robbing -> rob
+    ("ging" . "g")      ; hugging -> hug
+    ("ming" . "m")      ; swimming -> swim
+    ("ding" . "d")      ; bidding -> bid
+
+    ;; -ed forms (past tense/past participle)
+    ("ed" . "")         ; walked -> walk
+    ("ed" . "e")        ; liked -> lik -> like
+    ("ied" . "y")       ; tried -> tri -> try
+    ("ned" . "n")       ; tanned -> tan
+    ("ted" . "t")       ; patted -> pat
+    ("ped" . "p")       ; stopped -> stop
+    ("bed" . "b")       ; robbed -> rob
+    ("ged" . "g")       ; hugged -> hug
+    ("med" . "m")       ; trimmed -> trim
+    ("ded" . "d")       ; padded -> pad
+
+    ;; Plural/third person singular
+    ("s" . "")          ; cats -> cat
+    ("es" . "")         ; boxes -> box
+    ("ies" . "y")       ; tries -> tr -> try
+
+    ;; Comparative/superlative
+    ("er" . "")         ; taller -> tall
+    ("er" . "e")        ; nicer -> nic -> nice
+    ("ier" . "y")       ; happier -> happi -> happy
+    ("est" . "")        ; tallest -> tall
+    ("est" . "e")       ; nicest -> nic -> nice
+    ("iest" . "y")      ; happiest -> happi -> happy
+
+    ;; Adverbs
+    ("ly" . "")         ; quickly -> quick
+    ("ily" . "y")       ; happily -> happ -> happy
+
+    ;; Possessive
+    ("'s" . ""))        ; John's -> John
+  "Common English lemmatization rules.
+Each element is (SUFFIX . REPLACEMENT) pair.")
+
+(defun lexdb--try-lemma (word suffix replacement lookup-fn)
+  "Try removing SUFFIX from WORD and adding REPLACEMENT.
+LOOKUP-FN is called to check if the candidate exists in dictionary.
+Returns the candidate if found, nil otherwise."
+  (when (and (> (length word) (length suffix))
+             (string-suffix-p suffix word))
+    (let ((candidate (concat (substring word 0 (- (length word) (length suffix)))
+                             replacement)))
+      (when (and (> (length candidate) 1)
+                 (funcall lookup-fn candidate))
+        candidate))))
+
+(defun lexdb--find-lemma-with-lookup (word lookup-fn)
+  "Find base form of WORD using LOOKUP-FN to check candidates.
+LOOKUP-FN should be a function that returns non-nil if a word exists.
+Returns the lemma if found, WORD otherwise."
+  (let ((w (downcase word)))
+    (if (funcall lookup-fn w)
+        w
+      (or (cl-loop for (suffix . replacement) in lexdb-lemma-rules
+                   thereis (lexdb--try-lemma w suffix replacement lookup-fn))
+          w))))
 
 ;;;; ============================================================
 ;;;; Core Data Structures
@@ -473,7 +636,7 @@ Does not mutate original metadata."
 
 (defun lexdb-unregister-adapter (id)
   "Unregister adapter with ID."
-  (when-let ((adapter (gethash id lexdb-adapters)))
+  (when-let* ((adapter (gethash id lexdb-adapters)))
     (when (lexdb-adapter-close-fn adapter)
       (funcall (lexdb-adapter-close-fn adapter)))
     (remhash id lexdb-adapters)))
@@ -570,12 +733,12 @@ Returns list of lexdb-entry structs."
   "Get part of speech from ENTRY metadata or labels."
   (or (lexdb-meta-get (lexdb-entry-metadata entry)
                       (symbol-name lexdb-current-adapter) "pos")
-      (when-let ((label (lexdb-entry-get-label entry 'pos)))
+      (when-let* ((label (lexdb-entry-get-label entry 'pos)))
         (lexdb-label-value label))))
 
 (defun lexdb-sense-grammar (sense)
   "Get grammar annotation from SENSE."
-  (when-let ((label (seq-find (lambda (l) (eq (lexdb-label-type l) 'grammar))
+  (when-let* ((label (seq-find (lambda (l) (eq (lexdb-label-type l) 'grammar))
                               (lexdb-sense-labels sense))))
     (lexdb-label-value label)))
 
@@ -585,6 +748,9 @@ Returns list of lexdb-entry structs."
 
 (defvar lexdb--last-word nil
   "Last searched word.")
+
+(defvar lexdb--search-history nil
+  "Minibuffer history for `lexdb-search'.")
 
 (defvar lexdb--history nil
   "History of searched words. List of (word . position) pairs.")
@@ -651,7 +817,7 @@ Respects `lexdb-multi-dict-mode' setting."
            (entries (lexdb-lookup word adapter-id)))
       (unless entries
         (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+          (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
             (unless (equal lemma (downcase word))
               (setq entries (lexdb-lookup lemma adapter-id))))))
       (lexdb-ui-display word entries adapter))))
@@ -687,14 +853,7 @@ If nil, search only the current/default dictionary."
   "Search for WORD in dictionaries.
 If `lexdb-multi-dict-mode' is non-nil, search all enabled dictionaries.
 Otherwise, search only the current/default dictionary."
-  (interactive
-   (let ((default (thing-at-point 'word t)))
-     (list (read-string
-            (format "Lexdb%s: "
-                    (if (and (not lexdb-multi-dict-mode) lexdb-current-adapter)
-                        (format " [%s]" lexdb-current-adapter)
-                      ""))
-            default))))
+  (interactive (list (read-string "Lexdb: " (thing-at-point 'word t) 'lexdb--search-history)))
   (when (or (null word) (not (stringp word)) (string-empty-p word))
     (user-error "No word specified"))
   (setq lexdb--last-word word)
@@ -710,7 +869,7 @@ Otherwise, search only the current/default dictionary."
       ;; Try lemmatization if no results
       (unless entries
         (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+          (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
             (unless (equal lemma (downcase word))
               (setq entries (lexdb-lookup lemma adapter-id))
               (when entries
@@ -721,11 +880,11 @@ Otherwise, search only the current/default dictionary."
 (defun lexdb-search-single (word)
   "Search for WORD in current dictionary only (single-dict mode)."
   (interactive
-   (let ((default (thing-at-point 'word t)))
-     (list (read-string
-            (format "Lexdb [%s]: "
-                    (or lexdb-current-adapter lexdb-default-adapter "?"))
-            default))))
+   (let* ((default (thing-at-point 'word t))
+          (prompt (format "Lexdb [%s]: "
+                          (or lexdb-current-adapter lexdb-default-adapter "?")))
+          (input (read-string prompt nil 'lexdb--search-history default)))
+     (list (if (string-empty-p input) default input))))
   (when (or (null word) (not (stringp word)) (string-empty-p word))
     (user-error "No word specified"))
   (setq lexdb--last-word word)
@@ -736,7 +895,7 @@ Otherwise, search only the current/default dictionary."
          (entries (lexdb-lookup word adapter-id)))
     (unless entries
       (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-        (when-let ((lemma (lexdb-find-lemma word adapter-id)))
+        (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
           (unless (equal lemma (downcase word))
             (setq entries (lexdb-lookup lemma adapter-id))
             (when entries
@@ -888,7 +1047,7 @@ Returns a lexdb-entry struct."
 
 (defun lexdb-get-definitions (word &optional adapter-id)
   "Get list of definition strings for WORD."
-  (when-let ((entry (lexdb-get-entry word adapter-id)))
+  (when-let* ((entry (lexdb-get-entry word adapter-id)))
     (mapcar #'lexdb-sense-definition (lexdb-entry-senses entry))))
 
 (provide 'lexdb)

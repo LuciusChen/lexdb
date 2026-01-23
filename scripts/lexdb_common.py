@@ -7,11 +7,15 @@ LexDB Schema and Common Utilities
 统一的数据库 Schema 定义和通用工具函数，供所有词典解析器使用。
 
 Usage:
-    from lexdb_schema import (
+    from lexdb_common import (
         SCHEMA_SQL, SCHEMA_VERSION,
         init_database, clean_text, parse_link_target,
-        make_relation_fragments,
-        LabelType, RelationType, AttrType
+        make_relation_fragments, normalize_headword,
+        LabelType, RelationType, AttrType,
+        # HTML parsing utilities
+        extract_text_without_tags, get_element_text, extract_zh,
+        # Lemmatization
+        LEMMA_RULES, try_lemma, find_lemma
     )
 """
 
@@ -23,7 +27,7 @@ from typing import Optional, Tuple, Dict, Any
 # Schema Version
 # =============================================================================
 
-SCHEMA_VERSION = "2.1"
+SCHEMA_VERSION = "2.2"
 
 # =============================================================================
 # Schema Definition
@@ -167,6 +171,16 @@ CREATE TABLE IF NOT EXISTS entry_attributes (
     UNIQUE(entry_id, attr_key)
 );
 
+-- Aliases table (别名/重定向表 - 用于 @@@LINK= 机制)
+CREATE TABLE IF NOT EXISTS aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    dict_id TEXT NOT NULL,
+    alias TEXT NOT NULL,                  -- 查询词 (e.g., "vis")
+    alias_lower TEXT NOT NULL,            -- 小写形式用于匹配
+    target TEXT NOT NULL,                 -- 目标词条 (e.g., "high-vis")
+    FOREIGN KEY (dict_id) REFERENCES dictionaries(dict_id)
+);
+
 -- Meta info table
 CREATE TABLE IF NOT EXISTS _lexdb_meta (
     key TEXT PRIMARY KEY,
@@ -204,6 +218,8 @@ CREATE INDEX IF NOT EXISTS idx_collocation_examples_coll ON collocation_examples
 
 CREATE INDEX IF NOT EXISTS idx_entry_attributes_entry ON entry_attributes(entry_id);
 CREATE INDEX IF NOT EXISTS idx_entry_attributes_key ON entry_attributes(attr_key);
+
+CREATE INDEX IF NOT EXISTS idx_aliases_lookup ON aliases(dict_id, alias_lower);
 """
 
 
@@ -248,7 +264,7 @@ class AttrType:
 
 def clean_text(text: Optional[str]) -> str:
     """
-    清理文本：去除多余空白和换行。
+    清理文本：去除多余空白和换行，修复编码问题。
 
     Args:
         text: 输入文本
@@ -258,6 +274,22 @@ def clean_text(text: Optional[str]) -> str:
     """
     if not text:
         return ''
+    # Fix Windows-1252 encoding issues (common in MDX dictionaries)
+    # These characters often appear as raw bytes instead of proper Unicode
+    # Use chr() to ensure correct character codes
+    win1252_to_unicode = {
+        chr(0x91): '\u2018',  # Left single quote '
+        chr(0x92): '\u2019',  # Right single quote ' (apostrophe)
+        chr(0x93): '\u201c',  # Left double quote "
+        chr(0x94): '\u201d',  # Right double quote "
+        chr(0x95): '\u2022',  # Bullet •
+        chr(0x96): '\u2013',  # En dash –
+        chr(0x97): '\u2014',  # Em dash —
+        chr(0x99): '\u2122',  # Trademark ™
+        chr(0xa0): ' ',       # Non-breaking space
+    }
+    for old, new in win1252_to_unicode.items():
+        text = text.replace(old, new)
     return re.sub(r'\s+', ' ', text).strip()
 
 
@@ -386,6 +418,170 @@ def check_schema_compatibility(conn: sqlite3.Connection) -> bool:
     db_major = db_version.split('.')[0]
     current_major = SCHEMA_VERSION.split('.')[0]
     return db_major == current_major
+
+
+# =============================================================================
+# HTML Parsing Utilities
+# =============================================================================
+
+def extract_text_without_tags(element, exclude_tags: list = None) -> str:
+    """
+    Extract text from BeautifulSoup element, excluding specified tags.
+
+    Args:
+        element: BeautifulSoup element
+        exclude_tags: List of tag names to exclude (default: ['zh'])
+
+    Returns:
+        Cleaned text with excluded tags removed
+    """
+    if not element:
+        return ""
+    if exclude_tags is None:
+        exclude_tags = ['zh']
+
+    # Make a copy to avoid modifying original
+    from bs4 import BeautifulSoup
+    elem_copy = BeautifulSoup(str(element), 'html.parser')
+    for tag in exclude_tags:
+        for t in elem_copy.find_all(tag):
+            t.decompose()
+    return clean_text(elem_copy.get_text())
+
+
+def get_element_text(element, exclude_tags: list = None) -> str:
+    """
+    Get cleaned text from BeautifulSoup element.
+
+    Args:
+        element: BeautifulSoup element
+        exclude_tags: Optional list of tags to exclude
+
+    Returns:
+        Cleaned text
+    """
+    if not element:
+        return ""
+    if exclude_tags:
+        return extract_text_without_tags(element, exclude_tags)
+    return clean_text(element.get_text())
+
+
+def extract_zh(element) -> str:
+    """
+    Extract Chinese text from <zh> tag.
+
+    Args:
+        element: BeautifulSoup element containing a <zh> child
+
+    Returns:
+        Cleaned Chinese text, or empty string if no <zh> found
+    """
+    if not element:
+        return ""
+    zh = element.find('zh')
+    if zh:
+        return clean_text(zh.get_text())
+    return ""
+
+
+# =============================================================================
+# Lemmatization Rules
+# =============================================================================
+
+# Common English lemmatization rules (suffix -> replacement pairs)
+# These are identical across all dictionary adapters
+LEMMA_RULES = [
+    # -ing forms (progressive/gerund)
+    ("ing", ""),        # running -> runn -> run (via double consonant)
+    ("ing", "e"),       # making -> mak -> make
+    ("ning", "n"),      # running -> run
+    ("ting", "t"),      # hitting -> hit
+    ("ping", "p"),      # stopping -> stop
+    ("bing", "b"),      # robbing -> rob
+    ("ging", "g"),      # hugging -> hug
+    ("ming", "m"),      # swimming -> swim
+    ("ding", "d"),      # bidding -> bid
+
+    # -ed forms (past tense/past participle)
+    ("ed", ""),         # walked -> walk
+    ("ed", "e"),        # liked -> lik -> like
+    ("ied", "y"),       # tried -> tri -> try
+    ("ned", "n"),       # tanned -> tan
+    ("ted", "t"),       # patted -> pat
+    ("ped", "p"),       # stopped -> stop
+    ("bed", "b"),       # robbed -> rob
+    ("ged", "g"),       # hugged -> hug
+    ("med", "m"),       # trimmed -> trim
+    ("ded", "d"),       # padded -> pad
+
+    # Plural/third person singular
+    ("s", ""),          # cats -> cat
+    ("es", ""),         # boxes -> box
+    ("ies", "y"),       # tries -> tr -> try
+
+    # Comparative/superlative
+    ("er", ""),         # taller -> tall
+    ("er", "e"),        # nicer -> nic -> nice
+    ("ier", "y"),       # happier -> happi -> happy
+    ("est", ""),        # tallest -> tall
+    ("est", "e"),       # nicest -> nic -> nice
+    ("iest", "y"),      # happiest -> happi -> happy
+
+    # Adverbs
+    ("ly", ""),         # quickly -> quick
+    ("ily", "y"),       # happily -> happ -> happy
+
+    # Possessive
+    ("'s", ""),         # John's -> John
+]
+
+
+def try_lemma(word: str, suffix: str, replacement: str, lookup_fn) -> Optional[str]:
+    """
+    Try removing suffix from word and adding replacement.
+
+    Args:
+        word: Input word (lowercase)
+        suffix: Suffix to remove
+        replacement: String to add after removing suffix
+        lookup_fn: Function to check if candidate exists in dictionary
+
+    Returns:
+        Lemma if found, None otherwise
+    """
+    if len(word) > len(suffix) and word.endswith(suffix):
+        candidate = word[:-len(suffix)] + replacement
+        if len(candidate) > 1 and lookup_fn(candidate):
+            return candidate
+    return None
+
+
+def find_lemma(word: str, lookup_fn) -> str:
+    """
+    Find base form of word using common lemmatization rules.
+
+    Args:
+        word: Input word
+        lookup_fn: Function to check if candidate exists in dictionary
+
+    Returns:
+        Base form if found, original word otherwise
+    """
+    w = word.lower()
+
+    # Check if word exists as-is
+    if lookup_fn(w):
+        return w
+
+    # Try each lemmatization rule
+    for suffix, replacement in LEMMA_RULES:
+        result = try_lemma(w, suffix, replacement, lookup_fn)
+        if result:
+            return result
+
+    # Return original word if no lemma found
+    return w
 
 
 # =============================================================================

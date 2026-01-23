@@ -4,7 +4,7 @@
 OALD4 (Oxford Advanced Learner's Dictionary 4th Edition) MDX to LexDB SQLite Database Converter
 
 Supports OALD4 双解版
-Uses unified schema from lexdb_schema module for compatibility.
+Uses unified schema from lexdb_common module for compatibility.
 """
 
 import sqlite3
@@ -23,8 +23,8 @@ except ImportError:
     print("Please install dependencies first: pip install readmdict python-lzo beautifulsoup4")
     sys.exit(1)
 
-# Import unified schema module
-from lexdb_schema import (
+# Import unified common module
+from lexdb_common import (
     SCHEMA_SQL,
     SCHEMA_VERSION,
     init_database,
@@ -33,27 +33,16 @@ from lexdb_schema import (
     make_relation_fragments,
     LabelType,
     RelationType,
-    AttrType
+    AttrType,
+    # HTML utilities
+    extract_text_without_tags,
+    extract_zh,
 )
 
 
 # ============================================================
 # OALD-specific Utility Functions
 # ============================================================
-
-def extract_text_without_zh(element):
-    """Extract text from element, excluding <zh> tags."""
-    if not element:
-        return ""
-
-    # Make a copy
-    elem_copy = BeautifulSoup(str(element), 'html.parser')
-
-    # Remove all <zh> tags
-    for zh in elem_copy.find_all('zh'):
-        zh.decompose()
-
-    return clean_text(elem_copy.get_text())
 
 
 def extract_definition_with_format(element):
@@ -132,17 +121,6 @@ def extract_definition_with_format(element):
             gr.replace_with(f'<<pos>>{text}<</pos>> ')
 
     return clean_text(elem_copy.get_text())
-
-
-def extract_zh(element):
-    """Extract Chinese text from <zh> tag."""
-    if not element:
-        return ""
-
-    zh = element.find('zh')
-    if zh:
-        return clean_text(zh.get_text())
-    return ""
 
 
 def extract_highlighted_example(element):
@@ -620,6 +598,17 @@ def _parse_mainentry(main_entry, headword_hint=None):
     if not entry['headword']:
         return None
 
+    # === Variant spellings (e.g., "also Visc" from "Vis (also Visc)") ===
+    hg = main_entry.find('div', class_='hg')
+    if hg:
+        # Get full text and look for "(also ...)" pattern
+        hg_text = clean_text(hg.get_text())
+        # Match patterns like "(also Visc)" or "(also hi-vis)"
+        import re
+        variant_match = re.search(r'\(also\s+([^)]+)\)', hg_text)
+        if variant_match:
+            entry['attributes']['variant'] = f"(also {variant_match.group(1)})"
+
     # === Part of Speech ===
     pos_elem = main_entry.find('span', class_='pos')
     if pos_elem:
@@ -759,6 +748,16 @@ def _parse_mainentry(main_entry, headword_hint=None):
                     sense_order += 1
                     sense_num += 1
 
+            # Also check for se3 elements directly under sg (like 'denote')
+            if not entry['senses']:
+                for se3 in sg.find_all('div', class_='se3', recursive=False):
+                    sense_data = parse_oald4_subsense(se3, sense_order)
+                    if sense_data:
+                        sense_data['number'] = str(sense_num)
+                        entry['senses'].append(sense_data)
+                        sense_order += 1
+                        sense_num += 1
+
         if not entry['senses']:
             for se in main_entry.find_all('div', class_='se', recursive=True):
                 sense_data = parse_oald4_sense(se, sense_order, sense_number=str(sense_num))
@@ -770,7 +769,7 @@ def _parse_mainentry(main_entry, headword_hint=None):
     # === Topic headings ===
     topics = []
     for topic in main_entry.find_all('div', class_='topic'):
-        topic_text = extract_text_without_zh(topic)
+        topic_text = extract_text_without_tags(topic, ['zh'])
         if topic_text:
             topics.append(topic_text)
     if topics:
@@ -993,7 +992,7 @@ def parse_oald4_idiom(idiom_div):
                             continue
                         else:
                             # Get text from other elements (like span with reg)
-                            text = extract_text_without_zh(child)
+                            text = extract_text_without_tags(child, ['zh'])
                             if text:
                                 def_text_parts.append(text)
 
@@ -1274,7 +1273,7 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
             sense['labels'].append({'type': 'cf', 'value': cf_value})
         else:
             # Fallback: just extract text
-            cf_text = extract_text_without_zh(cf)
+            cf_text = extract_text_without_tags(cf, ['zh'])
             if cf_text:
                 sense['labels'].append({'type': 'cf', 'value': cf_text})
 
@@ -1465,7 +1464,9 @@ def insert_entry(conn, dict_id, entry):
         ))
 
     # Insert entry attributes (compressed JSON for complex data)
+    # Add namespace prefix for consistency with ODE
     for key, value in entry.get('attributes', {}).items():
+        full_key = f"{dict_id}/{key}"
         if isinstance(value, (list, dict)):
             # Compress JSON for complex data
             json_str = json.dumps(value, ensure_ascii=False)
@@ -1473,14 +1474,23 @@ def insert_entry(conn, dict_id, entry):
             cursor.execute("""
                 INSERT OR REPLACE INTO entry_attributes (entry_id, attr_key, attr_value, attr_type)
                 VALUES (?, ?, ?, 'json_compressed')
-            """, (entry_id, key, compressed))
+            """, (entry_id, full_key, compressed))
         else:
             cursor.execute("""
                 INSERT OR REPLACE INTO entry_attributes (entry_id, attr_key, attr_value, attr_type)
                 VALUES (?, ?, ?, 'text')
-            """, (entry_id, key, str(value)))
+            """, (entry_id, full_key, str(value)))
 
     return entry_id
+
+
+def insert_alias(conn, dict_id, alias, target):
+    """Insert an alias/redirect entry (from @@@LINK=)."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO aliases (dict_id, alias, alias_lower, target)
+        VALUES (?, ?, ?, ?)
+    """, (dict_id, alias, alias.lower(), target))
 
 
 # ============================================================
@@ -1534,10 +1544,11 @@ def convert_oald4(mdx_path, output_dir=None):
     imported = 0
     skipped = 0
     errors = 0
+    alias_count = 0
 
     for i, (key, value) in enumerate(items):
         if i % 1000 == 0:
-            print(f"  Progress: {i}/{total} ({imported} imported, {skipped} skipped)")
+            print(f"  Progress: {i}/{total} ({imported} imported, {skipped} skipped, {alias_count} aliases)")
 
         try:
             key_str = key.decode('utf-8') if isinstance(key, bytes) else key
@@ -1548,9 +1559,11 @@ def convert_oald4(mdx_path, output_dir=None):
                 skipped += 1
                 continue
 
-            # Skip redirects
+            # Handle redirects (store as aliases)
             if html.strip().startswith('@@@LINK='):
-                skipped += 1
+                target = html.strip()[8:]  # Remove '@@@LINK=' prefix
+                insert_alias(conn, dict_id, key_str, target)
+                alias_count += 1
                 continue
 
             # Skip very short entries (likely just links)
@@ -1583,6 +1596,7 @@ def convert_oald4(mdx_path, output_dir=None):
 
     print(f"\nImport complete:")
     print(f"  Imported: {imported}")
+    print(f"  Aliases: {alias_count}")
     print(f"  Skipped: {skipped}")
     print(f"  Errors: {errors}")
 
@@ -1594,9 +1608,12 @@ def convert_oald4(mdx_path, output_dir=None):
     sense_count = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM examples")
     example_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM aliases WHERE dict_id = ?", (dict_id,))
+    alias_db_count = cursor.fetchone()[0]
 
     print(f"\nDatabase stats:")
     print(f"  Entries: {entry_count}")
+    print(f"  Aliases: {alias_db_count}")
     print(f"  Senses: {sense_count}")
     print(f"  Examples: {example_count}")
 

@@ -60,28 +60,13 @@
 ;;;; Database Connection
 ;;;; ============================================================
 
-(defvar lexdb-oald--db nil
-  "Database connection for OALD.")
-
-(defvar lexdb-oald--cache (make-hash-table :test 'eql)
-  "Cache for prefetched data.")
-
 (defun lexdb-oald--ensure-db ()
   "Ensure database connection is open."
-  (unless lexdb-oald-db-file
-    (error "Please set `lexdb-oald-db-file'"))
-  (unless (file-exists-p lexdb-oald-db-file)
-    (error "Database file not found: %s" lexdb-oald-db-file))
-  (unless (and lexdb-oald--db (sqlitep lexdb-oald--db))
-    (setq lexdb-oald--db (sqlite-open lexdb-oald-db-file)))
-  lexdb-oald--db)
+  (lexdb-db-ensure 'oald lexdb-oald-db-file))
 
 (defun lexdb-oald--close ()
   "Close database connection and clear cache."
-  (when (and lexdb-oald--db (sqlitep lexdb-oald--db))
-    (sqlite-close lexdb-oald--db)
-    (setq lexdb-oald--db nil))
-  (clrhash lexdb-oald--cache))
+  (lexdb-db-close 'oald))
 
 ;;;; ============================================================
 ;;;; Schema Queries
@@ -133,31 +118,11 @@
          :labels labels
          :metadata meta)))))
 
-(defun lexdb-oald--build-pronunciations (entry-id db)
-  "Build pronunciations for ENTRY-ID from DB."
-  (let ((rows (sqlite-select db
-               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
-               (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (lexdb--non-empty-string-p ipa)
-                        (lexdb-pronunciation-create
-                         :ipa ipa
-                         :variant (when variant (intern variant))
-                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
-                  rows))))
+(defalias 'lexdb-oald--build-pronunciations #'lexdb--build-pronunciations-from-db
+  "Build pronunciations for ENTRY-ID from DB.")
 
-(defun lexdb-oald--decompress-json (compressed-data)
-  "Decompress COMPRESSED-DATA and parse as JSON."
-  (when (and compressed-data (not (string-empty-p compressed-data)))
-    (with-temp-buffer
-      (set-buffer-multibyte nil)
-      (insert compressed-data)
-      (zlib-decompress-region (point-min) (point-max))
-      (decode-coding-region (point-min) (point-max) 'utf-8)
-      (goto-char (point-min))
-      (json-parse-buffer :object-type 'alist))))
+(defalias 'lexdb-oald--decompress-json #'lexdb--decompress-json-value
+  "Decompress COMPRESSED-DATA and parse as JSON.")
 
 (defun lexdb-oald--row-to-entry (row)
   "Convert database ROW to lexdb-entry."
@@ -189,7 +154,8 @@
                                       (lexdb-oald--decompress-json value)
                                     value)))
                 ;; Extract subsenses map for sense-level distribution
-                (if (equal key "oald/subsenses")
+                ;; Note: Database has "oald/oald/subsenses" due to dict_id prefix in storage
+                (if (equal key "oald/oald/subsenses")
                     (setq subsenses-map parsed-value)
                   (push (cons (intern key) parsed-value) metadata)))))))
       ;; Convert sense rows, attaching subsenses from map
@@ -215,25 +181,43 @@
 ;;;; ============================================================
 
 (defun lexdb-oald--lookup (word)
-  "Look up WORD in OALD database."
+  "Look up WORD in OALD database.
+Uses exact match and follows @@@LINK= aliases to find target entries."
   (let* ((db (lexdb-oald--ensure-db))
          (word-lower (downcase word))
-         ;; First try exact match
-         (rows (sqlite-select db
-                "SELECT id, dict_id, headword, headword_lower, headword_display
-                 FROM entries WHERE headword_lower = ? AND dict_id = 'oald'"
-                (list word-lower))))
-    ;; If no results, try fuzzy match
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'oald' LIMIT 20"
-                  (list (concat word-lower "%")))))
-    (mapcar #'lexdb-oald--row-to-entry rows)))
+         ;; Direct entry matches (exact match only)
+         (direct-rows (sqlite-select db
+                       "SELECT id, dict_id, headword, headword_lower, headword_display
+                        FROM entries WHERE dict_id = 'oald' AND headword_lower = ?
+                        ORDER BY headword_lower"
+                       (list word-lower)))
+         ;; Find alias targets and look up those entries
+         (alias-targets (sqlite-select db
+                         "SELECT target FROM aliases
+                          WHERE dict_id = 'oald' AND alias_lower = ?"
+                         (list word-lower)))
+         (alias-rows (when alias-targets
+                       (let ((targets (mapcar #'car alias-targets)))
+                         (sqlite-select db
+                          (format "SELECT id, dict_id, headword, headword_lower, headword_display
+                                   FROM entries WHERE dict_id = 'oald' AND headword_lower IN (%s)
+                                   ORDER BY headword_lower"
+                                  (mapconcat (lambda (_) "?") targets ","))
+                          (mapcar #'downcase targets)))))
+         ;; Combine and deduplicate by entry id
+         (all-rows (append direct-rows alias-rows))
+         (seen-ids (make-hash-table :test 'eq))
+         (unique-rows (seq-filter (lambda (row)
+                                    (let ((id (car row)))
+                                      (unless (gethash id seen-ids)
+                                        (puthash id t seen-ids)
+                                        t)))
+                                  all-rows)))
+    (mapcar #'lexdb-oald--row-to-entry unique-rows)))
 
 (defun lexdb-oald--get-idioms (entry-id)
   "Get idioms for ENTRY-ID."
-  (or (gethash (cons entry-id 'idioms) lexdb-oald--cache)
+  (or (lexdb-db-cache-get 'oald (cons entry-id 'idioms))
       (let* ((db (lexdb-oald--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -246,39 +230,15 @@
                            (if (equal type "json_compressed")
                                (lexdb-oald--decompress-json value)
                              (json-parse-string value :object-type 'alist)))))))
-        (puthash (cons entry-id 'idioms) idioms lexdb-oald--cache)
-        idioms)))
+        (lexdb-db-cache-put 'oald (cons entry-id 'idioms) idioms))))
 
 ;;;; ============================================================
 ;;;; Lemmatization
 ;;;; ============================================================
 
-(defun lexdb-oald--try-lemma (word suffix replacement)
-  "Try removing SUFFIX from WORD and adding REPLACEMENT."
-  (when (and (> (length word) (length suffix)) (string-suffix-p suffix word))
-    (let ((candidate (concat (substring word 0 (- (length word) (length suffix))) replacement)))
-      (when (and (> (length candidate) 1) (lexdb-oald--lookup candidate)) candidate))))
-
 (defun lexdb-oald--find-lemma (word)
-  "Find base form of WORD."
-  (let ((w (downcase word)))
-    (if (lexdb-oald--lookup w) w
-      (or (lexdb-oald--try-lemma w "ing" "") (lexdb-oald--try-lemma w "ing" "e")
-          (lexdb-oald--try-lemma w "ning" "n") (lexdb-oald--try-lemma w "ting" "t")
-          (lexdb-oald--try-lemma w "ping" "p") (lexdb-oald--try-lemma w "bing" "b")
-          (lexdb-oald--try-lemma w "ging" "g") (lexdb-oald--try-lemma w "ming" "m")
-          (lexdb-oald--try-lemma w "ding" "d") (lexdb-oald--try-lemma w "ed" "")
-          (lexdb-oald--try-lemma w "ed" "e") (lexdb-oald--try-lemma w "ied" "y")
-          (lexdb-oald--try-lemma w "ned" "n") (lexdb-oald--try-lemma w "ted" "t")
-          (lexdb-oald--try-lemma w "ped" "p") (lexdb-oald--try-lemma w "bed" "b")
-          (lexdb-oald--try-lemma w "ged" "g") (lexdb-oald--try-lemma w "med" "m")
-          (lexdb-oald--try-lemma w "ded" "d") (lexdb-oald--try-lemma w "s" "")
-          (lexdb-oald--try-lemma w "es" "") (lexdb-oald--try-lemma w "ies" "y")
-          (lexdb-oald--try-lemma w "er" "") (lexdb-oald--try-lemma w "er" "e")
-          (lexdb-oald--try-lemma w "ier" "y") (lexdb-oald--try-lemma w "est" "")
-          (lexdb-oald--try-lemma w "est" "e") (lexdb-oald--try-lemma w "iest" "y")
-          (lexdb-oald--try-lemma w "ly" "") (lexdb-oald--try-lemma w "ily" "y")
-          (lexdb-oald--try-lemma w "'s" "") w))))
+  "Find base form of WORD using common lemmatization rules."
+  (lexdb--find-lemma-with-lookup word #'lexdb-oald--lookup))
 
 ;;;; ============================================================
 ;;;; Registration

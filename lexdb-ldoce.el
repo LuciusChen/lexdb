@@ -62,28 +62,13 @@
 ;;;; Database Connection
 ;;;; ============================================================
 
-(defvar lexdb-ldoce--db nil
-  "Database connection for LDOCE.")
-
-(defvar lexdb-ldoce--cache (make-hash-table :test 'eql)
-  "Cache for prefetched data.")
-
 (defun lexdb-ldoce--ensure-db ()
   "Ensure database connection is open."
-  (unless lexdb-ldoce-db-file
-    (error "Please set `lexdb-ldoce-db-file'"))
-  (unless (file-exists-p lexdb-ldoce-db-file)
-    (error "Database file not found: %s" lexdb-ldoce-db-file))
-  (unless (and lexdb-ldoce--db (sqlitep lexdb-ldoce--db))
-    (setq lexdb-ldoce--db (sqlite-open lexdb-ldoce-db-file)))
-  lexdb-ldoce--db)
+  (lexdb-db-ensure 'ldoce lexdb-ldoce-db-file))
 
 (defun lexdb-ldoce--close ()
   "Close database connection and clear cache."
-  (when (and lexdb-ldoce--db (sqlitep lexdb-ldoce--db))
-    (sqlite-close lexdb-ldoce--db)
-    (setq lexdb-ldoce--db nil))
-  (clrhash lexdb-ldoce--cache))
+  (lexdb-db-close 'ldoce))
 
 ;;;; ============================================================
 ;;;; Schema V2 (New LexDB Schema)
@@ -141,21 +126,8 @@
                                      ex-rows)))))
             rows)))
 
-(defun lexdb-ldoce--v2-build-pronunciations (entry-id db)
-  "Build pronunciations for ENTRY-ID from V2 schema."
-  (let ((rows (sqlite-select db
-               "SELECT variant, ipa, audio_path FROM pronunciations WHERE entry_id = ? ORDER BY sort_order"
-               (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,variant ,ipa ,audio) row))
-                      (when (or (lexdb--non-empty-string-p ipa)
-                                (lexdb--non-empty-string-p audio))
-                        (lexdb-pronunciation-create
-                         :ipa ipa
-                         :variant (when variant (intern variant))
-                         :audio (when (lexdb--non-empty-string-p audio) audio)))))
-                  rows))))
+(defalias 'lexdb-ldoce--v2-build-pronunciations #'lexdb--build-pronunciations-from-db
+  "Build pronunciations for ENTRY-ID from V2 schema.")
 
 (defun lexdb-ldoce--v2-fetch-relations (entry-id db)
   "Fetch entry-level relations for ENTRY-ID from V2 schema.
@@ -200,15 +172,8 @@ Uses fragment storage format: prefix + clickable + suffix."
                          :target (concat (or prefix "") clickable (or suffix ""))))))
                   rows))))
 
-(defun lexdb-ldoce--decompress-json (compressed-data)
-  "Decompress zlib-compressed JSON data."
-  (let ((decompressed
-         (with-temp-buffer
-           (set-buffer-multibyte nil)
-           (insert compressed-data)
-           (zlib-decompress-region (point-min) (point-max))
-           (buffer-string))))
-    (json-read-from-string (decode-coding-string decompressed 'utf-8))))
+(defalias 'lexdb-ldoce--decompress-json #'lexdb--decompress-json-value
+  "Decompress zlib-compressed JSON data.")
 
 (defun lexdb-ldoce--v2-fetch-attributes (entry-id db)
   "Fetch EAV attributes for ENTRY-ID from V2 schema."
@@ -247,7 +212,7 @@ Uses fragment storage format: prefix + clickable + suffix."
             (push (cons 'ldoce/pos lvalue) metadata))))
       ;; Add audio paths to metadata
       (dolist (pron prons)
-        (when-let ((audio (lexdb-pronunciation-audio pron)))
+        (when-let* ((audio (lexdb-pronunciation-audio pron)))
           (pcase (lexdb-pronunciation-variant pron)
             ('uk (unless (assq 'ldoce/audio-uk metadata)
                    (push (cons 'ldoce/audio-uk audio) metadata)))
@@ -280,33 +245,20 @@ Uses fragment storage format: prefix + clickable + suffix."
 
 (defun lexdb-ldoce--lookup (word)
   "Look up WORD in LDOCE database.
-First tries exact match, then tries fuzzy match (LIKE) as fallback."
+Uses exact match only, consistent with original dictionary behavior."
   (let* ((db (lexdb-ldoce--ensure-db))
          ;; Normalize apostrophes before searching
          (word-normalized (lexdb-ldoce--normalize-apostrophe word))
          (word-lower (downcase word-normalized))
-         ;; First try exact match
          (rows (sqlite-select db
                 "SELECT id, dict_id, headword, headword_lower, headword_display
                  FROM entries WHERE headword_lower = ? AND dict_id = 'ldoce'"
                 (list word-lower))))
-    ;; If no results, try fuzzy match (word at start, handles "Big Apple" -> "Big Apple, the")
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ldoce'"
-                  (list (concat word-lower "%")))))
-    ;; If still no results, try word anywhere
-    (unless rows
-      (setq rows (sqlite-select db
-                  "SELECT id, dict_id, headword, headword_lower, headword_display
-                   FROM entries WHERE headword_lower LIKE ? AND dict_id = 'ldoce'"
-                  (list (concat "%" word-lower "%")))))
     (mapcar #'lexdb-ldoce--v2-row-to-entry rows)))
 
 (defun lexdb-ldoce--get-collocations (entry-id)
   "Get collocations for ENTRY-ID."
-  (or (gethash (cons entry-id 'collocations) lexdb-ldoce--cache)
+  (or (lexdb-db-cache-get 'ldoce (cons entry-id 'collocations))
       (let* ((db (lexdb-ldoce--ensure-db))
              (rows (sqlite-select db
                     "SELECT id, category, text, gloss FROM collocations WHERE entry_id = ? ORDER BY sort_order"
@@ -320,8 +272,7 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
                                    :category cat :text coll :gloss gloss
                                    :examples (mapcar #'car ex-rows)))))
                             rows)))
-        (puthash (cons entry-id 'collocations) colls lexdb-ldoce--cache)
-        colls)))
+        (lexdb-db-cache-put 'ldoce (cons entry-id 'collocations) colls))))
 
 (defun lexdb-ldoce--get-relations (entry-id type)
   "Get relations of TYPE for ENTRY-ID."
@@ -348,48 +299,26 @@ First tries exact match, then tries fuzzy match (LIKE) as fallback."
            (entry-colls (make-hash-table :test 'eql)))
       (dolist (row coll-rows) (push row (gethash (nth 1 row) entry-colls)))
       (maphash (lambda (entry-id rows)
-                 (puthash (cons entry-id 'collocations)
-                          (mapcar (lambda (row)
-                                    (pcase-let ((`(,coll-id ,_ ,cat ,coll ,gloss) row))
-                                      (lexdb-collocation-create
-                                       :category cat :text coll :gloss gloss
-                                       :examples (mapcar #'car (sqlite-select db
-                                                                "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
-                                                                (list coll-id))))))
-                                  (nreverse rows))
-                          lexdb-ldoce--cache))
+                 (lexdb-db-cache-put
+                  'ldoce
+                  (cons entry-id 'collocations)
+                  (mapcar (lambda (row)
+                            (pcase-let ((`(,coll-id ,_ ,cat ,coll ,gloss) row))
+                              (lexdb-collocation-create
+                               :category cat :text coll :gloss gloss
+                               :examples (mapcar #'car (sqlite-select db
+                                                        "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
+                                                        (list coll-id))))))
+                          (nreverse rows))))
                entry-colls))))
 
 ;;;; ============================================================
 ;;;; Lemmatization
 ;;;; ============================================================
 
-(defun lexdb-ldoce--try-lemma (word suffix replacement)
-  "Try removing SUFFIX from WORD and adding REPLACEMENT."
-  (when (and (> (length word) (length suffix)) (string-suffix-p suffix word))
-    (let ((candidate (concat (substring word 0 (- (length word) (length suffix))) replacement)))
-      (when (and (> (length candidate) 1) (lexdb-ldoce--lookup candidate)) candidate))))
-
 (defun lexdb-ldoce--find-lemma (word)
-  "Find base form of WORD."
-  (let ((w (downcase word)))
-    (if (lexdb-ldoce--lookup w) w
-      (or (lexdb-ldoce--try-lemma w "ing" "") (lexdb-ldoce--try-lemma w "ing" "e")
-          (lexdb-ldoce--try-lemma w "ning" "n") (lexdb-ldoce--try-lemma w "ting" "t")
-          (lexdb-ldoce--try-lemma w "ping" "p") (lexdb-ldoce--try-lemma w "bing" "b")
-          (lexdb-ldoce--try-lemma w "ging" "g") (lexdb-ldoce--try-lemma w "ming" "m")
-          (lexdb-ldoce--try-lemma w "ding" "d") (lexdb-ldoce--try-lemma w "ed" "")
-          (lexdb-ldoce--try-lemma w "ed" "e") (lexdb-ldoce--try-lemma w "ied" "y")
-          (lexdb-ldoce--try-lemma w "ned" "n") (lexdb-ldoce--try-lemma w "ted" "t")
-          (lexdb-ldoce--try-lemma w "ped" "p") (lexdb-ldoce--try-lemma w "bed" "b")
-          (lexdb-ldoce--try-lemma w "ged" "g") (lexdb-ldoce--try-lemma w "med" "m")
-          (lexdb-ldoce--try-lemma w "ded" "d") (lexdb-ldoce--try-lemma w "s" "")
-          (lexdb-ldoce--try-lemma w "es" "") (lexdb-ldoce--try-lemma w "ies" "y")
-          (lexdb-ldoce--try-lemma w "er" "") (lexdb-ldoce--try-lemma w "er" "e")
-          (lexdb-ldoce--try-lemma w "ier" "y") (lexdb-ldoce--try-lemma w "est" "")
-          (lexdb-ldoce--try-lemma w "est" "e") (lexdb-ldoce--try-lemma w "iest" "y")
-          (lexdb-ldoce--try-lemma w "ly" "") (lexdb-ldoce--try-lemma w "ily" "y")
-          (lexdb-ldoce--try-lemma w "'s" "") w))))
+  "Find base form of WORD using common lemmatization rules."
+  (lexdb--find-lemma-with-lookup word #'lexdb-ldoce--lookup))
 
 ;;;; ============================================================
 ;;;; Frequency Rendering
