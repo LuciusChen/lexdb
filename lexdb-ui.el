@@ -3671,13 +3671,16 @@ The translation disappears on the next command."
     ("interjection" "interj.")
     (_ pos)))
 
-(defun lexdb-imenu--format-entry (pos-abbrev num signpost headword)
+(defun lexdb-imenu--format-entry (pos-abbrev num signpost definition headword)
   "Format imenu entry with gray headword suffix.
-Format: \"POS NUM SIGNPOST (headword)\"."
+Format: \"POS NUM SIGNPOST definition (headword)\"."
   (let ((main-part (concat (if pos-abbrev (concat pos-abbrev " ") "")
                            num
                            (if (and signpost (not (string-empty-p signpost)))
                                (concat " " (string-trim signpost))
+                             "")
+                           (if (and definition (not (string-empty-p definition)))
+                               (concat " " (string-trim definition))
                              "")))
         (headword-part (when headword
                          (propertize (concat " (" headword ")")
@@ -3704,7 +3707,7 @@ Index format: \"pos. number SIGNPOST (headword)\" (e.g., \"n. 1 PARENT (mother)\
           (when (and current-headword (not has-senses))
             (push (cons (lexdb-imenu--format-entry
                          (when current-pos (lexdb-imenu--pos-abbrev current-pos))
-                         "-" nil current-headword)
+                         "-" nil nil current-headword)
                         current-headword-pos)
                   index))
           ;; Set new headword
@@ -3723,14 +3726,15 @@ Index format: \"pos. number SIGNPOST (headword)\" (e.g., \"n. 1 PARENT (mother)\
           (setq current-pos (match-string 1)))
          ;; Sense line: starts with number
          ;; e.g., "1 PARENT" or "1 [WITH OBJECT] Give..." or "2 "
-         ((looking-at "^\\([0-9]+\\) +\\(\\[.*?\\]\\|[A-Z][A-Z /]*\\)?")
+         ((looking-at "^\\([0-9]+\\) +\\(\\[.*?\\] *\\|[A-Z][A-Z /]* *\\)?\\(.*\\)?$")
           (let ((num (match-string 1))
                 (signpost (match-string 2))
+                (definition (match-string 3))
                 (pos (point)))
             (setq has-senses t)
             (push (cons (lexdb-imenu--format-entry
                          (when current-pos (lexdb-imenu--pos-abbrev current-pos))
-                         num signpost current-headword)
+                         num signpost definition current-headword)
                         pos)
                   index))))
         (forward-line 1))
@@ -3738,7 +3742,7 @@ Index format: \"pos. number SIGNPOST (headword)\" (e.g., \"n. 1 PARENT (mother)\
       (when (and current-headword (not has-senses))
         (push (cons (lexdb-imenu--format-entry
                      (when current-pos (lexdb-imenu--pos-abbrev current-pos))
-                     "-" nil current-headword)
+                     "-" nil nil current-headword)
                     current-headword-pos)
               index)))
     (nreverse index)))
