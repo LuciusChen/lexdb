@@ -33,27 +33,16 @@ from lexdb_common import (
     make_relation_fragments,
     LabelType,
     RelationType,
-    AttrType
+    AttrType,
+    # HTML utilities
+    extract_text_without_tags,
+    extract_zh,
 )
 
 
 # ============================================================
 # OALD-specific Utility Functions
 # ============================================================
-
-def extract_text_without_zh(element):
-    """Extract text from element, excluding <zh> tags."""
-    if not element:
-        return ""
-
-    # Make a copy
-    elem_copy = BeautifulSoup(str(element), 'html.parser')
-
-    # Remove all <zh> tags
-    for zh in elem_copy.find_all('zh'):
-        zh.decompose()
-
-    return clean_text(elem_copy.get_text())
 
 
 def extract_definition_with_format(element):
@@ -132,17 +121,6 @@ def extract_definition_with_format(element):
             gr.replace_with(f'<<pos>>{text}<</pos>> ')
 
     return clean_text(elem_copy.get_text())
-
-
-def extract_zh(element):
-    """Extract Chinese text from <zh> tag."""
-    if not element:
-        return ""
-
-    zh = element.find('zh')
-    if zh:
-        return clean_text(zh.get_text())
-    return ""
 
 
 def extract_highlighted_example(element):
@@ -791,7 +769,7 @@ def _parse_mainentry(main_entry, headword_hint=None):
     # === Topic headings ===
     topics = []
     for topic in main_entry.find_all('div', class_='topic'):
-        topic_text = extract_text_without_zh(topic)
+        topic_text = extract_text_without_tags(topic, ['zh'])
         if topic_text:
             topics.append(topic_text)
     if topics:
@@ -1014,7 +992,7 @@ def parse_oald4_idiom(idiom_div):
                             continue
                         else:
                             # Get text from other elements (like span with reg)
-                            text = extract_text_without_zh(child)
+                            text = extract_text_without_tags(child, ['zh'])
                             if text:
                                 def_text_parts.append(text)
 
@@ -1295,7 +1273,7 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
             sense['labels'].append({'type': 'cf', 'value': cf_value})
         else:
             # Fallback: just extract text
-            cf_text = extract_text_without_zh(cf)
+            cf_text = extract_text_without_tags(cf, ['zh'])
             if cf_text:
                 sense['labels'].append({'type': 'cf', 'value': cf_text})
 

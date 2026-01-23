@@ -13,7 +13,7 @@ Usage:
         make_relation_fragments, normalize_headword,
         LabelType, RelationType, AttrType,
         # HTML parsing utilities
-        extract_text_without_tags, get_element_text,
+        extract_text_without_tags, get_element_text, extract_zh,
         # Lemmatization
         LEMMA_RULES, try_lemma, find_lemma
     )
@@ -465,6 +465,24 @@ def get_element_text(element, exclude_tags: list = None) -> str:
     if exclude_tags:
         return extract_text_without_tags(element, exclude_tags)
     return clean_text(element.get_text())
+
+
+def extract_zh(element) -> str:
+    """
+    Extract Chinese text from <zh> tag.
+
+    Args:
+        element: BeautifulSoup element containing a <zh> child
+
+    Returns:
+        Cleaned Chinese text, or empty string if no <zh> found
+    """
+    if not element:
+        return ""
+    zh = element.find('zh')
+    if zh:
+        return clean_text(zh.get_text())
+    return ""
 
 
 # =============================================================================

@@ -41,7 +41,7 @@ from lexdb_common import (
     make_relation_fragments,
     LabelType,
     RelationType,
-    AttrType
+    AttrType,
 )
 
 
