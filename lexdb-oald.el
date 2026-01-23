@@ -154,7 +154,8 @@
                                       (lexdb-oald--decompress-json value)
                                     value)))
                 ;; Extract subsenses map for sense-level distribution
-                (if (equal key "oald/subsenses")
+                ;; Note: Database has "oald/oald/subsenses" due to dict_id prefix in storage
+                (if (equal key "oald/oald/subsenses")
                     (setq subsenses-map parsed-value)
                   (push (cons (intern key) parsed-value) metadata)))))))
       ;; Convert sense rows, attaching subsenses from map
