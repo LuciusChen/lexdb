@@ -3683,7 +3683,8 @@ Format: \"POS NUM SIGNPOST definition (headword)\"."
                                (concat " " (string-trim definition))
                              "")))
         (headword-part (when headword
-                         (concat " (" headword ")"))))
+                         (propertize (concat " (" headword ")")
+                                     'face '(:foreground "#888888")))))
     (concat main-part (or headword-part ""))))
 
 (defun lexdb-imenu-create-index ()
