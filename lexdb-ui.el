@@ -3711,25 +3711,25 @@ Index format: \"pos. number SIGNPOST (headword)\" (e.g., \"n. 1 PARENT (mother)\
                         current-headword-pos)
                   index))
           ;; Set new headword
-          (setq current-headword (match-string 1))
+          (setq current-headword (match-string-no-properties 1))
           (setq current-headword-pos (point))
           (setq has-senses nil)
           ;; Try to get POS from same line
           (let ((line-end (line-end-position)))
             (save-excursion
               (if (re-search-forward "\\b\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b" line-end t)
-                  (setq current-pos (match-string 1))
+                  (setq current-pos (match-string-no-properties 1))
                 (setq current-pos nil)))))
          ;; POS header line: standalone part of speech (possibly with transitivity)
          ;; e.g., "noun", "verb", "adjective", "verb [WITH OBJECT]"
          ((looking-at "^\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b")
-          (setq current-pos (match-string 1)))
+          (setq current-pos (match-string-no-properties 1)))
          ;; Sense line: starts with number
          ;; e.g., "1 PARENT" or "1 [WITH OBJECT] Give..." or "2 "
          ((looking-at "^\\([0-9]+\\) +\\(\\[.*?\\] *\\|[A-Z][A-Z /]* *\\)?\\(.*\\)?$")
-          (let ((num (match-string 1))
-                (signpost (match-string 2))
-                (definition (match-string 3))
+          (let ((num (match-string-no-properties 1))
+                (signpost (match-string-no-properties 2))
+                (definition (match-string-no-properties 3))
                 (pos (point)))
             (setq has-senses t)
             (push (cons (lexdb-imenu--format-entry
