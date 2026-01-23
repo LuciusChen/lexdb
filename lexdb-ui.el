@@ -3676,26 +3676,52 @@ The translation disappears on the next command."
     ("interjection" "interj.")
     (_ pos)))
 
+(defun lexdb-imenu--format-entry (pos-abbrev num signpost headword)
+  "Format imenu entry with gray headword suffix.
+Format: \"POS NUM SIGNPOST (headword)\"."
+  (let ((main-part (concat (if pos-abbrev (concat pos-abbrev " ") "")
+                           num
+                           (if (and signpost (not (string-empty-p signpost)))
+                               (concat " " (string-trim signpost))
+                             "")))
+        (headword-part (when headword
+                         (propertize (concat " (" headword ")")
+                                     'face '(:foreground "#888888")))))
+    (concat main-part (or headword-part ""))))
+
 (defun lexdb-imenu-create-index ()
   "Create imenu index for lexdb buffer.
-Index format: headword pos. number SIGNPOST (e.g., \"mother n. 1 PARENT\")."
+Index format: \"pos. number SIGNPOST (headword)\" (e.g., \"n. 1 PARENT (mother)\")."
   (let ((index nil)
         (current-headword nil)
-        (current-pos nil))
+        (current-headword-pos nil)  ; position of current headword
+        (current-pos nil)
+        (has-senses nil))           ; track if current headword has senses
     (save-excursion
       (goto-char (point-min))
       ;; Single pass: find headwords, POS headers, and senses
       (while (not (eobp))
         (cond
          ;; Headword line: word followed by space and /
-         ;; e.g., "mother¹ /ˈmʌðə..." or "mother1 /..."
+         ;; e.g., "mother¹ /ˈmʌðə..." or "CALL /kɔːl/"
          ((looking-at "^\\([a-zA-Z][-a-zA-Z']*[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]*\\) +/")
+          ;; Before switching to new headword, check if previous had no senses
+          (when (and current-headword (not has-senses))
+            (push (cons (lexdb-imenu--format-entry
+                         (when current-pos (lexdb-imenu--pos-abbrev current-pos))
+                         "-" nil current-headword)
+                        current-headword-pos)
+                  index))
+          ;; Set new headword
           (setq current-headword (match-string 1))
+          (setq current-headword-pos (point))
+          (setq has-senses nil)
           ;; Try to get POS from same line
           (let ((line-end (line-end-position)))
             (save-excursion
-              (when (re-search-forward "\\b\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b" line-end t)
-                (setq current-pos (match-string 1))))))
+              (if (re-search-forward "\\b\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b" line-end t)
+                  (setq current-pos (match-string 1))
+                (setq current-pos nil)))))
          ;; POS header line: standalone part of speech (possibly with transitivity)
          ;; e.g., "noun", "verb", "adjective", "verb [WITH OBJECT]"
          ((looking-at "^\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b")
@@ -3706,18 +3732,20 @@ Index format: headword pos. number SIGNPOST (e.g., \"mother n. 1 PARENT\")."
           (let ((num (match-string 1))
                 (signpost (match-string 2))
                 (pos (point)))
-            (push (cons (format "%s %s%s%s"
-                                (or current-headword "")
-                                (if current-pos
-                                    (concat (lexdb-imenu--pos-abbrev current-pos) " ")
-                                  "")
-                                num
-                                (if (and signpost (not (string-empty-p signpost)))
-                                    (concat " " (string-trim signpost))
-                                  ""))
+            (setq has-senses t)
+            (push (cons (lexdb-imenu--format-entry
+                         (when current-pos (lexdb-imenu--pos-abbrev current-pos))
+                         num signpost current-headword)
                         pos)
                   index))))
-        (forward-line 1)))
+        (forward-line 1))
+      ;; Handle last headword if it had no senses
+      (when (and current-headword (not has-senses))
+        (push (cons (lexdb-imenu--format-entry
+                     (when current-pos (lexdb-imenu--pos-abbrev current-pos))
+                     "-" nil current-headword)
+                    current-headword-pos)
+              index)))
     (nreverse index)))
 
 (defun lexdb-ui-play-audio-at-point ()
