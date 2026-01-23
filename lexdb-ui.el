@@ -2489,7 +2489,7 @@ PHRASES is a list of alists with 'phrase', 'definition', and 'examples' keys."
               (definition (lexdb-ui--alist-get 'definition phrase))
               (examples (lexdb-ui--alist-get 'examples phrase)))
           (when phrase-text
-            (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
+            (insert "  " (propertize phrase-text 'face '(:inherit lexdb-phrase-face :weight bold)) "\n")
             (when (lexdb--non-empty-string-p definition)
               (insert "    " (propertize definition 'face 'lexdb-definition-face) "\n"))
             (let ((ex-list (if (vectorp examples) (append examples nil) examples)))
@@ -3201,7 +3201,7 @@ ADAPTER-ID is used for crossref navigation."
               (when phrase-text
                 ;; Only insert phrase header if it's different from the previous one
                 (unless (equal phrase-text current-phrase)
-                  (insert "  " (propertize phrase-text 'face 'lexdb-phrase-face) "\n")
+                  (insert "  " (propertize phrase-text 'face '(:inherit lexdb-phrase-face :weight bold)) "\n")
                   (setq current-phrase phrase-text))
                 ;; Calculate indent based on subsense
                 (let* ((is-subsense (and sense-number (string-match-p "\\." sense-number)))
@@ -3367,12 +3367,12 @@ ADAPTER-ID is used for crossref navigation."
                   (examples (lexdb-ui--alist-get 'examples deriv))
                   (expanded-examples (lexdb-ui--alist-get 'expanded_examples deriv)))
               (when headword
-                ;; Headword with POS and pronunciation
-                (insert "  " (propertize headword 'face 'lexdb-phrase-face))
+                ;; Headword with same color as main headword (no bold/height)
+                (insert "  " (propertize headword 'face 'lexdb-phonetic-face))
                 (when (lexdb--non-empty-string-p pos)
                   (insert " " (propertize pos 'face 'lexdb-pos-face)))
                 (when (lexdb--non-empty-string-p ipa)
-                  (insert " " (propertize (concat "/" ipa "/") 'face 'lexdb-pronunciation-face)))
+                  (insert " " (propertize (concat "/" ipa "/") 'face 'lexdb-phonetic-face)))
                 (insert "\n")
                 ;; Definition
                 (when (lexdb--non-empty-string-p definition)
