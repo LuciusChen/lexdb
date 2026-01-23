@@ -2081,35 +2081,37 @@ ADAPTER-ID is used for navigation."
         (when (lexdb--non-empty-string-p suffix)
           (insert (propertize suffix 'face 'lexdb-definition-face)))))))
 
-(defun lexdb-ui--render-phrase-synonyms (syn-list)
+(defun lexdb-ui--render-phrase-synonyms (syn-list &optional indent)
   "Render SYN-LIST as clickable synonyms for PHRASES/PHRASAL VERBS.
+INDENT is the prefix string for alignment (default \"    \").
 Returns a string with text properties preserved for insertion."
-  (with-temp-buffer
-    (dolist (group (if (vectorp syn-list) (append syn-list nil) syn-list))
-      (let ((register (lexdb-ui--alist-get 'register group))
-            (words (lexdb-ui--alist-get 'words group)))
-        ;; Always start with indent for alignment
-        (insert "    ")
-        (when (lexdb--non-empty-string-p register)
-          (insert (propertize register 'face 'lexdb-label-face) " "))
-        (let ((word-list (if (vectorp words) (append words nil) words))
-              (first t))
-          (dolist (w word-list)
-            (unless first (insert ", "))
-            (setq first nil)
-            (let ((word (lexdb-ui--alist-get 'word w))
-                  (clickable (lexdb-ui--alist-get 'clickable w)))
-              (if clickable
-                  (insert-text-button word
-                                      'face 'lexdb-link-face
-                                      'action (lambda (_)
-                                                (lexdb-search word))
-                                      'help-echo (format "Look up: %s" word))
-                ;; Non-clickable: normal text
-                (insert (propertize word 'face 'default))))))
-        (insert "\n")))
-    ;; Return with text properties preserved
-    (buffer-substring (point-min) (point-max))))
+  (let ((indent (or indent "    ")))
+    (with-temp-buffer
+      (dolist (group (if (vectorp syn-list) (append syn-list nil) syn-list))
+        (let ((register (lexdb-ui--alist-get 'register group))
+              (words (lexdb-ui--alist-get 'words group)))
+          ;; Always start with indent for alignment
+          (insert indent)
+          (when (lexdb--non-empty-string-p register)
+            (insert (propertize register 'face 'lexdb-label-face) " "))
+          (let ((word-list (if (vectorp words) (append words nil) words))
+                (first t))
+            (dolist (w word-list)
+              (unless first (insert ", "))
+              (setq first nil)
+              (let ((word (lexdb-ui--alist-get 'word w))
+                    (clickable (lexdb-ui--alist-get 'clickable w)))
+                (if clickable
+                    (insert-text-button word
+                                        'face 'lexdb-link-face
+                                        'action (lambda (_)
+                                                  (lexdb-search word))
+                                        'help-echo (format "Look up: %s" word))
+                  ;; Non-clickable: normal text
+                  (insert (propertize word 'face 'default))))))
+          (insert "\n")))
+      ;; Return with text properties preserved
+      (buffer-substring (point-min) (point-max)))))
 
 (defun lexdb-ui--insert-linked-relations (relations face &optional adapter-id)
   "Insert RELATIONS with clickable links using FACE.
@@ -3255,7 +3257,7 @@ ADAPTER-ID is used for crossref navigation."
                         (when (> (length syn-list) 0)
                           (push (list 'synonyms
                                       "SYNONYMS"
-                                      (lexdb-ui--render-phrase-synonyms syn-list))
+                                      (lexdb-ui--render-phrase-synonyms syn-list ex-indent))
                                 tabs))))
                     ;; Insert tab bar if we have tabs
                     (when tabs
@@ -3340,12 +3342,12 @@ ADAPTER-ID is used for crossref navigation."
                         (when (> (length syn-list) 0)
                           (push (list 'synonyms
                                       "SYNONYMS"
-                                      (lexdb-ui--render-phrase-synonyms syn-list))
+                                      (lexdb-ui--render-phrase-synonyms syn-list ex-indent))
                                 tabs))))
                     ;; Insert tab bar
                     (when tabs
                       (insert ex-indent)
-                      (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))
+                      (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group)))
                 (setq pv-index (1+ pv-index))))))
           ;; Create overlay for background
           (when (> (point) section-start)
