@@ -3191,7 +3191,7 @@ ADAPTER-ID is used for crossref navigation."
           (insert "\n")
           (insert (propertize "PHRASES" 'face 'lexdb-grambox-heading-face) "\n")
           (let ((current-phrase nil))
-          (dolist (phrase phrase-list)
+            (dolist (phrase phrase-list)
             (let ((phrase-text (lexdb-ui--alist-get 'phrase phrase))
                   (sense-number (lexdb-ui--alist-get 'sense_number phrase))
                   (labels (lexdb-ui--alist-get 'labels phrase))
@@ -3263,7 +3263,7 @@ ADAPTER-ID is used for crossref navigation."
                     (when tabs
                       (insert ex-indent)
                       (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))
-                (setq phrase-index (1+ phrase-index))))))
+                (setq phrase-index (1+ phrase-index)))))))
           ;; Create overlay for background
           (when (> (point) section-start)
             (let ((ov (make-overlay section-start (point))))
