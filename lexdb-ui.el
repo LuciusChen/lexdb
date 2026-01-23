@@ -3722,8 +3722,8 @@ Index format: \"pos. number SIGNPOST (headword)\" (e.g., \"n. 1 PARENT (mother)\
          ((looking-at "^\\(noun\\|verb\\|adjective\\|adverb\\|preposition\\|conjunction\\|pronoun\\|determiner\\|interjection\\)\\b")
           (setq current-pos (match-string 1)))
          ;; Sense line: starts with number
-         ;; e.g., "1 PARENT" or "2 "
-         ((looking-at "^\\([0-9]+\\) +\\([A-Z][A-Z /]*\\)?")
+         ;; e.g., "1 PARENT" or "1 [WITH OBJECT] Give..." or "2 "
+         ((looking-at "^\\([0-9]+\\) +\\(\\[.*?\\]\\|[A-Z][A-Z /]*\\)?")
           (let ((num (match-string 1))
                 (signpost (match-string 2))
                 (pos (point)))
