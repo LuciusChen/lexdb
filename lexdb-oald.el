@@ -72,51 +72,48 @@
 ;;;; Schema Queries
 ;;;; ============================================================
 
+(defun lexdb-oald--build-example (ex)
+  "Build lexdb-example from row EX with optional Chinese translation."
+  (pcase-let ((`(,text ,text-zh) ex))
+    (lexdb-example-create
+     :text text
+     :metadata (when (and lexdb-oald-show-chinese
+                          (lexdb--non-empty-string-p text-zh))
+                 (list (cons 'oald/text-zh text-zh))))))
+
+(defun lexdb-oald--build-sense-metadata (definition-zh plural)
+  "Build sense metadata from DEFINITION-ZH and PLURAL."
+  (let ((meta nil))
+    (when (and lexdb-oald-show-chinese
+               (lexdb--non-empty-string-p definition-zh))
+      (push (cons 'oald/definition-zh definition-zh) meta))
+    (when (lexdb--non-empty-string-p plural)
+      (push (cons 'oald/plural plural) meta))
+    meta))
+
 (defun lexdb-oald--row-to-sense (sense-row db)
   "Convert SENSE-ROW to lexdb-sense using DB connection."
   (pcase-let ((`(,id ,sense-num ,signpost ,plural ,definition ,definition-zh ,_sort) sense-row))
     (let* ((ex-rows (sqlite-select db
                      "SELECT text, text_zh FROM examples WHERE sense_id = ? ORDER BY sort_order"
                      (list id)))
-           (examples (mapcar (lambda (ex)
-                               (let ((text (nth 0 ex))
-                                     (text-zh (nth 1 ex)))
-                                 (lexdb-example-create
-                                  :text text
-                                  ;; Store Chinese in metadata
-                                  :metadata (when (and lexdb-oald-show-chinese
-                                                       (lexdb--non-empty-string-p text-zh))
-                                              (list (cons 'oald/text-zh text-zh))))))
-                             ex-rows))
            (gram-rows (sqlite-select db
                        "SELECT pattern FROM grammar_patterns WHERE sense_id = ? ORDER BY sort_order"
                        (list id)))
-           (gram-patterns (mapcar (lambda (g)
-                                    (lexdb-grammar-pattern-create :pattern (car g)))
-                                  gram-rows))
            (label-rows (sqlite-select db
                         "SELECT label_type, label_value FROM labels WHERE sense_id = ? ORDER BY sort_order"
-                        (list id)))
-           (labels (mapcar (lambda (l)
-                             (lexdb-label-create :type (intern (nth 0 l)) :value (nth 1 l)))
-                           label-rows)))
-      (let ((meta nil))
-        ;; Store Chinese definition in metadata
-        (when (and lexdb-oald-show-chinese
-                   (lexdb--non-empty-string-p definition-zh))
-          (push (cons 'oald/definition-zh definition-zh) meta))
-        ;; Store plural forms in metadata
-        (when (lexdb--non-empty-string-p plural)
-          (push (cons 'oald/plural plural) meta))
-        (lexdb-sense-create
-         :id id
-         :number (when (lexdb--non-empty-string-p sense-num) sense-num)
-         :signpost (when (lexdb--non-empty-string-p signpost) signpost)
-         :definition definition
-         :examples examples
-         :grammar-patterns gram-patterns
-         :labels labels
-         :metadata meta)))))
+                        (list id))))
+      (lexdb-sense-create
+       :id id
+       :number (when (lexdb--non-empty-string-p sense-num) sense-num)
+       :signpost (when (lexdb--non-empty-string-p signpost) signpost)
+       :definition definition
+       :examples (mapcar #'lexdb-oald--build-example ex-rows)
+       :grammar-patterns (mapcar (lambda (g) (lexdb-grammar-pattern-create :pattern (car g)))
+                                 gram-rows)
+       :labels (mapcar (lambda (l) (lexdb-label-create :type (intern (nth 0 l)) :value (nth 1 l)))
+                       label-rows)
+       :metadata (lexdb-oald--build-sense-metadata definition-zh plural)))))
 
 (defalias 'lexdb-oald--build-pronunciations #'lexdb--build-pronunciations-from-db
   "Build pronunciations for ENTRY-ID from DB.")
@@ -144,20 +141,19 @@
           (when (and (equal ltype "pos") (not (assq 'oald/pos metadata)))
             (push (cons 'oald/pos lvalue) metadata))))
       ;; Fetch entry attributes (idioms, derivatives, subsenses, etc.)
-      (let ((attr-rows (sqlite-select db
-                        "SELECT attr_key, attr_value, attr_type FROM entry_attributes WHERE entry_id = ?"
-                        (list id))))
-        (dolist (attr attr-rows)
-          (pcase-let ((`(,key ,value ,type) attr))
-            (when (lexdb--non-empty-string-p value)
-              (let ((parsed-value (if (equal type "json_compressed")
-                                      (lexdb-oald--decompress-json value)
-                                    value)))
-                ;; Extract subsenses map for sense-level distribution
-                ;; Note: Database has "oald/oald/subsenses" due to dict_id prefix in storage
-                (if (equal key "oald/oald/subsenses")
-                    (setq subsenses-map parsed-value)
-                  (push (cons (intern key) parsed-value) metadata)))))))
+      (dolist (attr (sqlite-select db
+                      "SELECT attr_key, attr_value, attr_type FROM entry_attributes WHERE entry_id = ?"
+                      (list id)))
+        (pcase-let ((`(,key ,value ,type) attr))
+          (when-let* ((parsed-value (and (lexdb--non-empty-string-p value)
+                                         (if (equal type "json_compressed")
+                                             (lexdb-oald--decompress-json value)
+                                           value))))
+            ;; Extract subsenses map for sense-level distribution
+            ;; Note: Database has "oald/oald/subsenses" due to dict_id prefix in storage
+            (if (equal key "oald/oald/subsenses")
+                (setq subsenses-map parsed-value)
+              (push (cons (intern key) parsed-value) metadata)))))
       ;; Convert sense rows, attaching subsenses from map
       (let ((senses (mapcar (lambda (sr)
                               (let* ((sense (lexdb-oald--row-to-sense sr db))

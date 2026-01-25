@@ -112,24 +112,25 @@ Returns adapter-specific template or default template."
   (or lexdb-enabled-adapters
       (mapcar #'car (lexdb-list-adapters))))
 
+(defun lexdb-ui--lookup-with-lemma (word adapter-id adapter)
+  "Lookup WORD in ADAPTER-ID, trying lemmatization if no results.
+ADAPTER is the adapter struct.  Returns entries list or nil."
+  (or (condition-case nil (lexdb-lookup word adapter-id) (error nil))
+      (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
+        (when-let* ((lemma (lexdb-find-lemma word adapter-id))
+                    ((not (equal lemma (downcase word)))))
+          (condition-case nil (lexdb-lookup lemma adapter-id) (error nil))))))
+
 (defun lexdb-ui--query-all-dicts (word)
   "Query WORD in all enabled dictionaries.
 Returns alist of (adapter-id . (entries . adapter))."
   (let ((results nil))
     (dolist (adapter-id (lexdb-ui--get-enabled-adapters))
       (when-let* ((adapter (lexdb-get-adapter adapter-id)))
-        (let ((entries (condition-case nil
-                           (lexdb-lookup word adapter-id)
-                         (error nil))))
-          ;; Try lemmatization if no results
-          (unless entries
-            (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-              (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
-                (unless (equal lemma (downcase word))
-                  (setq entries (condition-case nil
-                                    (lexdb-lookup lemma adapter-id)
-                                  (error nil)))))))
-          (push (cons adapter-id (cons entries adapter)) results))))
+        (push (cons adapter-id
+                    (cons (lexdb-ui--lookup-with-lemma word adapter-id adapter)
+                          adapter))
+              results)))
     (nreverse results)))
 
 (defun lexdb-ui--render-dict-tabs ()
