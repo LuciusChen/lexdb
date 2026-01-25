@@ -151,7 +151,8 @@ class LDOCEParser:
         entries = []
         for entry_div in entry_divs:
             entry = self._parse_single_entry(entry_div, word_key)
-            if entry and entry.get('senses'):
+            # Accept entries with senses OR phrasal verbs (some entries only have phrasal verbs)
+            if entry and (entry.get('senses') or entry.get('attributes', {}).get('phrasal-verbs')):
                 entries.append(entry)
 
         # If no entries parsed, try parsing as single entry
@@ -2400,7 +2401,8 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
             entries = parser.parse(html, word_key)
 
             for entry_data in entries:
-                if entry_data.get('senses'):
+                # Accept entries with senses OR phrasal verbs
+                if entry_data.get('senses') or entry_data.get('attributes', {}).get('phrasal-verbs'):
                     # Skip redirects: if parsed headword differs from MDX key, it's a redirect
                     parsed_hw = entry_data.get('headword', '').lower().rstrip('0123456789')
                     word_key_lower = word_key.lower()
