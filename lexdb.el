@@ -952,20 +952,13 @@ Otherwise, search only the current/default dictionary."
       (princ (format "Version: %s\n\n" (or (lexdb-adapter-version adapter) "unknown")))
       (princ "Capabilities:\n\n")
       (dolist (group lexdb-capability-groups)
-        (let ((group-name (car group))
-              (group-caps (cdr group))
-              (has-any nil))
-          ;; Check if this group has any enabled caps
-          (dolist (cap-pair group-caps)
-            (when (memq (car cap-pair) caps)
-              (setq has-any t)))
-          (when has-any
+        (let* ((group-name (car group))
+               (enabled-caps (seq-filter (lambda (cap-pair) (memq (car cap-pair) caps))
+                                         (cdr group))))
+          (when enabled-caps
             (princ (format "  %s:\n" (upcase (symbol-name group-name))))
-            (dolist (cap-pair group-caps)
-              (let ((cap (car cap-pair))
-                    (desc (cdr cap-pair)))
-                (when (memq cap caps)
-                  (princ (format "    ✓ %s - %s\n" cap desc)))))
+            (dolist (cap-pair enabled-caps)
+              (princ (format "    ✓ %s - %s\n" (car cap-pair) (cdr cap-pair))))
             (princ "\n")))))))
 
 ;;;###autoload
@@ -1011,14 +1004,13 @@ VARIANT can be \\='uk or \\='us (default: \\='uk)."
          (variant (or variant 'uk)))
     (if (null entries)
         (message "No entry found for: %s" lexdb--last-word)
-      (let* ((entry (car entries))
-             (prons (lexdb-entry-pronunciations entry))
-             (pron (seq-find (lambda (p) (eq (lexdb-pronunciation-variant p) variant))
-                             prons)))
-        (if (and pron (lexdb-pronunciation-audio pron))
-            (lexdb-ui--play-audio (lexdb-pronunciation-audio pron)
-                                  (lexdb-adapter-audio-dir adapter))
-          (message "No %s audio for: %s" variant lexdb--last-word))))))
+      (if-let* ((entry (car entries))
+                (prons (lexdb-entry-pronunciations entry))
+                (pron (seq-find (lambda (p) (eq (lexdb-pronunciation-variant p) variant))
+                                prons))
+                (audio (lexdb-pronunciation-audio pron)))
+          (lexdb-ui--play-audio audio (lexdb-adapter-audio-dir adapter))
+        (message "No %s audio for: %s" variant lexdb--last-word)))))
 
 ;;;###autoload
 (defun lexdb-play-uk ()

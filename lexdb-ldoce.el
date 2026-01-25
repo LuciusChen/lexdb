@@ -74,19 +74,25 @@
 ;;;; Schema V2 (New LexDB Schema)
 ;;;; ============================================================
 
+(defun lexdb-ldoce--build-example (ex &optional include-position)
+  "Build lexdb-example from row EX.
+If INCLUDE-POSITION is non-nil, include position in metadata."
+  (let ((text (nth 0 ex))
+        (audio (nth 1 ex))
+        (position (nth 2 ex)))
+    (lexdb-example-create
+     :text text
+     :audio (when (lexdb--non-empty-string-p audio) audio)
+     :metadata (when include-position
+                 (list (cons 'position position))))))
+
 (defun lexdb-ldoce--v2-row-to-sense (sense-row db)
   "Convert V2 SENSE-ROW to lexdb-sense."
   (pcase-let ((`(,id ,sense-num ,signpost ,definition ,_sort) sense-row))
     (let* ((ex-rows (sqlite-select db
                      "SELECT text, audio_path, position FROM examples WHERE sense_id = ? ORDER BY position, sort_order"
                      (list id)))
-           (examples (mapcar (lambda (ex)
-                               (lexdb-example-create
-                                :text (nth 0 ex)
-                                :audio (let ((p (nth 1 ex)))
-                                         (when (lexdb--non-empty-string-p p) p))
-                                :metadata (list (cons 'position (nth 2 ex)))))
-                             ex-rows))
+           (examples (mapcar (lambda (ex) (lexdb-ldoce--build-example ex t)) ex-rows))
            (label-rows (sqlite-select db
                         "SELECT label_type, label_value FROM labels WHERE sense_id = ? ORDER BY sort_order"
                         (list id)))
@@ -117,13 +123,8 @@
                                 (list pat-id))))
                   (lexdb-grammar-pattern-create
                    :pattern pattern
-                   :gloss (when (and gloss (not (string-empty-p gloss))) gloss)
-                   :examples (mapcar (lambda (ex)
-                                       (lexdb-example-create
-                                        :text (nth 0 ex)
-                                        :audio (let ((p (nth 1 ex)))
-                                                 (when (lexdb--non-empty-string-p p) p))))
-                                     ex-rows)))))
+                   :gloss (when (lexdb--non-empty-string-p gloss) gloss)
+                   :examples (mapcar #'lexdb-ldoce--build-example ex-rows)))))
             rows)))
 
 (defalias 'lexdb-ldoce--v2-build-pronunciations #'lexdb--build-pronunciations-from-db
