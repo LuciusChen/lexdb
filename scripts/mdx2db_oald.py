@@ -1576,7 +1576,8 @@ def convert_oald4(mdx_path, output_dir=None):
 
             # Insert all entries from this HTML
             for entry in entries:
-                if entry and entry.get('senses'):
+                # Accept entries with senses OR phrasal verbs
+                if entry and (entry.get('senses') or entry.get('attributes', {}).get('oald/phrasal-verbs')):
                     insert_entry(conn, dict_id, entry)
                     imported += 1
 
