@@ -4,10 +4,13 @@ This file distills the parts of `clutch/CLAUDE.md` that fit `lexdb`'s codebase a
 
 ## First Principles
 
+- **Question every abstraction**: before adding a helper, layer, hook, or compatibility wrapper, ask whether it removes a real current cost in `lexdb`, not a hypothetical future one.
 - **Keep the architecture explicit**: `lexdb.el` is the core API and data model, `lexdb-ui.el` is rendering and interaction, `lexdb-*.el` files are dictionary adapters, and `scripts/` is offline data conversion. Do not blur these boundaries.
 - **Prefer simpler code over clever abstractions**: if a helper or layer does not remove real duplication or complexity in `lexdb`, do not add it.
+- **Fewer files, clearer boundaries**: only split code when the new file has a genuinely distinct responsibility. Do not split for cosmetics.
 - **Add features where the data actually lives**: dictionary-specific behavior belongs in the matching adapter or converter, not in generic UI or core code.
 - **Delete dead paths instead of preserving them indefinitely**: do not keep stale compatibility shims unless users actively rely on them.
+- **Converge UX, avoid parallel workflows**: if two commands or interaction paths do nearly the same thing, prefer one consistent model unless the distinction is genuinely valuable.
 - **No side effects on load**: loading a file must not mutate user state beyond definitions and registrations that are required by that file's API.
 
 ## Architecture
@@ -20,6 +23,7 @@ This file distills the parts of `clutch/CLAUDE.md` that fit `lexdb`'s codebase a
   - `scripts/*.py`: MDX/HTML parsing and SQLite generation.
 - **Schema changes are cross-cutting**: if you change the SQLite schema or attribute layout, update Python writers, Emacs readers, and `schema.md` together.
 - **Capability-driven design stays generic**: if rendering or lookup is optional per dictionary, model it as a capability or adapter hook instead of branching generic code around one source.
+- **Reuse Emacs infrastructure**: prefer `completing-read`, `special-mode`, text properties, standard hooks, and built-in navigation facilities over custom mini-frameworks.
 
 ## Naming
 
@@ -50,6 +54,14 @@ This file distills the parts of `clutch/CLAUDE.md` that fit `lexdb`'s codebase a
 - Use plain `defvar` for shared registries, caches, and process-wide state.
 - Use `defcustom` for user configuration, with accurate `:type` and `:group`.
 - Keep adapter state keyed by adapter ID; avoid hidden global coupling between dictionaries.
+- Major modes must make their per-buffer state variables buffer-local.
+
+## Mode Definitions
+
+- Read-only result buffers should derive from `special-mode` unless there is a strong reason not to.
+- Use `define-derived-mode` rather than hand-rolling mode setup when a real mode is needed.
+- Register hooks buffer-locally in mode bodies or setup functions using the LOCAL argument where applicable.
+- Do not let loading a mode file enable behavior globally.
 
 ## UI and Rendering
 
@@ -59,6 +71,24 @@ This file distills the parts of `clutch/CLAUDE.md` that fit `lexdb`'s codebase a
 - Use overlays only for temporary visual effects.
 - Keep UI code generic; adapter-specific formatting should be provided through data shape, capabilities, or explicit hooks.
 - If a UI change affects navigation, key bindings, tabs, or visible sections, update `README.md` in the same change.
+
+## Function Design
+
+- Prefer small functions with one clear job. If a function becomes hard to scan, extract helpers.
+- Name helpers after what they compute or render, not just where they are called.
+- Keep pure data transformation separate from rendering and side effects whenever practical.
+- Interactive commands should stay thin wrappers around internal functions.
+
+## Completion
+
+- Use standard `completing-read` for interactive selection.
+- If completion-at-point is added later, keep it fast and buffer-local, and allow fallback when appropriate.
+
+## Autoloads
+
+- `;;;###autoload` belongs on real interactive entry points and other standard autoload targets only.
+- Do not autoload internal helpers, `defvar`, or `defcustom` forms.
+- Use `declare-function` when optional dependencies need to be referenced only for compilation.
 
 ## Adapter Rules
 
@@ -74,8 +104,14 @@ This file distills the parts of `clutch/CLAUDE.md` that fit `lexdb`'s codebase a
 - Favor correctness of extracted structure over aggressive cleanup that may discard dictionary data.
 - When adding a new table, attribute key, or relation shape, document the intent in `schema.md`.
 
+## Docs Consistency
+
+- Any change to key bindings, defaults, setup, schema expectations, or user-visible workflow must update `README.md` and related docs in the same change.
+- If code and docs diverge, treat code as the source of truth and fix docs immediately.
+
 ## Postmortems
 
+- Read existing files in `postmortem/` before making significant changes in the same area.
 - Significant design changes should leave a short decision record in `postmortem/NNN-topic.md`.
 - Write a postmortem when:
   - changing the SQLite schema or compatibility story;
@@ -86,6 +122,16 @@ This file distills the parts of `clutch/CLAUDE.md` that fit `lexdb`'s codebase a
 - Focus the record on why: what alternatives were considered, what failed, what trade-offs were accepted, and what limitations remain.
 - Do not write postmortems that merely restate the code.
 - If a future contributor cannot tell why this approach was chosen, the record is incomplete.
+
+## Pre-Submit Review
+
+Before committing significant changes, step back and review the whole diff.
+
+- **No heuristic shortcuts**: if a fix feels "good enough for now", it probably is not. Either do it correctly or explicitly document why it is deferred in a postmortem.
+- **No redundancy**: check for duplicated logic, dead code, stale compatibility paths, or overlapping abstractions introduced by the change. Remove them.
+- **Long-term correctness**: ask whether the approach still holds under less convenient paths such as unified config, legacy registration, missing data, repeated lookups, and UI-triggered follow-up actions.
+- **Docs in sync**: any change to key bindings, defaults, workflow, schema expectations, or data structures must update `README.md` and, where applicable, add or update a postmortem.
+- **Byte-compile clean**: batch byte-compiling the touched Elisp files must produce zero warnings.
 
 ## Quality Checks
 
