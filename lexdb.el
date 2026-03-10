@@ -248,6 +248,13 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
 (defvar lexdb--active-adapter nil
   "Adapter currently executing an adapter callback.")
 
+(defun lexdb--sqlite-live-p (db)
+  "Return non-nil when DB is a live SQLite connection."
+  (and db
+       (condition-case nil
+           (sqlitep db)
+         (error nil))))
+
 (defun lexdb-db-ensure (adapter-id db-file)
   "Ensure database connection for ADAPTER-ID using DB-FILE.
 Returns the database connection."
@@ -256,7 +263,7 @@ Returns the database connection."
   (unless (file-exists-p db-file)
     (error "Database file not found: %s" db-file))
   (let ((db (gethash adapter-id lexdb--database-connections)))
-    (unless (and db (sqlitep db))
+    (unless (lexdb--sqlite-live-p db)
       (setq db (sqlite-open db-file))
       (puthash adapter-id db lexdb--database-connections)
       ;; Initialize cache for this adapter if needed
@@ -272,7 +279,7 @@ Returns nil if not connected."
 (defun lexdb-db-close (adapter-id)
   "Close database connection and clear cache for ADAPTER-ID."
   (when-let* ((db (gethash adapter-id lexdb--database-connections)))
-    (when (sqlitep db)
+    (when (lexdb--sqlite-live-p db)
       (sqlite-close db))
     (remhash adapter-id lexdb--database-connections))
   (when-let* ((cache (gethash adapter-id lexdb--query-caches)))
@@ -678,17 +685,23 @@ Supported keys are `:display-entry', `:display-multi', and `:play-audio'."
 (defun lexdb--display-entry (word entries adapter &optional no-lemma-hint)
   "Display WORD ENTRIES for ADAPTER, optionally skipping lemma hints."
   (unless (functionp lexdb-display-entry-function)
+    (require 'lexdb-ui nil t))
+  (unless (functionp lexdb-display-entry-function)
     (user-error "No lexdb UI registered. Load `lexdb-ui' before searching"))
   (funcall lexdb-display-entry-function word entries adapter no-lemma-hint))
 
 (defun lexdb--display-multi (word)
   "Display WORD across all enabled dictionaries."
   (unless (functionp lexdb-display-multi-function)
+    (require 'lexdb-ui nil t))
+  (unless (functionp lexdb-display-multi-function)
     (user-error "No lexdb UI registered. Load `lexdb-ui' before searching"))
   (funcall lexdb-display-multi-function word))
 
 (defun lexdb--play-audio (path &optional audio-dir)
   "Play PATH using AUDIO-DIR through the registered UI audio handler."
+  (unless (functionp lexdb-play-audio-function)
+    (require 'lexdb-ui nil t))
   (unless (functionp lexdb-play-audio-function)
     (user-error "No lexdb UI registered. Load `lexdb-ui' before playing audio"))
   (funcall lexdb-play-audio-function path audio-dir))

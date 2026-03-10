@@ -280,7 +280,8 @@ Returns alist of (adapter-id . (entries . adapter))."
         ;; Lemma suggestion
         (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
           (when-let* ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
-            (let ((lemma (funcall lemma-fn lexdb-ui--current-word))
+            (let ((lemma (lexdb--call-with-adapter
+                          adapter lemma-fn lexdb-ui--current-word))
                   (jump-adapter (lexdb-adapter-id adapter)))
               (unless (equal lemma (downcase lexdb-ui--current-word))
                 (insert "\n\n")
@@ -1162,7 +1163,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
       (when-let* ((freq (lexdb-meta-get meta ns "frequency")))
         (when (lexdb--non-empty-string-p freq)
           (if-let* ((hook (lexdb-adapter-render-frequency-fn adapter)))
-              (when-let* ((rendered (funcall hook freq)))
+              (when-let* ((rendered (lexdb--call-with-adapter adapter hook freq)))
                 (insert " " rendered))
             (insert " " (propertize freq 'face 'lexdb-frequency-face))))))
     ;; CEFR level
@@ -2725,7 +2726,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
         (ns (symbol-name (lexdb-adapter-id adapter)))
         (meta (lexdb-entry-metadata entry)))
     (if-let* ((header-hook (lexdb-adapter-render-entry-header-fn adapter)))
-        (funcall header-hook entry (current-buffer))
+        (lexdb--call-with-adapter adapter header-hook entry (current-buffer))
       ;; Default header rendering
       (lexdb-ui--render-headword entry)
       ;; Variant spellings (e.g., "also hi-vis")
@@ -2785,7 +2786,10 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
     (when (memq 'collocations caps)
       (let ((colls (or (lexdb-meta-get (lexdb-entry-metadata entry) ns "collocations-cache")
                        (when (lexdb-adapter-collocations-fn adapter)
-                         (funcall (lexdb-adapter-collocations-fn adapter) entry-id))))
+                         (lexdb--call-with-adapter
+                          adapter
+                          (lexdb-adapter-collocations-fn adapter)
+                          entry-id))))
             (popup-colls (lexdb-meta-get (lexdb-entry-metadata entry) ns "popup_collocations")))
         (let ((content ""))
           (when colls
@@ -3456,8 +3460,10 @@ adapter-specific template from `lexdb-ui-adapter-templates'."
   "Render list of ENTRIES using ADAPTER."
   ;; Prefetch data if adapter supports it
   (when (lexdb-adapter-prefetch-fn adapter)
-    (funcall (lexdb-adapter-prefetch-fn adapter)
-             (mapcar #'lexdb-entry-id entries)))
+    (lexdb--call-with-adapter
+     adapter
+     (lexdb-adapter-prefetch-fn adapter)
+     (mapcar #'lexdb-entry-id entries)))
   ;; Render each entry
   (dolist (entry entries)
     (lexdb-ui-render-entry entry adapter)))
@@ -3921,7 +3927,7 @@ If NO-LEMMA-HINT is nil and no entries found, offer lemma suggestion."
           (unless no-lemma-hint
             (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
               (when-let* ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
-                (let ((lemma (funcall lemma-fn word))
+                (let ((lemma (lexdb--call-with-adapter adapter lemma-fn word))
                       (jump-adapter (lexdb-adapter-id adapter)))
                   (unless (equal lemma (downcase word))
                     (insert "\n\n")

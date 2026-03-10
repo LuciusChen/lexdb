@@ -42,3 +42,13 @@ Use two small mechanisms instead of a larger rewrite:
 
 - The package still keeps some legacy configuration variables for compatibility.
 - A future cleanup may still choose to move more interactive commands into `lexdb-ui.el` if the boundary needs to become stricter.
+
+## Lessons Learned
+
+- Fixing architectural violations at the core layer was not enough; UI code also invoked adapter hooks directly, so the adapter-context change had to cover the full core -> UI -> adapter call chain.
+- A clean byte-compilation result did not guarantee runtime correctness. The missed failures came from real lookup flows: first search after `lexdb-init`, UI-triggered lemma suggestions, and adapter hooks such as collocations and prefetch.
+- Changing dependency direction also changed initialization behavior. Existing user setups that loaded adapters but not `lexdb-ui.el` needed an explicit compatibility path, so lazy UI loading was required.
+- For future boundary refactors, the minimum validation set should include:
+  - search after unified `lexdb-init`;
+  - legacy `lexdb-*-register` setup;
+  - UI-driven follow-up lookups and adapter hook paths.
