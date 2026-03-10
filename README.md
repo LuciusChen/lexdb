@@ -32,7 +32,7 @@ Emacs 词典查询系统，将 MDX 词典转换为 SQLite 数据库，提供快�
 │   └── screenshot1.jpg
 └── scripts/
     ├── lexdb_common.py   # Python 通用模块
-    ├── mdx2db.py         # MDX → SQLite 转换 (LDOCE)
+    ├── mdx2db_ldoce.py   # MDX → SQLite 转换 (LDOCE)
     ├── mdx2db_oald.py    # MDX → SQLite 转换 (OALD)
     ├── mdx2db_ode.py     # MDX → SQLite 转换 (ODE)
     └── extract_html.py   # MDX html 提取工具
@@ -47,13 +47,13 @@ Emacs 词典查询系统，将 MDX 词典转换为 SQLite 数据库，提供快�
 pip install readmdict beautifulsoup4 lxml
 
 # 转换 LDOCE
-python mdx2db.py LDOCE6.mdx
+python scripts/mdx2db_ldoce.py LDOCE6.mdx
 
 # 转换 OALD
-python mdx2db_oald.py OALD4.mdx
+python scripts/mdx2db_oald.py OALD4.mdx
 
 # 提取音频（可选）
-python mdx2db.py LDOCE6.mdx --extract-audio
+python scripts/mdx2db_ldoce.py LDOCE6.mdx --extract-audio
 ```
 
 ### 2. 配置 Emacs
@@ -61,7 +61,10 @@ python mdx2db.py LDOCE6.mdx --extract-audio
 ```elisp
 (add-to-list 'load-path "/path/to/lexdb")
 
-;; 加载适配器（自动加载 lexdb 和 lexdb-ui）
+;; 加载核心和 UI
+(require 'lexdb-ui)
+
+;; 加载适配器
 (require 'lexdb-ldoce)
 (require 'lexdb-oald)
 (require 'lexdb-ode)
@@ -110,9 +113,9 @@ python mdx2db.py LDOCE6.mdx --extract-audio
 
 | 词典 | 转换脚本 | 说明 |
 |------|----------|------|
-| LDOCE 6 | mdx2db.py | 朗文当代英语词典第6版，学习型词典，词频标注、搭配丰富 |
-| OALD 4 | mdx2db_oald.py | 牛津高阶英汉双解词典第4版，英汉双解 |
-| ODE | mdx2db_ode.py | 牛津英语词典在线版，数据来自 [Oxford Dictionaries Premium](https://premium.oxforddictionaries.com/)（现需付费），含词源信息 |
+| LDOCE 6 | scripts/mdx2db_ldoce.py | 朗文当代英语词典第6版，学习型词典，词频标注、搭配丰富 |
+| OALD 4 | scripts/mdx2db_oald.py | 牛津高阶英汉双解词典第4版，英汉双解 |
+| ODE | scripts/mdx2db_ode.py | 牛津英语词典在线版，数据来自 [Oxford Dictionaries Premium](https://premium.oxforddictionaries.com/)（现需付费），含词源信息 |
 
 ## 下载
 
@@ -133,7 +136,7 @@ python mdx2db.py LDOCE6.mdx --extract-audio
 - lxml
 
 **Emacs:**
-- Emacs 27+
+- Emacs 29.1+
 - sqlite3 支持
 
 ## License

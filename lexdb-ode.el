@@ -52,11 +52,12 @@
 
 (defun lexdb-ode--ensure-db ()
   "Ensure database connection is open."
-  (lexdb-db-ensure 'ode lexdb-ode-db-file))
+  (lexdb-db-ensure (lexdb--active-adapter-id 'ode)
+                   (lexdb--active-adapter-db-file lexdb-ode-db-file)))
 
 (defun lexdb-ode--close ()
   "Close database connection and clear cache."
-  (lexdb-db-close 'ode))
+  (lexdb-db-close (lexdb--active-adapter-id 'ode)))
 
 ;;;; ============================================================
 ;;;; Schema Queries
@@ -225,7 +226,8 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
 
 (defun lexdb-ode--get-phrases (entry-id)
   "Get phrases for ENTRY-ID."
-  (or (lexdb-db-cache-get 'ode (cons entry-id 'phrases))
+  (let ((adapter-id (lexdb--active-adapter-id 'ode)))
+    (or (lexdb-db-cache-get adapter-id (cons entry-id 'phrases))
       (let* ((db (lexdb-ode--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -243,11 +245,12 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
                                   (json-parse-string value :object-type 'alist)
                                 (error nil)))
                              (t nil)))))))
-        (lexdb-db-cache-put 'ode (cons entry-id 'phrases) phrases))))
+        (lexdb-db-cache-put adapter-id (cons entry-id 'phrases) phrases)))))
 
 (defun lexdb-ode--get-origin (entry-id)
   "Get etymology/origin for ENTRY-ID."
-  (or (lexdb-db-cache-get 'ode (cons entry-id 'origin))
+  (let ((adapter-id (lexdb--active-adapter-id 'ode)))
+    (or (lexdb-db-cache-get adapter-id (cons entry-id 'origin))
       (let* ((db (lexdb-ode--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -265,7 +268,7 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
                                  (json-parse-string value :object-type 'alist)
                                (error nil)))
                             (t value)))))))
-        (lexdb-db-cache-put 'ode (cons entry-id 'origin) origin))))
+        (lexdb-db-cache-put adapter-id (cons entry-id 'origin) origin)))))
 
 ;;;; ============================================================
 ;;;; Lemmatization
@@ -282,14 +285,13 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
 (defun lexdb-ode--register-from-config (config)
   "Register ODE adapter from CONFIG plist.
 Called by `lexdb-init' for unified configuration."
-  (let ((id (plist-get config :id))
-        (name (or (plist-get config :name)
-                  "Oxford Dictionary of English"))
-        (db-file (plist-get config :db-file)))
+  (let* ((id (plist-get config :id))
+         (name (or (plist-get config :name)
+                   "Oxford Dictionary of English"))
+         (db-file (plist-get config :db-file))
+         (expanded-db-file (and db-file (expand-file-name db-file))))
     (unless db-file
       (error "ODE config missing :db-file"))
-    ;; Set legacy variable for compatibility
-    (setq lexdb-ode-db-file (expand-file-name db-file))
     ;; Register adapter
     (lexdb-register-adapter
      (lexdb-adapter-create
@@ -300,7 +302,7 @@ Called by `lexdb-init' for unified configuration."
                       pos grammar register domain examples
                       phrases origin lemmatization
                       audio-uk audio-us)
-      :db-file lexdb-ode-db-file
+      :db-file expanded-db-file
       :lookup-fn #'lexdb-ode--lookup
       :close-fn #'lexdb-ode--close
       :lemma-fn #'lexdb-ode--find-lemma))))

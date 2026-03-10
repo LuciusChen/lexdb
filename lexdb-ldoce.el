@@ -31,6 +31,7 @@
 ;;; Code:
 
 (require 'lexdb)
+(require 'json)
 (require 'sqlite)
 
 ;;;; ============================================================
@@ -64,11 +65,12 @@
 
 (defun lexdb-ldoce--ensure-db ()
   "Ensure database connection is open."
-  (lexdb-db-ensure 'ldoce lexdb-ldoce-db-file))
+  (lexdb-db-ensure (lexdb--active-adapter-id 'ldoce)
+                   (lexdb--active-adapter-db-file lexdb-ldoce-db-file)))
 
 (defun lexdb-ldoce--close ()
   "Close database connection and clear cache."
-  (lexdb-db-close 'ldoce))
+  (lexdb-db-close (lexdb--active-adapter-id 'ldoce)))
 
 ;;;; ============================================================
 ;;;; Schema V2 (New LexDB Schema)
@@ -259,7 +261,8 @@ Uses exact match only, consistent with original dictionary behavior."
 
 (defun lexdb-ldoce--get-collocations (entry-id)
   "Get collocations for ENTRY-ID."
-  (or (lexdb-db-cache-get 'ldoce (cons entry-id 'collocations))
+  (let ((adapter-id (lexdb--active-adapter-id 'ldoce)))
+    (or (lexdb-db-cache-get adapter-id (cons entry-id 'collocations))
       (let* ((db (lexdb-ldoce--ensure-db))
              (rows (sqlite-select db
                     "SELECT id, category, text, gloss FROM collocations WHERE entry_id = ? ORDER BY sort_order"
@@ -273,7 +276,7 @@ Uses exact match only, consistent with original dictionary behavior."
                                    :category cat :text coll :gloss gloss
                                    :examples (mapcar #'car ex-rows)))))
                             rows)))
-        (lexdb-db-cache-put 'ldoce (cons entry-id 'collocations) colls))))
+        (lexdb-db-cache-put adapter-id (cons entry-id 'collocations) colls)))))
 
 (defun lexdb-ldoce--get-relations (entry-id type)
   "Get relations of TYPE for ENTRY-ID."
@@ -301,7 +304,7 @@ Uses exact match only, consistent with original dictionary behavior."
       (dolist (row coll-rows) (push row (gethash (nth 1 row) entry-colls)))
       (maphash (lambda (entry-id rows)
                  (lexdb-db-cache-put
-                  'ldoce
+                  (lexdb--active-adapter-id 'ldoce)
                   (cons entry-id 'collocations)
                   (mapcar (lambda (row)
                             (pcase-let ((`(,coll-id ,_ ,cat ,coll ,gloss) row))
@@ -338,17 +341,15 @@ FREQ is the S1/W1 etc level text."
 (defun lexdb-ldoce--register-from-config (config)
   "Register LDOCE adapter from CONFIG plist.
 Called by `lexdb-init' for unified configuration."
-  (let ((id (plist-get config :id))
-        (name (or (plist-get config :name)
-                  "Longman Dictionary of Contemporary English"))
-        (db-file (plist-get config :db-file))
-        (audio-dir (plist-get config :audio-dir)))
+  (let* ((id (plist-get config :id))
+         (name (or (plist-get config :name)
+                   "Longman Dictionary of Contemporary English"))
+         (db-file (plist-get config :db-file))
+         (audio-dir (plist-get config :audio-dir))
+         (expanded-db-file (and db-file (expand-file-name db-file)))
+         (expanded-audio-dir (and audio-dir (expand-file-name audio-dir))))
     (unless db-file
       (error "LDOCE config missing :db-file"))
-    ;; Set legacy variables for compatibility
-    (setq lexdb-ldoce-db-file (expand-file-name db-file))
-    (when audio-dir
-      (setq lexdb-ldoce-audio-directory (expand-file-name audio-dir)))
     ;; Register adapter
     (lexdb-register-adapter
      (lexdb-adapter-create
@@ -358,8 +359,8 @@ Called by `lexdb-init' for unified configuration."
       :capabilities '(lookup definition pronunciation audio-uk audio-us audio-example
                       pos grammar register hyphenation frequency-band
                       examples collocations phrases synonyms cross-refs origin lemmatization)
-      :db-file lexdb-ldoce-db-file
-      :audio-dir lexdb-ldoce-audio-directory
+      :db-file expanded-db-file
+      :audio-dir expanded-audio-dir
       :lookup-fn #'lexdb-ldoce--lookup
       :close-fn #'lexdb-ldoce--close
       :collocations-fn #'lexdb-ldoce--get-collocations

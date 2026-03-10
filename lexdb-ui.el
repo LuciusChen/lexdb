@@ -95,6 +95,12 @@ Returns adapter-specific template or default template."
 (defvar-local lexdb-ui--current-word nil
   "Current word being displayed.")
 
+(defvar-local lexdb-ui--fold-counter 0
+  "Buffer-local counter for generating unique fold IDs.")
+
+(defvar-local lexdb-ui--pending-sense-num nil
+  "Pending sense number to jump to after rendering.")
+
 (defcustom lexdb-enabled-adapters nil
   "List of adapter IDs to query. If nil, query all registered adapters."
   :type '(repeat symbol)
@@ -235,6 +241,18 @@ Returns alist of (adapter-id . (entries . adapter))."
       (when (and (>= n 1) (<= n (length ids)))
         (lexdb-ui-switch-dict (nth (1- n) ids))))))
 
+(defun lexdb-ui--buffer-for-search (&optional adapter-id)
+  "Return the target display buffer for ADAPTER-ID or current search mode."
+  (if lexdb-multi-dict-mode
+      (lexdb-ui--get-multi-buffer)
+    (lexdb-ui--get-buffer (or adapter-id (lexdb--ensure-adapter)))))
+
+(defun lexdb-ui--set-pending-sense (buffer sense-num)
+  "Record SENSE-NUM as pending in BUFFER."
+  (when buffer
+    (with-current-buffer buffer
+      (setq-local lexdb-ui--pending-sense-num sense-num))))
+
 (defun lexdb-ui--refresh-display ()
   "Refresh the buffer with current dictionary's entries."
   (when (and lexdb-ui--dict-results lexdb-ui--active-dict)
@@ -244,6 +262,7 @@ Returns alist of (adapter-id . (entries . adapter))."
            (inhibit-read-only t)
            (pos (point)))
       (erase-buffer)
+      (setq-local lexdb-ui--fold-counter 0)
       ;; Update header line
       (when (eq lexdb-dict-tab-position 'header)
         (setq header-line-format '(:eval (lexdb-ui--render-dict-tabs))))
@@ -294,7 +313,7 @@ Returns alist of (adapter-id . (entries . adapter))."
 (defface lexdb-variant-face
   '((((background dark))  :foreground "#A0A0A0" :slant italic)
     (((background light)) :foreground "#555555" :slant italic))
-  "Face for variant spellings (e.g., 'also hi-vis')."
+  "Face for variant spellings (e.g., `also hi-vis`)."
   :group 'lexdb)
 
 ;; Lexical information
@@ -404,14 +423,16 @@ Same color as example-highlight-face for consistency."
 (defface lexdb-grammar-pattern-face
   '((((background dark))  :foreground "#B8B8B8" :weight bold)
     (((background light)) :foreground "#333333" :weight bold))
-  "Face for grammar patterns (e.g., 'take somebody/something to/into etc something').
+  "Face for grammar patterns.
+Examples include `take somebody/something to/into etc something'.
 Same color as definition but bold."
   :group 'lexdb)
 
 (defface lexdb-lexunit-face
   '((((background dark))  :foreground "#B8B8B8" :weight bold)
     (((background light)) :foreground "#333333" :weight bold))
-  "Face for lexunit phrases (e.g., 'call a doctor/the police').
+  "Face for lexunit phrases.
+Examples include `call a doctor/the police'.
 Same color as definition but bold."
   :group 'lexdb)
 
@@ -483,7 +504,7 @@ Uses link-like styling for visual consistency with other clickable elements."
 (defface lexdb-phrasal-verb-headword-face
   '((((background dark))  :foreground "#FFD700" :weight bold)
     (((background light)) :foreground "#B8860B" :weight bold))
-  "Face for phrasal verb headword (e.g., 'call back')."
+  "Face for phrasal verb headword (e.g., `call back`)."
   :group 'lexdb)
 
 (defface lexdb-phrasal-verb-pos-face
@@ -495,7 +516,8 @@ Uses link-like styling for visual consistency with other clickable elements."
 (defface lexdb-phrasal-verb-lexunit-face
   '((((background dark))  :foreground "#B8B8B8" :weight bold)
     (((background light)) :foreground "#333333" :weight bold))
-  "Face for phrasal verb lexical unit (e.g., 'to take away').
+  "Face for phrasal verb lexical unit.
+Examples include `to take away'.
 Same color as definition but bold."
   :group 'lexdb)
 
@@ -509,7 +531,8 @@ Same color as example-highlight-face for consistency."
 (defface lexdb-synonym-descriptive-face
   '((((background dark))  :foreground "#B8B8B8" :weight bold)
     (((background light)) :foreground "#555555" :weight bold))
-  "Face for non-clickable descriptive synonyms (e.g., 'twenty-four-hour period').
+  "Face for non-clickable descriptive synonyms.
+Examples include `twenty-four-hour period'.
 These are typically more general descriptions rather than dictionary entries."
   :group 'lexdb)
 
@@ -631,13 +654,14 @@ Set to nil to disable translation indicators."
 (defface lexdb-origin-date-face
   '((((background dark))  :foreground "#87CEEB")
     (((background light)) :foreground "#4169E1"))
-  "Face for date/era in word origin (e.g., 'Early 17th century')."
+  "Face for date/era in word origin (e.g., `Early 17th century`)."
   :group 'lexdb)
 
 (defface lexdb-origin-etym-face
   '((((background dark))  :foreground "#DDA0DD" :slant italic)
     (((background light)) :foreground "#8B008B" :slant italic))
-  "Face for etymological words in origin (e.g., 'indicat-', 'indicare')."
+  "Face for etymological words in origin.
+Examples include `indicat-' and `indicare'."
   :group 'lexdb)
 
 ;; UI elements
@@ -695,7 +719,7 @@ Returns t if indicator was inserted, nil otherwise."
 
 (defun lexdb-ui--render-idiom-example (ex &optional indent)
   "Render idiom example EX with optional INDENT prefix.
-EX should be an alist with 'text, 'text_zh, and optionally 'label keys."
+EX should be an alist with `text', `text_zh', and optional `label' keys."
   (let ((ex-text (alist-get 'text ex))
         (ex-zh (alist-get 'text_zh ex))
         (ex-label (alist-get 'label ex))
@@ -750,9 +774,9 @@ Format markers:
 (defun lexdb-ui--insert-formatted-origin (text &optional adapter-id)
   "Insert origin TEXT with format markers for ODE etymology.
 Format markers:
-  <<date>>...<</date>> - date/era (e.g., 'Early 17th century')
-  <<etym>>...<</etym>> - etymological words (e.g., 'indicat-', 'indicare')
-  <<link:TARGET>>...<</link>> - cross-reference links (e.g., 'Latin')
+  <<date>>...<</date>> - date/era (e.g., `Early 17th century')
+  <<etym>>...<</etym>> - etymological words (e.g., `indicat-', `indicare')
+  <<link:TARGET>>...<</link>> - cross-reference links (e.g., `Latin')
 If ADAPTER-ID is provided, links will jump within the same dictionary."
   (when (and text (not (string-empty-p text)))
     (let ((start 0)
@@ -862,33 +886,6 @@ If local file doesn't exist and PATH can be converted to URL, play online."
 
 ;;;; ============================================================
 ;;;; Foldable Sections
-;;;; ============================================================
-
-(defun lexdb-ui--toggle-section (section-id)
-  "Toggle visibility of SECTION-ID."
-  (dolist (ov (overlays-in (point-min) (point-max)))
-    (when (equal (overlay-get ov 'lexdb-section) section-id)
-      (overlay-put ov 'invisible (not (overlay-get ov 'invisible))))))
-
-(defun lexdb-ui--insert-foldable (header content &optional initially-hidden)
-  "Insert a foldable section with HEADER button and CONTENT.
-If INITIALLY-HIDDEN is non-nil, content starts collapsed."
-  (let ((section-id (format "lexdb-fold-%d" (random 100000))))
-    (insert-text-button header
-                        'face 'lexdb-fold-header-face
-                        'action (lambda (_) (lexdb-ui--toggle-section section-id))
-                        'help-echo "Click to expand/collapse")
-    (insert "\n")
-    (let ((start (point)))
-      (insert content)
-      (unless (eq (char-before) ?\n) (insert "\n"))
-      (let ((ov (make-overlay start (point))))
-        (overlay-put ov 'lexdb-section section-id)
-        (overlay-put ov 'invisible initially-hidden)
-        (overlay-put ov 'evaporate t)))))
-
-;;;; ============================================================
-;;;; Tab Bar Component
 ;;;; ============================================================
 
 (defun lexdb-ui--switch-tab (tab-group tab-id)
@@ -1023,15 +1020,11 @@ Markers: <<hw>>...<</hw>> for highlighted words,
               (insert (propertize (substring text pos next-marker) 'face base-face)))
             (setq pos next-marker))))))))
 
-(defvar lexdb-ui--fold-counter 0
-  "Counter for generating unique fold IDs.")
-
 (defun lexdb-ui--insert-foldable (title content-fn &optional initially-collapsed)
   "Insert a foldable section with TITLE.
 CONTENT-FN is a function that inserts the content.
 If INITIALLY-COLLAPSED is non-nil, start collapsed."
-  (let* ((fold-id (cl-incf lexdb-ui--fold-counter))
-         (title-start (point)))
+  (let ((fold-id (cl-incf lexdb-ui--fold-counter)))
     ;; Insert title with indicator
     (let ((indicator-start (point)))
       (insert "  ")  ; Placeholder for indicator
@@ -1082,7 +1075,7 @@ If INITIALLY-COLLAPSED is non-nil, start collapsed."
 
 (defun lexdb-ui--number-to-superscript (str)
   "Convert leading/trailing numbers in STR to superscript Unicode characters.
-E.g., 'mother1' -> 'mother¹', 'swing2' -> 'swing²', '1(5)' -> '¹(5)'."
+Examples: `mother1' -> `mother¹', `swing2' -> `swing²', `1(5)' -> `¹(5)'."
   (let ((superscripts '((?0 . ?⁰) (?1 . ?¹) (?2 . ?²) (?3 . ?³) (?4 . ?⁴)
                         (?5 . ?⁵) (?6 . ?⁶) (?7 . ?⁷) (?8 . ?⁸) (?9 . ?⁹))))
     (cond
@@ -1108,7 +1101,7 @@ E.g., 'mother1' -> 'mother¹', 'swing2' -> 'swing²', '1(5)' -> '¹(5)'."
 (defun lexdb-ui--normalize-search-word (str)
   "Normalize STR for dictionary lookup.
 Removes superscript numbers, regular numbers, and spaces.
-E.g., 'end¹' -> 'end', 'better³ 3' -> 'better'."
+Examples: `end¹' -> `end', `better³ 3' -> `better'."
   (when str
     ;; Remove all superscript numbers (anywhere in string)
     (let ((result (replace-regexp-in-string "[⁰¹²³⁴⁵⁶⁷⁸⁹]+" "" str)))
@@ -1128,8 +1121,8 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
     (when (lexdb--non-empty-string-p formatted)
       (insert (propertize formatted 'face 'lexdb-headword-face)))))
 
-(defun lexdb-ui--render-pronunciations (entry adapter)
-  "Render pronunciations for ENTRY using ADAPTER."
+(defun lexdb-ui--render-pronunciations (entry _adapter)
+  "Render pronunciations for ENTRY."
   (let ((prons (lexdb-entry-pronunciations entry))
         (uk-ipa nil)
         (us-ipa nil))
@@ -1226,7 +1219,8 @@ Supports both local audio (with audio-dir) and online audio (path only)."
     (when has-audio (insert "\n"))))
 
 (defun lexdb-ui--render-inflections (entry adapter)
-  "Render inflections (past tense, plural, comparative/superlative, etc.) for ENTRY."
+  "Render inflections for ENTRY.
+This includes tense, plural, and comparative/superlative forms."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (adapter-id (lexdb-adapter-id adapter))
          (meta (lexdb-entry-metadata entry))
@@ -1277,8 +1271,8 @@ Supports both local audio (with audio-dir) and online audio (path only)."
 ;;;; Sense Rendering Helper Functions
 ;;;; ============================================================
 
-(defun lexdb-ui--render-sense-subsenses (sense adapter entry caps audio-dir ns)
-  "Render subsenses for SENSE using ADAPTER.
+(defun lexdb-ui--render-sense-subsenses (sense _adapter entry caps audio-dir ns)
+  "Render subsenses for SENSE.
 ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
   (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))
     (when subsenses
@@ -1424,7 +1418,8 @@ ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
                   (lexdb-ui--insert-tab-bar (nreverse sub-tabs) tab-group))))))))))
 
 (defun lexdb-ui--render-sense-examples (sense adapter caps audio-dir ns position is-subsense)
-  "Render examples for SENSE at given POSITION (0=before, 1=after grammar patterns).
+  "Render examples for SENSE at POSITION.
+POSITION is 0 before grammar patterns and 1 after grammar patterns.
 ADAPTER, CAPS, AUDIO-DIR, NS, IS-SUBSENSE are from parent context."
   (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))
     (unless subsenses
@@ -1502,7 +1497,7 @@ AUDIO-DIR is used for audio playback."
                   (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                   (insert "\n"))))))))))
 
-(defun lexdb-ui--render-sense-lexunits (entry sense adapter audio-dir ns sense-num-str)
+(defun lexdb-ui--render-sense-lexunits (entry sense _adapter audio-dir ns sense-num-str)
   "Render lexunits for SENSE in ENTRY.
 ADAPTER, AUDIO-DIR, NS, SENSE-NUM-STR are from parent context."
   (when entry
@@ -2139,10 +2134,16 @@ No regex matching needed - data is pre-parsed."
 
 (defun lexdb-search-and-goto-sense (word &optional sense-num adapter-id)
   "Search for WORD and optionally scroll to SENSE-NUM.
-If ADAPTER-ID is provided, search within that dictionary only (intra-dictionary jump).
+If ADAPTER-ID is provided, search within that dictionary only.
 In multi-dict mode, updates current buffer and switches to the target dict tab.
 Otherwise, fall back to global search."
-  (setq lexdb-ui--pending-sense-num sense-num)
+  (lexdb-ui--set-pending-sense
+   (if (and adapter-id
+            lexdb-multi-dict-mode
+            (eq (current-buffer) (lexdb-ui--get-multi-buffer)))
+       (current-buffer)
+     (lexdb-ui--buffer-for-search adapter-id))
+   sense-num)
   (if adapter-id
       ;; Intra-dictionary jump
       (let* ((adapter (lexdb-get-adapter adapter-id))
@@ -2182,19 +2183,7 @@ Otherwise, fall back to global search."
     (setq lexdb-ui--active-dict adapter-id)
     ;; Refresh display
     (lexdb-ui--refresh-display)
-    ;; Handle pending sense jump
-    (when lexdb-ui--pending-sense-num
-      (let ((sense-num lexdb-ui--pending-sense-num))
-        (setq lexdb-ui--pending-sense-num nil)
-        (goto-char (point-min))
-        (when (re-search-forward
-               (concat "^[[:space:]]*" (regexp-quote sense-num) " ")
-               nil t)
-          (beginning-of-line)
-          (recenter))))))
-
-(defvar lexdb-ui--pending-sense-num nil
-  "Pending sense number to jump to after search.")
+    (lexdb-ui--goto-pending-sense)))
 
 (defun lexdb-ui--goto-pending-sense ()
   "Jump to pending sense number if set. Call this after rendering."
@@ -2459,7 +2448,7 @@ ADAPTER-ID is used for intra-dictionary jumps."
 
 (defun lexdb-ui--build-ode-phrases-content (phrases)
   "Build content string for ODE PHRASES tab.
-PHRASES is a list of alists with 'phrase', 'definition', and 'examples' keys."
+PHRASES is a list of alists with `phrase', `definition', and `examples' keys."
   (with-temp-buffer
     (let ((phrase-list (if (vectorp phrases) (append phrases nil) phrases)))
       (dolist (phrase phrase-list)
@@ -3115,7 +3104,8 @@ ADAPTER-ID is used for crossref navigation."
   (lexdb-ui--render-synonyms-and-crossrefs entry adapter))
 
 (defun lexdb-ui--slot-runons (entry adapter)
-  "Slot: Render run-on entries (derived words like 'relevantly adverb')."
+  "Slot: Render run-on entries.
+Examples include derived forms such as `relevantly adverb'."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (runons (lexdb-meta-get (lexdb-entry-metadata entry) ns "runons")))
     (when (and runons (> (length runons) 0))
@@ -3427,7 +3417,7 @@ ADAPTER-ID is used for crossref navigation."
           (overlay-put ov 'lexdb-ode-origin t))))))
 
 (defun lexdb-ui--slot-ode-phrases-origin (entry adapter)
-  "Slot: Render ODE Phrases, Phrasal Verbs, Derivatives, Usage, and Origin sections."
+  "Slot: Render ODE phrases, phrasal verbs, derivatives, usage, and origin."
   (when (eq (lexdb-adapter-id adapter) 'ode)
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
            (phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases"))
@@ -3509,8 +3499,7 @@ The translation disappears on the next command."
   ;; Find translation at current line
   (let ((found (lexdb-ui--find-translation-at-point)))
     (if found
-        (let* ((pos (car found))
-               (translation (cdr found))
+        (let* ((translation (cdr found))
                (ov (make-overlay (line-end-position) (line-end-position))))
           (overlay-put ov 'after-string
                        (propertize (concat "\n    " translation)
@@ -3900,6 +3889,7 @@ Dictionary switching (multi-dict mode):
       (let ((inhibit-read-only t))
         (erase-buffer)
         (lexdb-mode)
+        (setq-local lexdb-ui--fold-counter 0)
         ;; Store state
         (setq lexdb-ui--dict-results results)
         (setq lexdb-ui--current-word word)
@@ -3909,18 +3899,19 @@ Dictionary switching (multi-dict mode):
           (setq header-line-format '(:eval (lexdb-ui--render-dict-tabs))))
         ;; Render initial content
         (lexdb-ui--refresh-display)
-        (goto-char (point-min))))
+        (goto-char (point-min))
+        (lexdb-ui--goto-pending-sense)))
     (pop-to-buffer buf)))
 
 (defun lexdb-ui-display (word entries adapter &optional no-lemma-hint)
   "Display ENTRIES for WORD using ADAPTER.
 If NO-LEMMA-HINT is nil and no entries found, offer lemma suggestion."
-  (let ((buf (lexdb-ui--get-buffer (lexdb-adapter-id adapter)))
-        (pending-sense lexdb-ui--pending-sense-num))
+  (let ((buf (lexdb-ui--get-buffer (lexdb-adapter-id adapter))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
         (lexdb-mode)
+        (setq-local lexdb-ui--fold-counter 0)
         (if entries
             (lexdb-ui-render-entries entries adapter)
           ;; No entries found
@@ -3941,22 +3932,15 @@ If NO-LEMMA-HINT is nil and no entries found, offer lemma suggestion."
                                         'face 'lexdb-button-face
                                         'action (lambda (_)
                                                   (lexdb-search-and-goto-sense lemma nil jump-adapter)))))))))
-        (goto-char (point-min))))
+        (goto-char (point-min))
+        (lexdb-ui--goto-pending-sense)))
     ;; Display and select the buffer
-    (pop-to-buffer buf)
-    ;; Now jump to sense if pending
-    (when pending-sense
-      (setq lexdb-ui--pending-sense-num nil)
-      (goto-char (point-min))
-      (let ((found nil))
-        ;; Pattern: "N " at beginning of line or with leading spaces
-        (when (re-search-forward
-               (concat "^[[:space:]]*" (regexp-quote pending-sense) " ")
-               nil t)
-          (setq found t))
-        (when found
-          (beginning-of-line)
-          (recenter))))))
+    (pop-to-buffer buf)))
+
+(lexdb-register-ui-handlers
+ :display-entry #'lexdb-ui-display
+ :display-multi #'lexdb-ui-display-multi
+ :play-audio #'lexdb-ui--play-audio)
 
 (provide 'lexdb-ui)
 ;;; lexdb-ui.el ends here

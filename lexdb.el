@@ -33,6 +33,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
 
 ;;;; ============================================================
 ;;;; Customization
@@ -53,6 +54,12 @@ Set this to the ID of your preferred dictionary (e.g., \\='ldoce)."
   "Command to play audio files.
 mpv is recommended as it supports both local files and URLs."
   :type 'string
+  :group 'lexdb)
+
+(defcustom lexdb-multi-dict-mode t
+  "If non-nil, search all dictionaries and show with tabs.
+If nil, search only the current/default dictionary."
+  :type 'boolean
   :group 'lexdb)
 
 (defcustom lexdb-dictionaries nil
@@ -237,6 +244,9 @@ Each group is (GROUP-NAME . ((CAP-SYMBOL . DESCRIPTION) ...)).")
 
 (defvar lexdb--query-caches (make-hash-table :test 'eq)
   "Hash table of query caches keyed by adapter ID.")
+
+(defvar lexdb--active-adapter nil
+  "Adapter currently executing an adapter callback.")
 
 (defun lexdb-db-ensure (adapter-id db-file)
   "Ensure database connection for ADAPTER-ID using DB-FILE.
@@ -490,13 +500,13 @@ Uses fragment storage for clean rendering: prefix + clickable + suffix."
   ;; Fragment fields for rendering
   (prefix nil
           :type (or string null)
-          :documentation "Non-clickable prefix (e.g., 'see THESAURUS at ')")
+          :documentation "Non-clickable prefix (e.g., `see THESAURUS at `)")
   (clickable nil
              :type string
              :documentation "Clickable part (required)")
   (suffix nil
           :type (or string null)
-          :documentation "Non-clickable suffix (e.g., ' (v.)')")
+          :documentation "Non-clickable suffix (e.g., ` (v.)`)")
   ;; Navigation fields
   (target-word nil
                :type (or string null)
@@ -623,6 +633,66 @@ Does not mutate original metadata."
 (defvar lexdb-current-adapter nil
   "Currently active adapter ID.")
 
+(defvar lexdb-display-entry-function nil
+  "Function used to display a single dictionary result buffer.")
+
+(defvar lexdb-display-multi-function nil
+  "Function used to display multi-dictionary search results.")
+
+(defvar lexdb-play-audio-function nil
+  "Function used to play audio from the UI layer.")
+
+(defun lexdb-register-ui-handlers (&rest plist)
+  "Register UI callback functions from PLIST.
+Supported keys are `:display-entry', `:display-multi', and `:play-audio'."
+  (setq lexdb-display-entry-function
+        (plist-get plist :display-entry)
+        lexdb-display-multi-function
+        (plist-get plist :display-multi)
+        lexdb-play-audio-function
+        (plist-get plist :play-audio)))
+
+(defun lexdb--call-with-adapter (adapter fn &rest args)
+  "Call FN with ARGS while binding ADAPTER as the active adapter."
+  (let ((lexdb--active-adapter adapter))
+    (apply fn args)))
+
+(defun lexdb--active-adapter-id (&optional fallback-id)
+  "Return the active adapter ID, or FALLBACK-ID when no adapter is bound."
+  (or (and lexdb--active-adapter
+           (lexdb-adapter-id lexdb--active-adapter))
+      fallback-id))
+
+(defun lexdb--active-adapter-db-file (&optional fallback-file)
+  "Return the active adapter DB file, or FALLBACK-FILE when not bound."
+  (or (and lexdb--active-adapter
+           (lexdb-adapter-db-file lexdb--active-adapter))
+      fallback-file))
+
+(defun lexdb--active-adapter-audio-dir (&optional fallback-dir)
+  "Return the active adapter audio dir, or FALLBACK-DIR when not bound."
+  (or (and lexdb--active-adapter
+           (lexdb-adapter-audio-dir lexdb--active-adapter))
+      fallback-dir))
+
+(defun lexdb--display-entry (word entries adapter &optional no-lemma-hint)
+  "Display WORD ENTRIES for ADAPTER, optionally skipping lemma hints."
+  (unless (functionp lexdb-display-entry-function)
+    (user-error "No lexdb UI registered. Load `lexdb-ui' before searching"))
+  (funcall lexdb-display-entry-function word entries adapter no-lemma-hint))
+
+(defun lexdb--display-multi (word)
+  "Display WORD across all enabled dictionaries."
+  (unless (functionp lexdb-display-multi-function)
+    (user-error "No lexdb UI registered. Load `lexdb-ui' before searching"))
+  (funcall lexdb-display-multi-function word))
+
+(defun lexdb--play-audio (path &optional audio-dir)
+  "Play PATH using AUDIO-DIR through the registered UI audio handler."
+  (unless (functionp lexdb-play-audio-function)
+    (user-error "No lexdb UI registered. Load `lexdb-ui' before playing audio"))
+  (funcall lexdb-play-audio-function path audio-dir))
+
 (defun lexdb-register-adapter (adapter)
   "Register ADAPTER in the global registry."
   (unless (lexdb-adapter-p adapter)
@@ -638,7 +708,7 @@ Does not mutate original metadata."
   "Unregister adapter with ID."
   (when-let* ((adapter (gethash id lexdb-adapters)))
     (when (lexdb-adapter-close-fn adapter)
-      (funcall (lexdb-adapter-close-fn adapter)))
+      (lexdb--call-with-adapter adapter (lexdb-adapter-close-fn adapter)))
     (remhash id lexdb-adapters)))
 
 (defun lexdb-get-adapter (id)
@@ -674,7 +744,7 @@ Returns list of lexdb-entry structs."
          (adapter (lexdb-get-adapter id)))
     (unless adapter
       (error "No adapter found: %s" id))
-    (funcall (lexdb-adapter-lookup-fn adapter) word)))
+    (lexdb--call-with-adapter adapter (lexdb-adapter-lookup-fn adapter) word)))
 
 (defun lexdb-get-pronunciations (entry-id &optional adapter-id)
   "Get pronunciations for ENTRY-ID."
@@ -683,7 +753,9 @@ Returns list of lexdb-entry structs."
     (when (and adapter
                (lexdb-adapter-has-capability-p adapter 'pronunciation)
                (lexdb-adapter-pronunciations-fn adapter))
-      (funcall (lexdb-adapter-pronunciations-fn adapter) entry-id))))
+      (lexdb--call-with-adapter adapter
+                                (lexdb-adapter-pronunciations-fn adapter)
+                                entry-id))))
 
 (defun lexdb-get-collocations (entry-id &optional adapter-id)
   "Get collocations for ENTRY-ID."
@@ -692,14 +764,18 @@ Returns list of lexdb-entry structs."
     (when (and adapter
                (lexdb-adapter-has-capability-p adapter 'collocations)
                (lexdb-adapter-collocations-fn adapter))
-      (funcall (lexdb-adapter-collocations-fn adapter) entry-id))))
+      (lexdb--call-with-adapter adapter
+                                (lexdb-adapter-collocations-fn adapter)
+                                entry-id))))
 
 (defun lexdb-get-relations (entry-id type &optional adapter-id)
   "Get relations of TYPE for ENTRY-ID."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
     (when (and adapter (lexdb-adapter-relations-fn adapter))
-      (funcall (lexdb-adapter-relations-fn adapter) entry-id type))))
+      (lexdb--call-with-adapter adapter
+                                (lexdb-adapter-relations-fn adapter)
+                                entry-id type))))
 
 (defun lexdb-find-lemma (word &optional adapter-id)
   "Find lemma/base form of WORD."
@@ -708,14 +784,16 @@ Returns list of lexdb-entry structs."
     (when (and adapter
                (lexdb-adapter-has-capability-p adapter 'lemmatization)
                (lexdb-adapter-lemma-fn adapter))
-      (funcall (lexdb-adapter-lemma-fn adapter) word))))
+      (lexdb--call-with-adapter adapter (lexdb-adapter-lemma-fn adapter) word))))
 
 (defun lexdb-prefetch (entry-ids &optional adapter-id)
   "Prefetch data for ENTRY-IDS to avoid N+1 queries."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
     (when (and adapter (lexdb-adapter-prefetch-fn adapter))
-      (funcall (lexdb-adapter-prefetch-fn adapter) entry-ids))))
+      (lexdb--call-with-adapter adapter
+                                (lexdb-adapter-prefetch-fn adapter)
+                                entry-ids))))
 
 ;;;; ============================================================
 ;;;; Utility Functions
@@ -807,10 +885,9 @@ Returns list of lexdb-entry structs."
 (defun lexdb--search-without-history (word)
   "Search for WORD without adding to history.
 Respects `lexdb-multi-dict-mode' setting."
-  (require 'lexdb-ui)
   (if lexdb-multi-dict-mode
       ;; Multi-dictionary mode: use the same buffer, update all dicts
-      (lexdb-ui-display-multi word)
+      (lexdb--display-multi word)
     ;; Single dictionary mode
     (let* ((adapter-id (lexdb--ensure-adapter))
            (adapter (lexdb-get-adapter adapter-id))
@@ -820,7 +897,7 @@ Respects `lexdb-multi-dict-mode' setting."
           (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
             (unless (equal lemma (downcase word))
               (setq entries (lexdb-lookup lemma adapter-id))))))
-      (lexdb-ui-display word entries adapter))))
+      (lexdb--display-entry word entries adapter))))
 
 (defun lexdb--ensure-adapter ()
   "Ensure an adapter is selected, return its ID."
@@ -839,15 +916,6 @@ Respects `lexdb-multi-dict-mode' setting."
 ;;;; Interactive Commands
 ;;;; ============================================================
 
-(declare-function lexdb-ui-display "lexdb-ui")
-(declare-function lexdb-ui-display-multi "lexdb-ui")
-
-(defcustom lexdb-multi-dict-mode t
-  "If non-nil, search all dictionaries and show with tabs.
-If nil, search only the current/default dictionary."
-  :type 'boolean
-  :group 'lexdb)
-
 ;;;###autoload
 (defun lexdb-search (word)
   "Search for WORD in dictionaries.
@@ -858,10 +926,9 @@ Otherwise, search only the current/default dictionary."
     (user-error "No word specified"))
   (setq lexdb--last-word word)
   (lexdb--history-push word)
-  (require 'lexdb-ui)
   (if lexdb-multi-dict-mode
       ;; Multi-dictionary mode
-      (lexdb-ui-display-multi word)
+      (lexdb--display-multi word)
     ;; Single dictionary mode
     (let* ((adapter-id (lexdb--ensure-adapter))
            (adapter (lexdb-get-adapter adapter-id))
@@ -874,7 +941,7 @@ Otherwise, search only the current/default dictionary."
               (setq entries (lexdb-lookup lemma adapter-id))
               (when entries
                 (setq word lemma))))))
-      (lexdb-ui-display word entries adapter))))
+      (lexdb--display-entry word entries adapter))))
 
 ;;;###autoload
 (defun lexdb-search-single (word)
@@ -889,7 +956,6 @@ Otherwise, search only the current/default dictionary."
     (user-error "No word specified"))
   (setq lexdb--last-word word)
   (lexdb--history-push word)
-  (require 'lexdb-ui)
   (let* ((adapter-id (lexdb--ensure-adapter))
          (adapter (lexdb-get-adapter adapter-id))
          (entries (lexdb-lookup word adapter-id)))
@@ -900,7 +966,7 @@ Otherwise, search only the current/default dictionary."
             (setq entries (lexdb-lookup lemma adapter-id))
             (when entries
               (setq word lemma))))))
-    (lexdb-ui-display word entries adapter)))
+    (lexdb--display-entry word entries adapter)))
 
 ;;;###autoload
 (defun lexdb-search-at-point ()
@@ -988,8 +1054,6 @@ Otherwise, search only the current/default dictionary."
 ;;;; Utility Commands
 ;;;; ============================================================
 
-(declare-function lexdb-ui--play-audio "lexdb-ui")
-
 ;;;###autoload
 (defun lexdb-play-pronunciation (&optional variant)
   "Play pronunciation of the last searched word.
@@ -997,7 +1061,6 @@ VARIANT can be \\='uk or \\='us (default: \\='uk)."
   (interactive)
   (unless lexdb--last-word
     (user-error "No word searched yet"))
-  (require 'lexdb-ui)
   (let* ((adapter-id (lexdb--ensure-adapter))
          (adapter (lexdb-get-adapter adapter-id))
          (entries (lexdb-lookup lexdb--last-word adapter-id))
@@ -1009,7 +1072,7 @@ VARIANT can be \\='uk or \\='us (default: \\='uk)."
                 (pron (seq-find (lambda (p) (eq (lexdb-pronunciation-variant p) variant))
                                 prons))
                 (audio (lexdb-pronunciation-audio pron)))
-          (lexdb-ui--play-audio audio (lexdb-adapter-audio-dir adapter))
+          (lexdb--play-audio audio (lexdb-adapter-audio-dir adapter))
         (message "No %s audio for: %s" variant lexdb--last-word)))))
 
 ;;;###autoload

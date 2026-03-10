@@ -62,11 +62,12 @@
 
 (defun lexdb-oald--ensure-db ()
   "Ensure database connection is open."
-  (lexdb-db-ensure 'oald lexdb-oald-db-file))
+  (lexdb-db-ensure (lexdb--active-adapter-id 'oald)
+                   (lexdb--active-adapter-db-file lexdb-oald-db-file)))
 
 (defun lexdb-oald--close ()
   "Close database connection and clear cache."
-  (lexdb-db-close 'oald))
+  (lexdb-db-close (lexdb--active-adapter-id 'oald)))
 
 ;;;; ============================================================
 ;;;; Schema Queries
@@ -213,7 +214,8 @@ Uses exact match and follows @@@LINK= aliases to find target entries."
 
 (defun lexdb-oald--get-idioms (entry-id)
   "Get idioms for ENTRY-ID."
-  (or (lexdb-db-cache-get 'oald (cons entry-id 'idioms))
+  (let ((adapter-id (lexdb--active-adapter-id 'oald)))
+    (or (lexdb-db-cache-get adapter-id (cons entry-id 'idioms))
       (let* ((db (lexdb-oald--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -226,7 +228,7 @@ Uses exact match and follows @@@LINK= aliases to find target entries."
                            (if (equal type "json_compressed")
                                (lexdb-oald--decompress-json value)
                              (json-parse-string value :object-type 'alist)))))))
-        (lexdb-db-cache-put 'oald (cons entry-id 'idioms) idioms))))
+        (lexdb-db-cache-put adapter-id (cons entry-id 'idioms) idioms)))))
 
 ;;;; ============================================================
 ;;;; Lemmatization
@@ -243,14 +245,13 @@ Uses exact match and follows @@@LINK= aliases to find target entries."
 (defun lexdb-oald--register-from-config (config)
   "Register OALD adapter from CONFIG plist.
 Called by `lexdb-init' for unified configuration."
-  (let ((id (plist-get config :id))
-        (name (or (plist-get config :name)
-                  "Oxford Advanced Learner's Dictionary"))
-        (db-file (plist-get config :db-file)))
+  (let* ((id (plist-get config :id))
+         (name (or (plist-get config :name)
+                   "Oxford Advanced Learner's Dictionary"))
+         (db-file (plist-get config :db-file))
+         (expanded-db-file (and db-file (expand-file-name db-file))))
     (unless db-file
       (error "OALD config missing :db-file"))
-    ;; Set legacy variable for compatibility
-    (setq lexdb-oald-db-file (expand-file-name db-file))
     ;; Register adapter
     (lexdb-register-adapter
      (lexdb-adapter-create
@@ -260,7 +261,7 @@ Called by `lexdb-init' for unified configuration."
       :capabilities '(lookup definition pronunciation
                       pos grammar examples idioms lemmatization
                       chinese-definition chinese-example)
-      :db-file lexdb-oald-db-file
+      :db-file expanded-db-file
       :lookup-fn #'lexdb-oald--lookup
       :close-fn #'lexdb-oald--close
       :lemma-fn #'lexdb-oald--find-lemma))))
