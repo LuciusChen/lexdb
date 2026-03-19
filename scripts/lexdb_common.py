@@ -469,20 +469,29 @@ def get_element_text(element, exclude_tags: list = None) -> str:
 
 def extract_zh(element) -> str:
     """
-    Extract Chinese text from <zh> tag.
+    Extract Chinese text from one or more <zh> tags.
 
     Args:
-        element: BeautifulSoup element containing a <zh> child
+        element: BeautifulSoup element containing one or more <zh> children
 
     Returns:
-        Cleaned Chinese text, or empty string if no <zh> found
+        Cleaned Chinese text, or empty string if no <zh> found.
+        When multiple <zh> nodes are present, preserve their order and join
+        them with a Chinese semicolon so usage notes and the main gloss are
+        both retained.
     """
     if not element:
         return ""
-    zh = element.find('zh')
-    if zh:
-        return clean_text(zh.get_text())
-    return ""
+    parts = []
+    for zh in element.find_all('zh'):
+        text = clean_text(zh.get_text())
+        if text and (not parts or parts[-1] != text):
+            parts.append(text)
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return "；".join(parts)
 
 
 # =============================================================================

@@ -117,8 +117,9 @@ def extract_definition_with_format(element):
     for gr in elem_copy.find_all('span', class_='gr'):
         text = clean_text(gr.get_text())
         if text:
-            # Add space after to preserve word boundaries (clean_text normalizes extra spaces)
-            gr.replace_with(f'<<pos>>{text}<</pos>> ')
+            # Add spaces around inline POS markers so forms like
+            # "(usu sing)" don't collapse into "(ususing)".
+            gr.replace_with(f' <<pos>>{text}<</pos>> ')
 
     return clean_text(elem_copy.get_text())
 
@@ -1180,10 +1181,10 @@ def parse_oald4_sense(sense_elem, order=0, sense_number=None):
                     classes = child.get('class', [])
                     if 'pl' in classes:
                         # Mark plural words with <<l>> for blue variant face
-                        plural_parts.append('<<l>>' + child.get_text() + '<</l>>')
+                        plural_parts.append(' <<l>>' + child.get_text() + '<</l>> ')
                     elif 'gr' in classes:
                         # Mark grammar label with <<gram>> for grammar face
-                        plural_parts.append('<<gram>>' + child.get_text() + '<</gram>>')
+                        plural_parts.append(' <<gram>>' + child.get_text() + '<</gram>> ')
 
             if plural_parts:
                 plural_text = ''.join(plural_parts).strip()
