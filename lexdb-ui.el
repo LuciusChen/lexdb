@@ -624,9 +624,25 @@ These are typically more general descriptions rather than dictionary entries."
   "Face for peeked translation text."
   :group 'lexdb)
 
+(defface lexdb-translation-face
+  '((((background dark))  :foreground "#8AA2A8")
+    (((background light)) :foreground "#5F7A80"))
+  "Face for persistently displayed translation text."
+  :group 'lexdb)
+
+(defcustom lexdb-ui-translation-display 'peek
+  "How to display available Chinese translations.
+`peek' shows an indicator and uses `t' to temporarily reveal the translation.
+`below' shows the translation on a new line below the original text.
+`chinese-only' replaces the original text with the translation when available."
+  :type '(choice (const :tag "Peek On Demand" peek)
+                 (const :tag "Show Below" below)
+                 (const :tag "Chinese Only" chinese-only))
+  :group 'lexdb)
+
 (defcustom lexdb-ui-translation-indicator "🌐"
   "Indicator for available translations.
-Set to nil to disable translation indicators."
+Set to nil to disable translation indicators in `peek' mode."
   :type '(choice string (const nil))
   :group 'lexdb)
 
@@ -704,12 +720,44 @@ Examples include `indicat-' and `indicare'."
   "Return non-nil if STR is a non-empty string."
   (and str (stringp str) (not (string-empty-p str))))
 
+(defun lexdb-ui--translation-prefix-visible-p (translation)
+  "Return non-nil if TRANSLATION should be shown as a peek indicator."
+  (and (lexdb-ui--valid-string-p translation)
+       (eq lexdb-ui-translation-display 'peek)
+       lexdb-ui-translation-indicator))
+
+(defun lexdb-ui--translation-replaces-text-p (translation)
+  "Return non-nil if TRANSLATION should replace the original text."
+  (and (lexdb-ui--valid-string-p translation)
+       (eq lexdb-ui-translation-display 'chinese-only)))
+
+(defun lexdb-ui--translation-display-text (text translation)
+  "Return the text that should be displayed for TEXT and TRANSLATION."
+  (if (lexdb-ui--translation-replaces-text-p translation)
+      translation
+    text))
+
+(defun lexdb-ui--insert-translation-text (translation)
+  "Insert TRANSLATION as regular visible text."
+  (when (lexdb-ui--valid-string-p translation)
+    (insert (propertize translation 'face 'lexdb-translation-face))
+    t))
+
+(defun lexdb-ui--insert-translation-line (translation &optional prefix)
+  "Insert TRANSLATION on a line below the current item.
+Optional PREFIX is inserted before the translation text."
+  (when (and (lexdb-ui--valid-string-p translation)
+             (eq lexdb-ui-translation-display 'below))
+    (when prefix (insert prefix))
+    (lexdb-ui--insert-translation-text translation)
+    (insert "\n")
+    t))
+
 (defun lexdb-ui--insert-translation-indicator (translation &optional prefix)
   "Insert translation indicator with TRANSLATION as hover text.
 Optional PREFIX is inserted before the indicator (e.g., \"  \" for indentation).
 Returns t if indicator was inserted, nil otherwise."
-  (when (and (lexdb-ui--valid-string-p translation)
-             lexdb-ui-translation-indicator)
+  (when (lexdb-ui--translation-prefix-visible-p translation)
     (when prefix (insert prefix))
     (insert (propertize lexdb-ui-translation-indicator
                         'face 'lexdb-translation-indicator-face
@@ -725,15 +773,19 @@ EX should be an alist with `text', `text_zh', and optional `label' keys."
         (ex-zh (alist-get 'text_zh ex))
         (ex-label (alist-get 'label ex))
         (indent-str (or indent "    ")))
-    (when (lexdb-ui--valid-string-p ex-text)
+    (when-let* ((display-text (lexdb-ui--translation-display-text ex-text ex-zh))
+                ((lexdb-ui--valid-string-p display-text)))
       ;; Translation indicator or plain indent
       (unless (lexdb-ui--insert-translation-indicator ex-zh "  ")
         (insert indent-str))
       ;; Register label (joc, fig, etc.)
       (when (lexdb-ui--valid-string-p ex-label)
         (insert (propertize ex-label 'face 'lexdb-grammar-face) " "))
-      (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-      (insert "\n"))))
+      (if (lexdb-ui--translation-replaces-text-p ex-zh)
+          (lexdb-ui--insert-translation-text display-text)
+        (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face))
+      (insert "\n")
+      (lexdb-ui--insert-translation-line ex-zh indent-str))))
 
 ;;;; ============================================================
 ;;;; Definition Format Rendering
@@ -1294,14 +1346,8 @@ ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
             (when sub-num
               (insert (propertize sub-num 'face 'lexdb-sense-num-face) " "))
             ;; Translation indicator - after subsense number
-            (when (and (memq 'chinese-definition caps)
-                       (lexdb--non-empty-string-p sub-def-zh)
-                       lexdb-ui-translation-indicator)
-              (insert (propertize lexdb-ui-translation-indicator
-                                  'face 'lexdb-translation-indicator-face
-                                  'lexdb-translation sub-def-zh
-                                  'help-echo "Press t to peek translation")
-                      " "))
+            (when (memq 'chinese-definition caps)
+              (lexdb-ui--insert-translation-indicator sub-def-zh))
             ;; Grammar (e.g., [attrib], [pred])
             (when sub-grammar
               (let ((gram-list (cond ((vectorp sub-grammar) (append sub-grammar nil))
@@ -1320,9 +1366,14 @@ ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
                     (when lvalue
                       (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
             ;; Definition
-            (when sub-def
-              (lexdb-ui--insert-formatted-definition sub-def 'lexdb-definition-face))
+            (when-let* ((display-def (lexdb-ui--translation-display-text sub-def sub-def-zh))
+                        ((lexdb-ui--valid-string-p display-def)))
+              (if (lexdb-ui--translation-replaces-text-p sub-def-zh)
+                  (lexdb-ui--insert-translation-text display-def)
+                (lexdb-ui--insert-formatted-definition sub-def 'lexdb-definition-face)))
             (insert "\n")
+            (when (memq 'chinese-definition caps)
+              (lexdb-ui--insert-translation-line sub-def-zh "    "))
             ;; Examples
             (when sub-examples
               (let ((ex-list (if (vectorp sub-examples) (append sub-examples nil) sub-examples)))
@@ -1330,38 +1381,36 @@ ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
                   (let ((ex-text (cdr (assoc 'text ex)))
                         (ex-zh (cdr (assoc 'text_zh ex)))
                         (ex-audio (cdr (assoc 'audio_path ex))))
-                    (when (and ex-text (not (string-empty-p ex-text)))
+                    (when-let* ((display-text (lexdb-ui--translation-display-text ex-text ex-zh))
+                                ((lexdb-ui--valid-string-p display-text)))
                       (let ((has-audio (and ex-audio (not (string-empty-p ex-audio))))
-                            (has-translation (and (memq 'chinese-example caps)
-                                                  ex-zh (not (string-empty-p ex-zh))
-                                                  lexdb-ui-translation-indicator)))
+                            (show-translation (and (memq 'chinese-example caps)
+                                                   (lexdb-ui--translation-prefix-visible-p ex-zh))))
                         (cond
-                         ((and has-audio has-translation)
+                         ((and has-audio show-translation)
                           (insert (propertize "      🔊"
                                               'face 'lexdb-audio-indicator-face
                                               'lexdb-audio-path ex-audio
                                               'lexdb-audio-dir audio-dir
                                               'help-echo "C-c C-c to play"))
-                          (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                              'face 'lexdb-translation-indicator-face
-                                              'lexdb-translation ex-zh
-                                              'help-echo "Press t to peek translation")))
+                          (lexdb-ui--insert-translation-indicator ex-zh))
                          (has-audio
                           (insert (propertize "      🔊 "
                                               'face 'lexdb-audio-indicator-face
                                               'lexdb-audio-path ex-audio
                                               'lexdb-audio-dir audio-dir
                                               'help-echo "C-c C-c to play")))
-                         (has-translation
+                         (show-translation
                           (insert "      ")
-                          (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                              'face 'lexdb-translation-indicator-face
-                                              'lexdb-translation ex-zh
-                                              'help-echo "Press t to peek translation")))
+                          (lexdb-ui--insert-translation-indicator ex-zh))
                          (t
                           (insert "      "))))
-                      (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-                      (insert "\n"))))))
+                      (if (lexdb-ui--translation-replaces-text-p ex-zh)
+                          (lexdb-ui--insert-translation-text display-text)
+                        (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face))
+                      (insert "\n")
+                      (when (memq 'chinese-example caps)
+                        (lexdb-ui--insert-translation-line ex-zh "      ")))))))
             ;; Subsense tabs: expanded examples and synonyms
             (let ((sub-tabs nil))
               ;; Build expanded examples tab
@@ -1432,40 +1481,39 @@ ADAPTER, CAPS, AUDIO-DIR, NS, IS-SUBSENSE are from parent context."
                  (ex-zh (when (memq 'chinese-example caps)
                           (lexdb-meta-get (lexdb-example-metadata ex) ns "text-zh")))
                  (has-audio (and (memq 'audio-example caps) audio-path (lexdb--non-empty-string-p audio-path)))
-                 (has-translation (and ex-zh (lexdb--non-empty-string-p ex-zh) lexdb-ui-translation-indicator)))
-            (when (and (lexdb--non-empty-string-p ex-text) (= ex-position position))
+                 (show-translation (lexdb-ui--translation-prefix-visible-p ex-zh))
+                 (display-text (lexdb-ui--translation-display-text ex-text ex-zh)))
+            (when (and (lexdb-ui--valid-string-p display-text) (= ex-position position))
               ;; ODE: 2-space for main senses, 4-space for subsenses
               (let ((indent (cond
                              ((and (eq (lexdb-adapter-id adapter) 'ode) is-subsense) "    ")
                              ((eq (lexdb-adapter-id adapter) 'ode) "  ")
                              (t "    "))))
                 (cond
-                 ((and has-audio has-translation)
+                 ((and has-audio show-translation)
                   (insert (propertize (concat (substring indent 0 (- (length indent) 1)) "🔊")
                                       'face 'lexdb-audio-indicator-face
                                       'lexdb-audio-path audio-path
                                       'lexdb-audio-dir audio-dir
                                       'help-echo "C-c C-c to play"))
-                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                      'face 'lexdb-translation-indicator-face
-                                      'lexdb-translation ex-zh
-                                      'help-echo "Press t to peek translation")))
+                  (lexdb-ui--insert-translation-indicator ex-zh))
                  (has-audio
                   (insert (propertize (concat indent "🔊 ")
                                       'face 'lexdb-audio-indicator-face
                                       'lexdb-audio-path audio-path
                                       'lexdb-audio-dir audio-dir
                                       'help-echo "C-c C-c to play")))
-                 (has-translation
+                 (show-translation
                   (insert indent)
-                  (insert (propertize (concat lexdb-ui-translation-indicator " ")
-                                      'face 'lexdb-translation-indicator-face
-                                      'lexdb-translation ex-zh
-                                      'help-echo "Press t to peek translation")))
+                  (lexdb-ui--insert-translation-indicator ex-zh))
                  (t
-                  (insert indent))))
-              (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-              (insert "\n"))))))))
+                  (insert indent)))
+              (if (lexdb-ui--translation-replaces-text-p ex-zh)
+                  (lexdb-ui--insert-translation-text display-text)
+                (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face))
+              (insert "\n")
+              (when (memq 'chinese-example caps)
+                (lexdb-ui--insert-translation-line ex-zh indent))))))))))
 
 (defun lexdb-ui--render-sense-grammar-patterns (sense adapter audio-dir)
   "Render grammar patterns for SENSE using ADAPTER.
@@ -1772,6 +1820,8 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
   (let* ((caps (lexdb-adapter-capabilities adapter))
          (audio-dir (lexdb-adapter-audio-dir adapter))
          (ns (symbol-name (lexdb-adapter-id adapter)))
+         (def-zh (when (memq 'chinese-definition caps)
+                   (lexdb-meta-get (lexdb-sense-metadata sense) ns "definition-zh")))
          (sense-num-str (or (lexdb-sense-number sense) "0"))
          ;; Check if this is a subsense (contains ".") for ODE
          (is-subsense (and (eq (lexdb-adapter-id adapter) 'ode)
@@ -1785,13 +1835,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
         (insert (propertize num 'face 'lexdb-sense-num-face) " ")))
     ;; Translation indicator (🌐) - right after sense number
     (when (memq 'chinese-definition caps)
-      (when-let* ((def-zh (lexdb-meta-get (lexdb-sense-metadata sense) ns "definition-zh")))
-        (when (and (lexdb--non-empty-string-p def-zh) lexdb-ui-translation-indicator)
-          (insert (propertize lexdb-ui-translation-indicator
-                              'face 'lexdb-translation-indicator-face
-                              'lexdb-translation def-zh
-                              'help-echo "Press t to peek translation")
-                  " "))))
+      (lexdb-ui--insert-translation-indicator def-zh))
     ;; Signpost (guide word) - displayed in uppercase with background
     ;; For OALD: fix parentheses spacing (remove spaces around parentheses)
     ;; For ODE: skip signpost if it's a POS keyword (displayed as section header instead)
@@ -1927,8 +1971,11 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
           (insert " "))))
     ;; Definition (English) - this may be just the lexunit for senses with subsenses
     (let ((def (lexdb-sense-definition sense)))
-      (when (lexdb--non-empty-string-p def)
-        (lexdb-ui--insert-formatted-definition def 'lexdb-definition-face)))
+      (when-let* ((display-def (lexdb-ui--translation-display-text def def-zh))
+                  ((lexdb-ui--valid-string-p display-def)))
+        (if (lexdb-ui--translation-replaces-text-p def-zh)
+            (lexdb-ui--insert-translation-text display-def)
+          (lexdb-ui--insert-formatted-definition def 'lexdb-definition-face))))
     ;; SYN/OPP labels after definition (not clickable)
     (let ((labels (lexdb-sense-labels sense)))
       (when labels
@@ -1939,6 +1986,8 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
               (insert " " (propertize (upcase (symbol-name ltype)) 'face 'lexdb-synonym-face)
                       " " (propertize lvalue 'face 'lexdb-synonym-face)))))))
     (insert "\n")
+    (when (memq 'chinese-definition caps)
+      (lexdb-ui--insert-translation-line def-zh (if is-subsense "    " "  ")))
     ;; Cross-references (Cf) on separate line with clickable links
     ;; Format: Cf <<xr:target>>text<</xr>>suffix
     (let ((labels (lexdb-sense-labels sense))
@@ -2630,7 +2679,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
               (let ((labels (if (vectorp labels-raw) (append labels-raw nil) labels-raw))
                     (examples (if (vectorp examples-raw) (append examples-raw nil) examples-raw)))
                 ;; Translation indicator or indent
-                (if (lexdb-ui--valid-string-p definition-zh)
+                (if (lexdb-ui--translation-prefix-visible-p definition-zh)
                     (lexdb-ui--insert-translation-indicator definition-zh)
                   (insert "  "))
                 ;; Sense number and lexunit
@@ -2649,8 +2698,11 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                        ((string= ltype "register")
                         (insert (propertize lvalue 'face 'lexdb-register-face) " "))))))
                 ;; Definition
-                (when definition
-                  (lexdb-ui--insert-formatted-definition definition 'lexdb-definition-face))
+                (when-let* ((display-def (lexdb-ui--translation-display-text definition definition-zh))
+                            ((lexdb-ui--valid-string-p display-def)))
+                  (if (lexdb-ui--translation-replaces-text-p definition-zh)
+                      (lexdb-ui--insert-translation-text display-def)
+                    (lexdb-ui--insert-formatted-definition definition 'lexdb-definition-face)))
                 ;; SYN label AFTER definition
                 (dolist (label labels)
                   (let ((ltype (cdr (assoc 'type label)))
@@ -2665,16 +2717,21 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
                     (when (and lvalue (string= ltype "related"))
                       (insert " " (propertize lvalue 'face 'lexdb-crossref-face)))))
                 (insert "\n")
+                (lexdb-ui--insert-translation-line definition-zh "    ")
                 ;; Examples - handle both string and {text, text_zh} formats
                 (dolist (ex examples)
                   (let ((ex-text (if (stringp ex) ex (alist-get 'text ex)))
                         (ex-zh (unless (stringp ex) (alist-get 'text_zh ex))))
-                    (when (lexdb-ui--valid-string-p ex-text)
+                    (when-let* ((display-text (lexdb-ui--translation-display-text ex-text ex-zh))
+                                ((lexdb-ui--valid-string-p display-text)))
                       (unless (lexdb-ui--insert-translation-indicator ex-zh "  ")
                         (insert "    "))
-                      (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-                      (insert "\n")))))))
-          (insert "\n"))))))
+                      (if (lexdb-ui--translation-replaces-text-p ex-zh)
+                          (lexdb-ui--insert-translation-text display-text)
+                        (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face))
+                      (insert "\n")
+                      (lexdb-ui--insert-translation-line ex-zh "    "))))))
+          (insert "\n")))))))
 
 (defun lexdb-ui--build-collocations-content (collocations)
   "Build content string for COLLOCATIONS tab."
@@ -2924,12 +2981,16 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
         (sub-def-zh (alist-get 'definition_zh subsense))
         (sub-examples (lexdb-ui--ensure-list (alist-get 'examples subsense))))
     ;; Subsense number and definition
-    (when sub-def
+    (when-let* ((display-def (lexdb-ui--translation-display-text sub-def sub-def-zh))
+                ((lexdb-ui--valid-string-p display-def)))
       (unless (lexdb-ui--insert-translation-indicator sub-def-zh)
         (insert "  "))
       (insert (propertize (concat sub-num ". ") 'face 'lexdb-sense-number-face))
-      (lexdb-ui--insert-formatted-definition sub-def 'lexdb-definition-face)
-      (insert "\n"))
+      (if (lexdb-ui--translation-replaces-text-p sub-def-zh)
+          (lexdb-ui--insert-translation-text display-def)
+        (lexdb-ui--insert-formatted-definition sub-def 'lexdb-definition-face))
+      (insert "\n")
+      (lexdb-ui--insert-translation-line sub-def-zh "    "))
     ;; Subsense examples
     (dolist (ex sub-examples)
       (lexdb-ui--render-idiom-example ex))))
@@ -2943,10 +3004,12 @@ ADAPTER-ID is used for crossref jumps."
          (label-list (lexdb-ui--ensure-list (alist-get 'labels idiom)))
          (has-valid-labels (and label-list
                                 (cl-some (lambda (l) (alist-get 'value l)) label-list)))
+         (display-def (lexdb-ui--translation-display-text idiom-def idiom-def-zh))
          (idiom-def-valid (and (lexdb-ui--valid-string-p idiom-def)
                                (string-match-p "[a-zA-Z]" idiom-def))))
     ;; Definition line
-    (when (or has-valid-labels idiom-def-valid)
+    (when (or has-valid-labels
+              (lexdb-ui--valid-string-p display-def))
       (unless (lexdb-ui--insert-translation-indicator idiom-def-zh)
         (insert "  "))
       ;; Labels (fml, infml, etc.)
@@ -2955,9 +3018,13 @@ ADAPTER-ID is used for crossref jumps."
           (when lvalue
             (insert (propertize lvalue 'face 'lexdb-grammar-face) " "))))
       ;; Definition with possible crossref
-      (when idiom-def-valid
-        (lexdb-ui--render-idiom-definition idiom idiom-def adapter-id))
-      (insert "\n"))
+      (cond
+       ((lexdb-ui--translation-replaces-text-p idiom-def-zh)
+        (lexdb-ui--insert-translation-text display-def))
+       (idiom-def-valid
+        (lexdb-ui--render-idiom-definition idiom idiom-def adapter-id)))
+      (insert "\n")
+      (lexdb-ui--insert-translation-line idiom-def-zh "    "))
     ;; Examples
     (dolist (ex idiom-examples)
       (lexdb-ui--render-idiom-example ex))))
@@ -3068,20 +3135,28 @@ ADAPTER-ID is used for crossref navigation."
             (ex-list (lexdb-ui--ensure-list (alist-get 'examples item)))
             (child-list (lexdb-ui--ensure-list (alist-get 'children item))))
         ;; Render the text line with translation indicator
-        (when (lexdb-ui--valid-string-p text)
+        (when-let* ((display-text (lexdb-ui--translation-display-text text text-zh))
+                    ((lexdb-ui--valid-string-p display-text)))
           (unless (lexdb-ui--insert-translation-indicator text-zh indent)
             (insert indent "  "))
-          (lexdb-ui--insert-formatted-definition text 'lexdb-definition-face)
-          (insert "\n"))
+          (if (lexdb-ui--translation-replaces-text-p text-zh)
+              (lexdb-ui--insert-translation-text display-text)
+            (lexdb-ui--insert-formatted-definition text 'lexdb-definition-face))
+          (insert "\n")
+          (lexdb-ui--insert-translation-line text-zh (concat indent "  ")))
         ;; Render examples
         (dolist (ex ex-list)
           (let ((ex-text (alist-get 'text ex))
                 (ex-zh (alist-get 'text_zh ex)))
-            (when (lexdb-ui--valid-string-p ex-text)
+            (when-let* ((display-text (lexdb-ui--translation-display-text ex-text ex-zh))
+                        ((lexdb-ui--valid-string-p display-text)))
               (unless (lexdb-ui--insert-translation-indicator ex-zh (concat indent "  "))
                 (insert indent "    "))
-              (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
-              (insert "\n"))))
+              (if (lexdb-ui--translation-replaces-text-p ex-zh)
+                  (lexdb-ui--insert-translation-text display-text)
+                (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face))
+              (insert "\n")
+              (lexdb-ui--insert-translation-line ex-zh (concat indent "    ")))))
         ;; Recursively render children
         (when child-list
           (lexdb-ui--render-usage-items child-list (1+ indent-level)))))))

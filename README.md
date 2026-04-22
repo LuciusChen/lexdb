@@ -7,7 +7,7 @@ Emacs 词典查询系统，将 MDX 词典转换为 SQLite 数据库，提供快�
 - 🔍 快速查词，支持词形还原
 - 📚 多词典并行查询，Tab 切换
 - 🔊 英/美式发音播放（本地/在线）
-- 🌐 中文翻译 Peek 显示（按 `t` 临时查看）
+- 🌐 中文翻译支持 `peek` / `below` / `chinese-only` 三种显示模式
 - 🔗 交叉引用跳转，义项精准定位
 - 📖 imenu 支持，快速跳转义项
 - 📦 习语、短语动词、搭配、语法框等完整支持
@@ -91,6 +91,12 @@ python scripts/mdx2db_ldoce.py LDOCE6.mdx --extract-audio
 ;; 初始化
 (lexdb-init)
 
+;; 可选：中文翻译显示模式
+;; 'peek         显示 🌐，按 `t` 临时查看翻译（默认）
+;; 'below        在英文下一行始终显示中文翻译
+;; 'chinese-only 有中文时只显示中文翻译
+;; (setq lexdb-ui-translation-display 'below)
+
 ;; 绑定快捷键
 (global-set-key (kbd "C-c d") 'lexdb-search)
 ```
@@ -102,12 +108,20 @@ python scripts/mdx2db_ldoce.py LDOCE6.mdx --extract-audio
 | `s` | 搜索新词 |
 | `n/p` | 上/下一个义项 |
 | `1-9` | 跳转到义项 |
-| `t` | Peek 翻译 |
+| `t` | Peek 翻译（`lexdb-ui-translation-display` 为 `peek` 时） |
 | `C-c C-c` | 播放音频 |
 | `>/<` | 切换词典 |
 | `l/r` | 历史前进/后退 |
 | `M-g i` | imenu 跳转 |
 | `q` | 关闭 |
+
+### 4. 翻译显示模式
+
+`lexdb-ui-translation-display` 支持以下取值：
+
+- `peek`：显示 `🌐` 指示符，按 `t` 临时显示当前行翻译
+- `below`：在原文下一行始终显示中文翻译
+- `chinese-only`：有中文翻译时只显示中文
 
 ## 支持的词典
 
