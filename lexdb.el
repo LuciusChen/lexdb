@@ -299,6 +299,15 @@ Returns nil if not connected."
     (puthash key value cache)
     value))
 
+(defun lexdb-db-table-exists-p (db table-name)
+  "Return non-nil if TABLE-NAME exists in DB."
+  (condition-case nil
+      (not (null (sqlite-select db
+                                "SELECT name FROM sqlite_master
+                                 WHERE type = 'table' AND name = ?"
+                                (list table-name))))
+    (error nil)))
+
 ;;;; ============================================================
 ;;;; Shared Data Processing Functions
 ;;;; ============================================================

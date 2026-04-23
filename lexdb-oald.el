@@ -189,10 +189,11 @@ Uses exact match and follows @@@LINK= aliases to find target entries."
                         ORDER BY headword_lower"
                        (list word-lower)))
          ;; Find alias targets and look up those entries
-         (alias-targets (sqlite-select db
-                         "SELECT target FROM aliases
-                          WHERE dict_id = 'oald' AND alias_lower = ?"
-                         (list word-lower)))
+         (alias-targets (when (lexdb-db-table-exists-p db "aliases")
+                          (sqlite-select db
+                           "SELECT target FROM aliases
+                            WHERE dict_id = 'oald' AND alias_lower = ?"
+                           (list word-lower))))
          (alias-rows (when alias-targets
                        (let ((targets (mapcar #'car alias-targets)))
                          (sqlite-select db

@@ -201,10 +201,11 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
                           ORDER BY headword_lower"
                          (list suffix-word))))
          ;; Find alias targets and look up those entries
-         (alias-targets (sqlite-select db
-                         "SELECT target FROM aliases
-                          WHERE dict_id = 'ode' AND alias_lower = ?"
-                         (list word-lower)))
+         (alias-targets (when (lexdb-db-table-exists-p db "aliases")
+                          (sqlite-select db
+                           "SELECT target FROM aliases
+                            WHERE dict_id = 'ode' AND alias_lower = ?"
+                           (list word-lower))))
          (alias-rows (when alias-targets
                        (let ((targets (mapcar #'car alias-targets)))
                          (sqlite-select db
