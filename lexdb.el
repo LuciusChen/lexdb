@@ -1,11 +1,11 @@
-;;; lexdb.el --- Multi-dictionary interface for Emacs -*- lexical-binding: t -*-
+;;; lexdb.el --- Multi-dictionary lookup interface -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025
 
 ;; Author: Your Name
 ;; Version: 0.1.0
 ;; Package-Requires: ((emacs "29.1"))
-;; Keywords: dictionary, multilingual, reference
+;; Keywords: tools, convenience
 ;; URL: https://github.com/example/lexdb
 
 ;;; Commentary:
@@ -105,7 +105,7 @@ This is called by adapter implementations (e.g., lexdb-ldoce.el)."
 Call this after setting up your dictionary configurations."
   (interactive)
   (unless lexdb-dictionaries
-    (user-error "No dictionaries configured. Set `lexdb-dictionaries' first"))
+    (user-error "No dictionaries configured; set `lexdb-dictionaries' first"))
   ;; Sort by priority
   (let ((sorted-dicts (sort (copy-sequence lexdb-dictionaries)
                             (lambda (a b)
@@ -644,7 +644,8 @@ Does not mutate original metadata."
 ;;;; ============================================================
 
 (defvar lexdb-adapters (make-hash-table :test 'eq)
-  "Hash table of registered adapters. Key is adapter ID symbol.")
+  "Hash table of registered adapters.
+Key is adapter ID symbol.")
 
 (defvar lexdb-current-adapter nil
   "Currently active adapter ID.")
@@ -692,11 +693,12 @@ Supported keys are `:display-entry', `:display-multi', and `:play-audio'."
       fallback-dir))
 
 (defun lexdb--display-entry (word entries adapter &optional no-lemma-hint)
-  "Display WORD ENTRIES for ADAPTER, optionally skipping lemma hints."
+  "Display WORD ENTRIES for ADAPTER.
+When NO-LEMMA-HINT is non-nil, skip lemma suggestions."
   (unless (functionp lexdb-display-entry-function)
     (require 'lexdb-ui nil t))
   (unless (functionp lexdb-display-entry-function)
-    (user-error "No lexdb UI registered. Load `lexdb-ui' before searching"))
+    (user-error "No lexdb UI registered; load `lexdb-ui' before searching"))
   (funcall lexdb-display-entry-function word entries adapter no-lemma-hint))
 
 (defun lexdb--display-multi (word)
@@ -704,7 +706,7 @@ Supported keys are `:display-entry', `:display-multi', and `:play-audio'."
   (unless (functionp lexdb-display-multi-function)
     (require 'lexdb-ui nil t))
   (unless (functionp lexdb-display-multi-function)
-    (user-error "No lexdb UI registered. Load `lexdb-ui' before searching"))
+    (user-error "No lexdb UI registered; load `lexdb-ui' before searching"))
   (funcall lexdb-display-multi-function word))
 
 (defun lexdb--play-audio (path &optional audio-dir)
@@ -712,7 +714,7 @@ Supported keys are `:display-entry', `:display-multi', and `:play-audio'."
   (unless (functionp lexdb-play-audio-function)
     (require 'lexdb-ui nil t))
   (unless (functionp lexdb-play-audio-function)
-    (user-error "No lexdb UI registered. Load `lexdb-ui' before playing audio"))
+    (user-error "No lexdb UI registered; load `lexdb-ui' before playing audio"))
   (funcall lexdb-play-audio-function path audio-dir))
 
 (defun lexdb-register-adapter (adapter)
@@ -760,7 +762,7 @@ Supported keys are `:display-entry', `:display-multi', and `:play-audio'."
 ;;;; ============================================================
 
 (defun lexdb-lookup (word &optional adapter-id)
-  "Look up WORD using specified or current adapter.
+  "Look up WORD using ADAPTER-ID or current adapter.
 Returns list of lexdb-entry structs."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
@@ -769,7 +771,7 @@ Returns list of lexdb-entry structs."
     (lexdb--call-with-adapter adapter (lexdb-adapter-lookup-fn adapter) word)))
 
 (defun lexdb-get-pronunciations (entry-id &optional adapter-id)
-  "Get pronunciations for ENTRY-ID."
+  "Get pronunciations for ENTRY-ID using ADAPTER-ID or current adapter."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
     (when (and adapter
@@ -780,7 +782,7 @@ Returns list of lexdb-entry structs."
                                 entry-id))))
 
 (defun lexdb-get-collocations (entry-id &optional adapter-id)
-  "Get collocations for ENTRY-ID."
+  "Get collocations for ENTRY-ID using ADAPTER-ID or current adapter."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
     (when (and adapter
@@ -791,7 +793,7 @@ Returns list of lexdb-entry structs."
                                 entry-id))))
 
 (defun lexdb-get-relations (entry-id type &optional adapter-id)
-  "Get relations of TYPE for ENTRY-ID."
+  "Get relations of TYPE for ENTRY-ID using ADAPTER-ID or current adapter."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
     (when (and adapter (lexdb-adapter-relations-fn adapter))
@@ -800,7 +802,7 @@ Returns list of lexdb-entry structs."
                                 entry-id type))))
 
 (defun lexdb-find-lemma (word &optional adapter-id)
-  "Find lemma/base form of WORD."
+  "Find lemma/base form of WORD using ADAPTER-ID or current adapter."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
     (when (and adapter
@@ -809,7 +811,7 @@ Returns list of lexdb-entry structs."
       (lexdb--call-with-adapter adapter (lexdb-adapter-lemma-fn adapter) word))))
 
 (defun lexdb-prefetch (entry-ids &optional adapter-id)
-  "Prefetch data for ENTRY-IDS to avoid N+1 queries."
+  "Prefetch data for ENTRY-IDS using ADAPTER-ID or current adapter."
   (let* ((id (or adapter-id lexdb-current-adapter))
          (adapter (lexdb-get-adapter id)))
     (when (and adapter (lexdb-adapter-prefetch-fn adapter))
@@ -853,10 +855,12 @@ Returns list of lexdb-entry structs."
   "Minibuffer history for `lexdb-search'.")
 
 (defvar lexdb--history nil
-  "History of searched words. List of (word . position) pairs.")
+  "History of searched words.
+List of (word . position) pairs.")
 
 (defvar lexdb--history-position -1
-  "Current position in history. -1 means at newest.")
+  "Current position in history.
+-1 means at newest.")
 
 (defcustom lexdb-history-max-length 50
   "Maximum number of words to keep in history."
@@ -928,7 +932,7 @@ Respects `lexdb-multi-dict-mode' setting."
       (let ((adapters (lexdb-list-adapters)))
         (if adapters
             (setq id (caar adapters))
-          (error "No dictionary adapters registered. Load an adapter first"))))
+          (error "No dictionary adapters registered; load an adapter first"))))
     (unless (lexdb-get-adapter id)
       (error "Dictionary adapter not found: %s" id))
     (setq lexdb-current-adapter id)
@@ -1114,16 +1118,16 @@ VARIANT can be \\='uk or \\='us (default: \\='uk)."
 ;;;; ============================================================
 
 (defun lexdb-word-exists-p (word &optional adapter-id)
-  "Check if WORD exists in the dictionary."
+  "Check if WORD exists using ADAPTER-ID or current adapter."
   (not (null (lexdb-lookup word adapter-id))))
 
 (defun lexdb-get-entry (word &optional adapter-id)
-  "Get the first entry for WORD, or nil if not found.
+  "Get the first entry for WORD using ADAPTER-ID or current adapter.
 Returns a lexdb-entry struct."
   (car (lexdb-lookup word adapter-id)))
 
 (defun lexdb-get-definitions (word &optional adapter-id)
-  "Get list of definition strings for WORD."
+  "Get definition strings for WORD using ADAPTER-ID or current adapter."
   (when-let* ((entry (lexdb-get-entry word adapter-id)))
     (mapcar #'lexdb-sense-definition (lexdb-entry-senses entry))))
 

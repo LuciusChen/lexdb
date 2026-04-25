@@ -453,7 +453,8 @@ CREATE TABLE entry_attributes (
 |------|------|
 | `text` | 纯文本 |
 | `json` | JSON 格式 |
-| `json_compressed` | zlib 压缩的 JSON |
+| `json.gz` | zlib 压缩的 JSON（LDOCE/ODE 当前使用） |
+| `json_compressed` | zlib 压缩的 JSON（OALD/旧数据兼容） |
 | `integer` | 整数 |
 
 ### 常用 attr_key
@@ -950,7 +951,7 @@ CREATE TABLE _lexdb_meta (
 );
 
 -- 必须包含：
-INSERT INTO _lexdb_meta VALUES ('schema_version', '2.1');
+INSERT INTO _lexdb_meta VALUES ('schema_version', '2.2');
 ```
 
 ---

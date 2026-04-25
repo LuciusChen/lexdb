@@ -89,7 +89,7 @@ If INCLUDE-POSITION is non-nil, include position in metadata."
                  (list (cons 'position position))))))
 
 (defun lexdb-ldoce--v2-row-to-sense (sense-row db)
-  "Convert V2 SENSE-ROW to lexdb-sense."
+  "Convert V2 SENSE-ROW to lexdb-sense using DB."
   (pcase-let ((`(,id ,sense-num ,signpost ,definition ,_sort) sense-row))
     (let* ((ex-rows (sqlite-select db
                      "SELECT text, audio_path, position FROM examples WHERE sense_id = ? ORDER BY position, sort_order"
@@ -114,7 +114,7 @@ If INCLUDE-POSITION is non-nil, include position in metadata."
        :relations sense-relations))))
 
 (defun lexdb-ldoce--v2-fetch-grammar-patterns (sense-id db)
-  "Fetch grammar patterns for SENSE-ID from V2 schema."
+  "Fetch grammar patterns for SENSE-ID from V2 schema using DB."
   (let ((rows (sqlite-select db
                "SELECT id, pattern, gloss FROM grammar_patterns WHERE sense_id = ? ORDER BY sort_order"
                (list sense-id))))
@@ -134,7 +134,7 @@ If INCLUDE-POSITION is non-nil, include position in metadata."
 
 (defun lexdb-ldoce--v2-fetch-relations (entry-id db)
   "Fetch entry-level relations for ENTRY-ID from V2 schema.
-Only returns relations where sense_id IS NULL.
+Use DB and only return relations where sense_id IS NULL.
 Uses fragment storage format: prefix + clickable + suffix."
   (let ((rows (sqlite-select db
                "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE entry_id = ? AND sense_id IS NULL ORDER BY sort_order"
@@ -156,7 +156,7 @@ Uses fragment storage format: prefix + clickable + suffix."
 
 (defun lexdb-ldoce--v2-fetch-sense-relations (sense-id db)
   "Fetch sense-level relations for SENSE-ID from V2 schema.
-Uses fragment storage format: prefix + clickable + suffix."
+Use DB and fragment storage format: prefix + clickable + suffix."
   (let ((rows (sqlite-select db
                "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE sense_id = ? ORDER BY sort_order"
                (list sense-id))))
@@ -179,7 +179,7 @@ Uses fragment storage format: prefix + clickable + suffix."
   "Decompress zlib-compressed JSON data.")
 
 (defun lexdb-ldoce--v2-fetch-attributes (entry-id db)
-  "Fetch EAV attributes for ENTRY-ID from V2 schema."
+  "Fetch EAV attributes for ENTRY-ID from V2 schema using DB."
   (let ((rows (sqlite-select db
                "SELECT attr_key, attr_value, attr_type FROM entry_attributes WHERE entry_id = ?"
                (list entry-id))))

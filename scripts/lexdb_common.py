@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS entry_attributes (
     entry_id INTEGER NOT NULL,
     attr_key TEXT NOT NULL,               -- "ldoce/frequency", "sense_grammar_boxes"
     attr_value TEXT,                      -- TEXT or JSON
-    attr_type TEXT DEFAULT 'text',        -- text, json, json_compressed, integer
+    attr_type TEXT DEFAULT 'text',        -- text, json, json.gz/json_compressed, integer
     FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
     UNIQUE(entry_id, attr_key)
 );
@@ -254,6 +254,7 @@ class AttrType:
     """属性值类型常量"""
     TEXT = 'text'
     JSON = 'json'
+    JSON_GZ = 'json.gz'
     JSON_COMPRESSED = 'json_compressed'
     INTEGER = 'integer'
 

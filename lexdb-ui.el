@@ -14,6 +14,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'lexdb)
 
 ;;;; ============================================================
@@ -102,7 +103,8 @@ Returns adapter-specific template or default template."
   "Pending sense number to jump to after rendering.")
 
 (defcustom lexdb-enabled-adapters nil
-  "List of adapter IDs to query. If nil, query all registered adapters."
+  "List of adapter IDs to query.
+If nil, query all registered adapters."
   :type '(repeat symbol)
   :group 'lexdb)
 
@@ -121,11 +123,11 @@ Returns adapter-specific template or default template."
 (defun lexdb-ui--lookup-with-lemma (word adapter-id adapter)
   "Lookup WORD in ADAPTER-ID, trying lemmatization if no results.
 ADAPTER is the adapter struct.  Returns entries list or nil."
-  (or (condition-case nil (lexdb-lookup word adapter-id) (error nil))
+  (or (lexdb-lookup word adapter-id)
       (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
         (when-let* ((lemma (lexdb-find-lemma word adapter-id))
                     ((not (equal lemma (downcase word)))))
-          (condition-case nil (lexdb-lookup lemma adapter-id) (error nil))))))
+          (lexdb-lookup lemma adapter-id)))))
 
 (defun lexdb-ui--query-all-dicts (word)
   "Query WORD in all enabled dictionaries.
@@ -632,7 +634,7 @@ These are typically more general descriptions rather than dictionary entries."
 
 (defcustom lexdb-ui-translation-display 'peek
   "How to display available Chinese translations.
-`peek' shows an indicator and uses `t' to temporarily reveal the translation.
+`peek' shows an indicator and uses the t key to reveal the translation.
 `below' shows the translation on a new line below the original text.
 `chinese-only' replaces the original text with the translation when available."
   :type '(choice (const :tag "Peek On Demand" peek)
@@ -1165,14 +1167,21 @@ Examples: `end¹' -> `end', `better³ 3' -> `better'."
       ;; Lowercase and trim
       (downcase (string-trim result)))))
 
-(defun lexdb-ui--render-headword (entry)
+(defun lexdb-ui--render-headword (entry &optional adapter)
   "Render headword for ENTRY.
-Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
+Converts trailing numbers to superscript (e.g., mother1 -> mother¹).
+Optional ADAPTER adds semantic properties for navigation."
   (let* ((display (or (lexdb-entry-headword-display entry)
                       (lexdb-entry-headword entry)))
-         (formatted (lexdb-ui--number-to-superscript display)))
+         (formatted (lexdb-ui--number-to-superscript display))
+         (ns (when adapter (symbol-name (lexdb-adapter-id adapter))))
+         (pos (when ns
+                (lexdb-meta-get (lexdb-entry-metadata entry) ns "pos"))))
     (when (lexdb--non-empty-string-p formatted)
-      (insert (propertize formatted 'face 'lexdb-headword-face)))))
+      (insert (propertize formatted
+                          'face 'lexdb-headword-face
+                          'lexdb-entry-headword formatted
+                          'lexdb-entry-pos pos)))))
 
 (defun lexdb-ui--render-pronunciations (entry _adapter)
   "Render pronunciations for ENTRY."
@@ -1225,7 +1234,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
           (insert " " (propertize (format "[%s]" cefr) 'face 'lexdb-cefr-face)))))))
 
 (defun lexdb-ui--render-pos (entry adapter)
-  "Render part of speech for ENTRY."
+  "Render part of speech for ENTRY using ADAPTER."
   (when (lexdb-adapter-has-capability-p adapter 'pos)
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
            (pos (lexdb-meta-get (lexdb-entry-metadata entry) ns "pos")))
@@ -1241,7 +1250,7 @@ Converts trailing numbers to superscript (e.g., mother1 -> mother¹)."
               (insert " " (propertize (upcase transitivity) 'face 'lexdb-grammar-face)))))))))
 
 (defun lexdb-ui--render-audio-buttons (entry adapter)
-  "Render audio indicators for ENTRY. Use C-c C-c to play.
+  "Render audio indicators for ENTRY using ADAPTER.
 Supports both local audio (with audio-dir) and online audio (path only)."
   (let* ((caps (lexdb-adapter-capabilities adapter))
          (audio-dir (lexdb-adapter-audio-dir adapter))
@@ -1272,7 +1281,7 @@ Supports both local audio (with audio-dir) and online audio (path only)."
     (when has-audio (insert "\n"))))
 
 (defun lexdb-ui--render-inflections (entry adapter)
-  "Render inflections for ENTRY.
+  "Render inflections for ENTRY using ADAPTER.
 This includes tense, plural, and comparative/superlative forms."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (adapter-id (lexdb-adapter-id adapter))
@@ -2046,7 +2055,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     (lexdb-ui--render-sense-ode-tabs entry adapter sense sense-index)))
 
 (defun lexdb-ui--render-synonyms-and-crossrefs (entry adapter)
-  "Render synonyms and cross-refs for ENTRY (inline, not in tabs)."
+  "Render synonyms and cross-refs for ENTRY using ADAPTER."
   (let ((caps (lexdb-adapter-capabilities adapter))
         (relations (lexdb-entry-relations entry))
         (adapter-id (lexdb-adapter-id adapter)))
@@ -2236,7 +2245,7 @@ Otherwise, fall back to global search."
     (lexdb-ui--goto-pending-sense)))
 
 (defun lexdb-ui--goto-pending-sense ()
-  "Jump to pending sense number if set. Call this after rendering."
+  "Jump to pending sense number if set; call this after rendering."
   (when lexdb-ui--pending-sense-num
     (let ((sense-num lexdb-ui--pending-sense-num))
       (setq lexdb-ui--pending-sense-num nil)
@@ -2778,14 +2787,14 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 ;;;; ============================================================
 
 (defun lexdb-ui--slot-header (entry adapter)
-  "Slot: Render entry header (headword, pronunciation, POS, etc.)."
+  "Render header slot for ENTRY using ADAPTER."
   (let ((caps (lexdb-adapter-capabilities adapter))
         (ns (symbol-name (lexdb-adapter-id adapter)))
         (meta (lexdb-entry-metadata entry)))
     (if-let* ((header-hook (lexdb-adapter-render-entry-header-fn adapter)))
         (lexdb--call-with-adapter adapter header-hook entry (current-buffer))
       ;; Default header rendering
-      (lexdb-ui--render-headword entry)
+      (lexdb-ui--render-headword entry adapter)
       ;; Variant spellings (e.g., "also hi-vis")
       (when-let* ((variant (lexdb-meta-get meta ns "variant")))
         (when (lexdb--non-empty-string-p variant)
@@ -2800,7 +2809,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
       (insert "\n"))))
 
 (defun lexdb-ui--slot-tabs (entry adapter)
-  "Slot: Render tab bar (COLLOCATIONS, THESAURUS, WORD ORIGIN, etc.)."
+  "Render tab bar slot for ENTRY using ADAPTER."
   (let ((tabs nil)
         (entry-id (lexdb-entry-id entry))
         (tab-group (format "lexdb-tabs-%d-%d" (lexdb-entry-id entry) (random 10000)))
@@ -2873,7 +2882,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
       (lexdb-ui--insert-tab-bar (nreverse tabs) tab-group))))
 
 (defun lexdb-ui--slot-senses (entry adapter)
-  "Slot: Render senses/definitions."
+  "Render senses slot for ENTRY using ADAPTER."
   (let ((ode-pos-keywords '("adjective" "noun" "verb" "adverb" "preposition"
                             "conjunction" "pronoun" "determiner" "exclamation"
                             "prefix" "suffix" "combining form"))
@@ -2910,7 +2919,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
   (insert "\n"))
 
 (defun lexdb-ui--slot-entry-grammar-box (entry adapter)
-  "Slot: Render entry-level grammar box."
+  "Render entry grammar box slot for ENTRY using ADAPTER."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (entry-grammar-boxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "entry_grammar_boxes")))
     (when (and entry-grammar-boxes (> (length entry-grammar-boxes) 0))
@@ -3088,7 +3097,7 @@ ADAPTER-ID is used for crossref navigation."
       (lexdb-ui--render-idiom-single-def idiom adapter-id))))
 
 (defun lexdb-ui--slot-idioms (entry adapter)
-  "Slot: Render idioms section."
+  "Render idioms slot for ENTRY using ADAPTER."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (adapter-id (lexdb-adapter-id adapter))
          (idiom-list (lexdb-ui--ensure-list
@@ -3108,7 +3117,7 @@ ADAPTER-ID is used for crossref navigation."
             (overlay-put ov 'lexdb-idioms t)))))))
 
 (defun lexdb-ui--slot-usage (entry adapter)
-  "Slot: Render usage notes section."
+  "Render usage slot for ENTRY using ADAPTER."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (usage-list (lexdb-ui--ensure-list
                       (lexdb-meta-get (lexdb-entry-metadata entry) ns "usage"))))
@@ -3162,7 +3171,7 @@ ADAPTER-ID is used for crossref navigation."
           (lexdb-ui--render-usage-items child-list (1+ indent-level)))))))
 
 (defun lexdb-ui--slot-phrasal-verbs (entry adapter)
-  "Slot: Render phrasal verbs."
+  "Render phrasal verbs slot for ENTRY using ADAPTER."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (phrasal-verbs (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrasal-verbs")))
     (when (and phrasal-verbs (> (length phrasal-verbs) 0))
@@ -3179,11 +3188,11 @@ ADAPTER-ID is used for crossref navigation."
             (overlay-put ov 'lexdb-phrasal-verbs t)))))))
 
 (defun lexdb-ui--slot-synonyms (entry adapter)
-  "Slot: Render synonyms and cross-references."
+  "Render synonyms slot for ENTRY using ADAPTER."
   (lexdb-ui--render-synonyms-and-crossrefs entry adapter))
 
 (defun lexdb-ui--slot-runons (entry adapter)
-  "Slot: Render run-on entries.
+  "Render run-on slot for ENTRY using ADAPTER.
 Examples include derived forms such as `relevantly adverb'."
   (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
          (runons (lexdb-meta-get (lexdb-entry-metadata entry) ns "runons")))
@@ -3309,7 +3318,7 @@ Examples include derived forms such as `relevantly adverb'."
           (overlay-put ov 'lexdb-ode-phrases t))))))
 
 (defun lexdb-ui--render-ode-phrasal-verbs (entry phrasal-verbs)
-  "Render ODE PHRASAL VERBS section for ENTRY."
+  "Render ODE PHRASAL-VERBS section for ENTRY."
   (when (and phrasal-verbs (> (length phrasal-verbs) 0))
     (let ((section-start (point))
           (pv-list (if (vectorp phrasal-verbs) (append phrasal-verbs nil) phrasal-verbs))
@@ -3450,7 +3459,7 @@ Examples include derived forms such as `relevantly adverb'."
           (overlay-put ov 'lexdb-ode-derivatives t))))))
 
 (defun lexdb-ui--render-ode-encyclopedic (enc-note)
-  "Render ODE encyclopedic note section."
+  "Render ODE encyclopedic note section from ENC-NOTE."
   (when (lexdb--non-empty-string-p enc-note)
     (let ((section-start (point)))
       (insert "\n")
@@ -3461,7 +3470,7 @@ Examples include derived forms such as `relevantly adverb'."
         (overlay-put ov 'lexdb-ode-encyclopedic t)))))
 
 (defun lexdb-ui--render-ode-usage (usage-text)
-  "Render ODE USAGE section."
+  "Render ODE USAGE section from USAGE-TEXT."
   (when (lexdb--non-empty-string-p usage-text)
     (let ((section-start (point)))
       (insert "\n")
@@ -3473,7 +3482,7 @@ Examples include derived forms such as `relevantly adverb'."
         (overlay-put ov 'lexdb-ode-usage t)))))
 
 (defun lexdb-ui--render-ode-origin (origin-alist adapter)
-  "Render ODE ORIGIN section using ADAPTER."
+  "Render ODE ORIGIN section from ORIGIN-ALIST using ADAPTER."
   (when (and origin-alist (listp origin-alist))
     (let ((section-start (point))
           (text (or (cdr (assoc 'text origin-alist))
@@ -3496,7 +3505,7 @@ Examples include derived forms such as `relevantly adverb'."
           (overlay-put ov 'lexdb-ode-origin t))))))
 
 (defun lexdb-ui--slot-ode-phrases-origin (entry adapter)
-  "Slot: Render ODE phrases, phrasal verbs, derivatives, usage, and origin."
+  "Render ODE phrases/origin slot for ENTRY using ADAPTER."
   (when (eq (lexdb-adapter-id adapter) 'ode)
     (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
            (phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases"))
@@ -3744,7 +3753,7 @@ The translation disappears on the next command."
 
 (defun lexdb-imenu--format-entry (pos-abbrev num signpost definition headword)
   "Format imenu entry with gray headword suffix.
-Format: \"POS NUM SIGNPOST definition (headword)\"."
+POS-ABBREV, NUM, SIGNPOST, DEFINITION, and HEADWORD form the title."
   (let ((main-part (concat (if pos-abbrev (concat pos-abbrev " ") "")
                            num
                            (if (and signpost (not (string-empty-p signpost)))
@@ -3771,6 +3780,21 @@ Index format: \"pos. number SIGNPOST (headword)\" (e.g., \"n. 1 PARENT (mother)\
       ;; Single pass: find headwords, POS headers, and senses
       (while (not (eobp))
         (cond
+         ;; Rendered entry headword line. Prefer semantic properties over
+         ;; guessing from visible text because some entries have no IPA.
+         ((get-text-property (point) 'lexdb-entry-headword)
+          ;; Before switching to new headword, check if previous had no senses
+          (when (and current-headword (not has-senses))
+            (push (cons (lexdb-imenu--format-entry
+                         (when current-pos (lexdb-imenu--pos-abbrev current-pos))
+                         "-" nil nil current-headword)
+                        current-headword-pos)
+                  index))
+          ;; Set new headword
+          (setq current-headword (get-text-property (point) 'lexdb-entry-headword))
+          (setq current-headword-pos (point))
+          (setq current-pos (get-text-property (point) 'lexdb-entry-pos))
+          (setq has-senses nil))
          ;; Headword line: word followed by space and /
          ;; e.g., "mother¹ /ˈmʌðə..." or "CALL /kɔːl/"
          ((looking-at "^\\([a-zA-Z][-a-zA-Z']*[⁰¹²³⁴⁵⁶⁷⁸⁹0-9]*\\) +/")

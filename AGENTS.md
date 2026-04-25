@@ -3,6 +3,10 @@
 This file is the canonical instruction file for AI-assisted development in
 `lexdb`.
 
+Rules copied from shared `coding-guidelines` are adapted here. Treat this file
+as self-contained; do not require agents to consult external guideline
+repositories at runtime.
+
 ## Core Principles
 
 - **Question every abstraction**: before adding a layer, file, helper, hook, or indirection, ask whether it solves a current `lexdb` problem. If the answer is hypothetical, do not add it.
@@ -38,6 +42,9 @@ This file is the canonical instruction file for AI-assisted development in
 - Public Elisp API uses the `lexdb-` prefix.
 - Internal Elisp helpers use `lexdb--` or `lexdb-<adapter>--`.
 - Adapter-specific public symbols use `lexdb-ldoce-`, `lexdb-oald-`, or `lexdb-ode-`.
+- Do not call adapter-private helpers such as `lexdb-ldoce--...` from other
+  files. If logic is genuinely shared, promote it to `lexdb.el` as a
+  `lexdb--...` helper with a clear contract.
 - Predicate names end in `-p`.
 - Unused parameters are prefixed with `_`.
 - Python helpers in `scripts/` should use descriptive snake_case names; avoid cryptic abbreviations unless they mirror the source format.
@@ -136,7 +143,10 @@ This file is the canonical instruction file for AI-assisted development in
 
 - Tests must fail when the code is wrong. If deleting or breaking the function under test does not turn the test red, the test is worthless.
 - Use diverse inputs, boundary cases, and distinguishable expected values. Do not rely on hard-coded expectations that a stub can satisfy.
-- When fixing a bug, first reproduce it with the smallest failing check practical for this repository, then fix the code.
+- When fixing a bug, first reproduce it with the smallest failing check practical for this repository, confirm the check fails, then fix the code.
+- If no proper test harness exists for the changed area, use a targeted batch
+  evaluation, SQLite query, or converter run that demonstrates the behavior
+  before and after the change.
 - Elisp files should start with `lexical-binding: t` and end with the correct `(provide '...)` footer.
 - Public functions and user options need docstrings.
 - Docstring first lines should be complete sentences ending with a period.
