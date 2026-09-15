@@ -227,8 +227,10 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
 
 (defun lexdb-ode--get-phrases (entry-id)
   "Get phrases for ENTRY-ID."
-  (let ((adapter-id (lexdb--active-adapter-id 'ode)))
-    (or (lexdb-db-cache-get adapter-id (cons entry-id 'phrases))
+  (let* ((adapter-id (lexdb--active-adapter-id 'ode))
+         (cached (lexdb-db-cache-get adapter-id (cons entry-id 'phrases) 'not-found)))
+    (if (not (eq cached 'not-found))
+        cached
       (let* ((db (lexdb-ode--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes
@@ -250,8 +252,10 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
 
 (defun lexdb-ode--get-origin (entry-id)
   "Get etymology/origin for ENTRY-ID."
-  (let ((adapter-id (lexdb--active-adapter-id 'ode)))
-    (or (lexdb-db-cache-get adapter-id (cons entry-id 'origin))
+  (let* ((adapter-id (lexdb--active-adapter-id 'ode))
+         (cached (lexdb-db-cache-get adapter-id (cons entry-id 'origin) 'not-found)))
+    (if (not (eq cached 'not-found))
+        cached
       (let* ((db (lexdb-ode--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes

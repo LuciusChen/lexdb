@@ -9,31 +9,20 @@ Uses unified schema from lexdb_common module for compatibility.
 
 import sqlite3
 import sys
-import os
 import re
 import json
 import zlib
 from pathlib import Path
 from datetime import datetime
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
-try:
-    from readmdict import MDX
-except ImportError:
-    print("Please install dependencies first: pip install readmdict python-lzo beautifulsoup4")
-    sys.exit(1)
+from lexdb_mdx import open_mdx
 
 # Import unified common module
 from lexdb_common import (
-    SCHEMA_SQL,
-    SCHEMA_VERSION,
     init_database,
+    entry_transaction,
     clean_text,
-    parse_link_target,
-    make_relation_fragments,
-    LabelType,
-    RelationType,
-    AttrType,
     # HTML utilities
     extract_text_without_tags,
     extract_zh,
@@ -1365,7 +1354,13 @@ def create_database(db_path):
 
 
 def insert_entry(conn, dict_id, entry):
-    """Insert parsed entry into database."""
+    """Write a complete OALD entry without leaving partial rows on failure."""
+    with entry_transaction(conn):
+        return _insert_entry(conn, dict_id, entry)
+
+
+def _insert_entry(conn, dict_id, entry):
+    """Translate OALD bilingual fields and legacy attributes into database rows."""
     cursor = conn.cursor()
 
     # Build headword display with homograph number
@@ -1445,8 +1440,9 @@ def insert_entry(conn, dict_id, entry):
             subsenses_data[sense.get('number', str(sense_id))] = sense['subsenses']
 
     # Add subsenses to entry attributes (like LDOCE)
+    attributes = dict(entry.get('attributes', {}))
     if subsenses_data:
-        entry.setdefault('attributes', {})['oald/subsenses'] = subsenses_data
+        attributes['oald/subsenses'] = subsenses_data
 
     # Insert relations (cross-refs, etc.)
     for idx, rel in enumerate(entry.get('relations', [])):
@@ -1466,7 +1462,7 @@ def insert_entry(conn, dict_id, entry):
 
     # Insert entry attributes (compressed JSON for complex data)
     # Add namespace prefix for consistency with ODE
-    for key, value in entry.get('attributes', {}).items():
+    for key, value in attributes.items():
         full_key = f"{dict_id}/{key}"
         if isinstance(value, (list, dict)):
             # Compress JSON for complex data
@@ -1523,6 +1519,12 @@ def convert_oald4(mdx_path, output_dir=None):
     print(f"Converting: {mdx_path.name}")
     print(f"Output: {db_path}")
 
+    # Read MDX
+    print("Reading MDX file...")
+    mdx = open_mdx(mdx_path)
+    total = len(mdx)
+    print(f"Total entries in MDX: {total}")
+
     # Create database
     print(f"Creating database: {db_path.name}")
     conn = create_database(str(db_path))
@@ -1533,13 +1535,6 @@ def convert_oald4(mdx_path, output_dir=None):
         VALUES (?, ?, ?, ?, ?)
     """, (dict_id, dict_name, "4", mdx_path.name, datetime.now().isoformat()))
 
-    # Read MDX
-    print("Reading MDX file...")
-    mdx = MDX(str(mdx_path))
-    items = list(mdx.items())
-    total = len(items)
-    print(f"Total entries in MDX: {total}")
-
     # Parse and import entries
     print("Parsing and importing entries...")
     imported = 0
@@ -1547,10 +1542,11 @@ def convert_oald4(mdx_path, output_dir=None):
     errors = 0
     alias_count = 0
 
-    for i, (key, value) in enumerate(items):
+    for i, (key, value) in enumerate(mdx.items()):
         if i % 1000 == 0:
             print(f"  Progress: {i}/{total} ({imported} imported, {skipped} skipped, {alias_count} aliases)")
 
+        key_str = None
         try:
             key_str = key.decode('utf-8') if isinstance(key, bytes) else key
             html = value.decode('utf-8') if isinstance(value, bytes) else value

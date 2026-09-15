@@ -1005,6 +1005,17 @@ flowchart LR
 
 ---
 
+## Python 写入边界
+
+`scripts/lexdb_common.py` 提供 `DatabaseWriter` 和 `entry_transaction`：
+
+- LDOCE、ODE 的写入器实现 `_write_entry(entry_data)`，保留各自的字段映射；公共 `write_entry` 负责词条回滚和成功计数。
+- OALD 的 `insert_entry` 使用同一个 `entry_transaction`，保留双语字段和 `json_compressed` 属性编码，包括现有的 `oald/oald/subsenses` 键。
+- 一个词条的写入包含所有义项、例句、关系和属性。任何一步失败都会回滚整个词条；事务不会隐式提交外层批次。
+- 义项 ID 等数据库派生信息只加入写入时的属性副本，解析器返回的数据不会被写入器修改。
+
+这次职责调整不改变 Schema 版本、属性类型或现有 Emacs 读取约定。
+
 ## Emacs Lisp 适配器架构
 
 LexDB Emacs 客户端使用统一的适配器架构来支持多词典。
@@ -1024,9 +1035,13 @@ LexDB Emacs 客户端使用统一的适配器架构来支持多词典。
 (lexdb-db-close adapter-id)            ; 关闭连接并清空缓存
 
 ;; 缓存 API
-(lexdb-db-cache-get adapter-id key)    ; 获取缓存
+(lexdb-db-cache-get adapter-id key &optional default) ; 获取缓存；未命中时返回 default
 (lexdb-db-cache-put adapter-id key value) ; 设置缓存
 ```
+
+缓存键使用 `equal` 比较，支持 `(entry-id . data-type)` 等复合键。
+空结果也可以缓存为 `nil`；传入非 `nil` 的 `default` 即可区分空结果与未命中。
+缓存按适配器 ID 隔离，关闭连接时清空。
 
 #### 共享数据处理函数
 

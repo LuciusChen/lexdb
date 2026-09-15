@@ -7,21 +7,14 @@ Supports multiple dictionaries in a single database using EAV pattern for extens
 Uses unified schema from lexdb_common module.
 """
 
-import sqlite3
 import sys
 import os
 import re
-import json
 from pathlib import Path
-from datetime import datetime
 from bs4 import BeautifulSoup, Tag
 import time
 
-try:
-    from readmdict import MDX, MDD
-except ImportError:
-    print("Please install dependencies first: pip install readmdict python-lzo beautifulsoup4")
-    sys.exit(1)
+from lexdb_mdx import open_mdx, iter_mdx_entries, extract_mdd_audio
 
 # Try to use lxml for faster parsing, fallback to html.parser
 try:
@@ -29,19 +22,14 @@ try:
     HTML_PARSER = 'lxml'
 except ImportError:
     HTML_PARSER = 'html.parser'
-    print("Note: Install lxml for faster parsing: pip install lxml")
 
 # Import unified common module
 from lexdb_common import (
-    SCHEMA_SQL,
     SCHEMA_VERSION,
-    init_database,
+    DatabaseWriter,
     clean_text,
     parse_link_target,
     make_relation_fragments,
-    LabelType,
-    RelationType,
-    AttrType,
 )
 
 
@@ -1946,43 +1934,10 @@ class LDOCEParser:
 # Database Writer
 # ============================================================
 
-class LexDBWriter:
-    """LexDB database writer."""
+class LexDBWriter(DatabaseWriter):
+    """Map LDOCE parsed entries into the shared database schema."""
 
-    def __init__(self, db_path, dict_id, dict_name, dict_version=None, source_file=None):
-        self.db_path = db_path
-        self.dict_id = dict_id
-        self.dict_name = dict_name
-        self.dict_version = dict_version
-        self.source_file = source_file
-        self.conn = None
-        self.cursor = None
-        self.entry_count = 0
-
-    def open(self):
-        """Open database connection and initialize schema."""
-        self.conn = sqlite3.connect(self.db_path)
-        self.cursor = self.conn.cursor()
-
-        # Initialize schema using unified module
-        init_database(self.conn)
-
-        # Register dictionary
-        self.cursor.execute("""
-            INSERT OR REPLACE INTO dictionaries
-            (dict_id, name, version, source_file, created_at)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            self.dict_id,
-            self.dict_name,
-            self.dict_version,
-            self.source_file,
-            datetime.now().isoformat()
-        ))
-
-        self.conn.commit()
-
-    def write_entry(self, entry_data):
+    def _write_entry(self, entry_data):
         """Write a single entry."""
         # Generate headword_lower (strip trailing digits for homograph grouping)
         headword = entry_data['headword']
@@ -2131,135 +2086,18 @@ class LexDBWriter:
                         idx
                     ))
 
-        # Insert relations (phrases, synonyms, entry-level cross-refs, inflections)
-        # Now using fragment storage format
-        for idx, rel in enumerate(entry_data.get('relations', [])):
-            # Check if relation is in new fragment format or old format
-            if 'clickable' in rel:
-                # New fragment format
-                self.cursor.execute("""
-                    INSERT INTO relations (entry_id, sense_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)
-                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    entry_id,
-                    rel['type'],
-                    rel.get('prefix'),
-                    rel.get('clickable'),
-                    rel.get('suffix'),
-                    rel.get('target_word', ''),
-                    rel.get('target_sense'),
-                    idx
-                ))
-            else:
-                # Old format - convert to fragments
-                fragments = make_relation_fragments('', rel.get('target', ''), '', rel.get('link'))
-                self.cursor.execute("""
-                    INSERT INTO relations (entry_id, sense_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)
-                    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    entry_id,
-                    rel['type'],
-                    fragments.get('prefix'),
-                    fragments.get('clickable'),
-                    fragments.get('suffix'),
-                    fragments.get('target_word', ''),
-                    fragments.get('target_sense'),
-                    idx
-                ))
+        self.write_relations(entry_id, entry_data.get('relations', []))
+        self.write_collocations(entry_id, (
+            dict(coll, category=coll.get('category') or None, gloss=coll.get('gloss') or None)
+            for coll in entry_data.get('collocations', [])
+        ))
 
-        # Insert collocations
-        for coll in entry_data.get('collocations', []):
-            self.cursor.execute("""
-                INSERT INTO collocations (entry_id, category, text, gloss, sort_order)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                entry_id,
-                coll.get('category') or None,
-                coll['text'],
-                coll.get('gloss') or None,
-                coll.get('sort_order', 0)
-            ))
-            coll_id = self.cursor.lastrowid
-
-            # Collocation examples
-            for example in coll.get('examples', []):
-                self.cursor.execute("""
-                    INSERT INTO collocation_examples (collocation_id, text, sort_order)
-                    VALUES (?, ?, ?)
-                """, (
-                    coll_id,
-                    example['text'],
-                    example.get('sort_order', 0)
-                ))
-
-        # Insert extension attributes (EAV)
-        # First add subsenses if any
+        attributes = dict(entry_data.get('attributes', {}))
         if subsenses_data:
-            entry_data.setdefault('attributes', {})['subsenses'] = subsenses_data
+            attributes['subsenses'] = subsenses_data
+        self.write_attributes(entry_id, attributes)
 
-        for key, value in entry_data.get('attributes', {}).items():
-            if value:
-                # Determine type
-                if isinstance(value, bool):
-                    attr_type = 'boolean'
-                    attr_value = '1' if value else '0'
-                elif isinstance(value, int):
-                    attr_type = 'integer'
-                    attr_value = str(value)
-                elif isinstance(value, (dict, list)):
-                    # Compact JSON (no extra whitespace)
-                    json_str = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
-                    # Compress large JSON with zlib
-                    if len(json_str) > 1000:
-                        import zlib
-                        compressed = zlib.compress(json_str.encode('utf-8'), level=9)
-                        attr_type = 'json.gz'
-                        attr_value = compressed  # Store as BLOB
-                    else:
-                        attr_type = 'json'
-                        attr_value = json_str
-                else:
-                    attr_type = 'text'
-                    attr_value = str(value)
-
-                # Use namespaced format
-                full_key = f"{self.dict_id}/{key}"
-
-                self.cursor.execute("""
-                    INSERT OR REPLACE INTO entry_attributes
-                    (entry_id, attr_key, attr_value, attr_type)
-                    VALUES (?, ?, ?, ?)
-                """, (entry_id, full_key, attr_value, attr_type))
-
-        self.entry_count += 1
         return entry_id
-
-    def commit(self):
-        """Commit transaction."""
-        if self.conn:
-            self.conn.commit()
-
-    def close(self, vacuum=True):
-        """Close connection and update entry count.
-        If vacuum is True, optimize and compress the database."""
-        if self.conn:
-            # Update entry count
-            self.cursor.execute("""
-                UPDATE dictionaries SET entry_count = ? WHERE dict_id = ?
-            """, (self.entry_count, self.dict_id))
-            self.conn.commit()
-
-            if vacuum:
-                print("Optimizing database...")
-                # Analyze for query optimization
-                self.cursor.execute("ANALYZE")
-                # Vacuum to reclaim space and defragment
-                self.cursor.execute("VACUUM")
-                print("Database optimized and compressed")
-
-            self.conn.close()
-            self.conn = None
-            self.cursor = None
 
 
 # ============================================================
@@ -2269,7 +2107,7 @@ class LexDBWriter:
 def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=None):
     """Convert MDX file to LexDB database.
 
-    dict_type: 'ldoce', 'oaldpe', or None for auto-detect
+    dict_type: 'ldoce' or None for auto-detect
     """
 
     mdx_path = Path(mdx_file)
@@ -2294,63 +2132,10 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
     if db_path is None:
         db_path = mdx_path.with_suffix('.db')
 
-    # Remove existing database
-    if os.path.exists(db_path):
-        print(f"Removing existing database: {db_path}")
-        os.remove(db_path)
-
     print(f"Reading MDX file: {mdx_file}")
-    mdx = MDX(str(mdx_file))
+    mdx = open_mdx(mdx_file)
 
-    # Extract audio if requested
-    audio_dir = None
-    if extract_audio:
-        # Find all MDD files: name.mdd, name_1.mdd, name.1.mdd, name_2.mdd, name.2.mdd, etc.
-        mdd_files = []
-        base_mdd = mdx_path.with_suffix('.mdd')
-        if base_mdd.exists():
-            mdd_files.append(base_mdd)
-
-        # Look for numbered MDD files (both formats: name_1.mdd and name.1.mdd)
-        stem = mdx_path.stem
-        parent = mdx_path.parent
-        for i in range(1, 20):  # Check up to 19
-            # Try underscore format: name_1.mdd
-            numbered_mdd_underscore = parent / f"{stem}_{i}.mdd"
-            # Try dot format: name.1.mdd
-            numbered_mdd_dot = parent / f"{stem}.{i}.mdd"
-
-            if numbered_mdd_underscore.exists():
-                mdd_files.append(numbered_mdd_underscore)
-            elif numbered_mdd_dot.exists():
-                mdd_files.append(numbered_mdd_dot)
-            else:
-                break  # Stop if neither format found
-
-        if mdd_files:
-            audio_dir = mdx_path.parent / 'audio'
-            audio_dir.mkdir(exist_ok=True)
-            print(f"Extracting audio to: {audio_dir}")
-            print(f"Found {len(mdd_files)} MDD file(s): {[f.name for f in mdd_files]}")
-
-            for mdd_file in mdd_files:
-                print(f"  Processing: {mdd_file.name}")
-                mdd = MDD(str(mdd_file))
-                file_count = 0
-                for key, data in mdd.items():
-                    if isinstance(key, bytes):
-                        key = key.decode('utf-8', errors='ignore')
-                    # Normalize path separators: backslash to forward slash, strip leading slash
-                    key = key.replace('\\', '/').lstrip('/')
-                    out_path = audio_dir / key
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(out_path, 'wb') as f:
-                        f.write(data)
-                    file_count += 1
-                print(f"    Extracted {file_count} files")
-            print("Audio extraction complete")
-        else:
-            print(f"Warning: No MDD files found for: {mdx_path.stem}")
+    audio_dir = extract_mdd_audio(mdx_path) if extract_audio else None
 
     # Create parser based on dictionary type
     if dict_type == 'ldoce':
@@ -2369,24 +2154,19 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
         source_file=str(mdx_path.name)
     )
 
+    # Remove existing database
+    if os.path.exists(db_path):
+        print(f"Removing existing database: {db_path}")
+        os.remove(db_path)
+
     print(f"Creating database: {db_path}")
     writer.open()
 
     print("Parsing and importing entries...")
     print(f"  Using parser: {HTML_PARSER}")
 
-    items = list(mdx.items())  # Convert to list for progress tracking
-    total = len(items)
+    total = len(mdx)
     start_time = time.time()
-
-    # Decode items
-    decoded_items = []
-    for word_key, html in items:
-        if isinstance(word_key, bytes):
-            word_key = word_key.decode('utf-8', errors='ignore')
-        if isinstance(html, bytes):
-            html = html.decode('utf-8', errors='ignore')
-        decoded_items.append((word_key, html))
 
     print(f"  Total entries: {total}")
 
@@ -2394,7 +2174,7 @@ def convert_mdx_to_lexdb(mdx_file, db_path=None, extract_audio=False, dict_type=
     count = 0
     success = 0
 
-    for word_key, html in decoded_items:
+    for word_key, html in iter_mdx_entries(mdx):
         count += 1
 
         try:

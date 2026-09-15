@@ -9,7 +9,8 @@ LexDB Schema and Common Utilities
 Usage:
     from lexdb_common import (
         SCHEMA_SQL, SCHEMA_VERSION,
-        init_database, clean_text, parse_link_target,
+        init_database, DatabaseWriter, entry_transaction,
+        clean_text, parse_link_target,
         make_relation_fragments, normalize_headword,
         LabelType, RelationType, AttrType,
         # HTML parsing utilities
@@ -19,8 +20,12 @@ Usage:
     )
 """
 
+import json
 import re
 import sqlite3
+import zlib
+from contextlib import contextmanager
+from datetime import datetime
 from typing import Optional, Tuple, Dict, Any
 
 # =============================================================================
@@ -419,6 +424,153 @@ def check_schema_compatibility(conn: sqlite3.Connection) -> bool:
     db_major = db_version.split('.')[0]
     current_major = SCHEMA_VERSION.split('.')[0]
     return db_major == current_major
+
+
+# =============================================================================
+# Shared Database Writing
+# =============================================================================
+
+@contextmanager
+def entry_transaction(conn):
+    """Roll back a failed entry without committing or losing the outer batch."""
+    if not conn.in_transaction:
+        conn.execute('BEGIN')
+    conn.execute('SAVEPOINT lexdb_entry')
+    try:
+        yield
+    except BaseException:
+        conn.execute('ROLLBACK TO lexdb_entry')
+        raise
+    finally:
+        conn.execute('RELEASE lexdb_entry')
+
+
+class DatabaseWriter:
+    """Shared storage operations for dictionary-specific entry writers.
+
+    Subclasses implement `_write_entry` for their parsed data shape.  The public
+    `write_entry` method owns rollback and counting; it never commits a batch.
+    """
+
+    capabilities = None
+
+    def __init__(self, db_path, dict_id, dict_name, dict_version=None, source_file=None):
+        self.db_path = db_path
+        self.dict_id = dict_id
+        self.dict_name = dict_name
+        self.dict_version = dict_version
+        self.source_file = source_file
+        self.conn = None
+        self.cursor = None
+        self.entry_count = 0
+
+    def open(self):
+        """Open the database, initialize its schema, and register the dictionary."""
+        self.conn = sqlite3.connect(self.db_path)
+        self.cursor = self.conn.cursor()
+        init_database(self.conn)
+        capabilities = (json.dumps(self.capabilities)
+                        if self.capabilities is not None else None)
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO dictionaries
+            (dict_id, name, version, source_file, capabilities, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (self.dict_id, self.dict_name, self.dict_version, self.source_file,
+              capabilities, datetime.now().isoformat()))
+        self.conn.commit()
+
+    def write_entry(self, entry_data):
+        """Write one complete entry and count it only after all writes succeed."""
+        with entry_transaction(self.conn):
+            entry_id = self._write_entry(entry_data)
+        self.entry_count += 1
+        return entry_id
+
+    def _write_entry(self, entry_data):
+        """Translate parsed entry data into rows in a dictionary-specific writer."""
+        raise NotImplementedError
+
+    def write_relations(self, entry_id, relations):
+        """Write entry-level relations, normalizing legacy links at this boundary."""
+        for index, relation in enumerate(relations):
+            fragments = (relation if 'clickable' in relation else
+                         make_relation_fragments('', relation.get('target', ''),
+                                                 '', relation.get('link')))
+            self.cursor.execute("""
+                INSERT INTO relations
+                (entry_id, sense_id, relation_type, prefix, clickable, suffix,
+                 target_word, target_sense, sort_order)
+                VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)
+            """, (entry_id, relation['type'], fragments.get('prefix'),
+                  fragments.get('clickable'), fragments.get('suffix'),
+                  fragments.get('target_word', ''), fragments.get('target_sense'), index))
+
+    def write_collocations(self, entry_id, collocations):
+        """Write collocations and their examples in source order."""
+        for collocation in collocations:
+            self.cursor.execute("""
+                INSERT INTO collocations (entry_id, category, text, gloss, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+            """, (entry_id, collocation.get('category'), collocation['text'],
+                  collocation.get('gloss'), collocation.get('sort_order', 0)))
+            collocation_id = self.cursor.lastrowid
+            self.cursor.executemany("""
+                INSERT INTO collocation_examples (collocation_id, text, sort_order)
+                VALUES (?, ?, ?)
+            """, ((collocation_id, example['text'], example.get('sort_order', 0))
+                  for example in collocation.get('examples', [])))
+
+    def write_attributes(self, entry_id, attributes):
+        """Write namespaced attributes using the standard typed encoding."""
+        for key, value in attributes.items():
+            if not value:
+                continue
+            if isinstance(value, bool):
+                attr_type, attr_value = 'boolean', '1' if value else '0'
+            elif isinstance(value, int):
+                attr_type, attr_value = 'integer', str(value)
+            elif isinstance(value, (dict, list)):
+                attr_value = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+                attr_type = 'json'
+                if len(attr_value) > 1000:
+                    attr_value = zlib.compress(attr_value.encode('utf-8'), level=9)
+                    attr_type = 'json.gz'
+            else:
+                attr_type, attr_value = 'text', str(value)
+            self.cursor.execute("""
+                INSERT OR REPLACE INTO entry_attributes
+                (entry_id, attr_key, attr_value, attr_type) VALUES (?, ?, ?, ?)
+            """, (entry_id, f'{self.dict_id}/{key}', attr_value, attr_type))
+
+    def write_alias(self, alias, target):
+        """Write an MDX alias using case-insensitive lookup keys."""
+        self.cursor.execute("""
+            INSERT INTO aliases (dict_id, alias, alias_lower, target)
+            VALUES (?, ?, ?, ?)
+        """, (self.dict_id, alias, alias.lower(), target))
+
+    def commit(self):
+        """Commit the current batch."""
+        if self.conn:
+            self.conn.commit()
+
+    def close(self, vacuum=True):
+        """Update entry counts, optionally optimize the database, and close it."""
+        if self.conn:
+            try:
+                self.cursor.execute("""
+                    UPDATE dictionaries SET entry_count = ? WHERE dict_id = ?
+                """, (self.entry_count, self.dict_id))
+                self.conn.commit()
+                if vacuum:
+                    print('Optimizing database...')
+                    self.cursor.execute('ANALYZE')
+                    self.cursor.execute('VACUUM')
+                    print('Database optimized and compressed')
+            finally:
+                self.conn.close()
+                self.conn = None
+                self.cursor = None
 
 
 # =============================================================================

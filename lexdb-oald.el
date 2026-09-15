@@ -215,8 +215,10 @@ Uses exact match and follows @@@LINK= aliases to find target entries."
 
 (defun lexdb-oald--get-idioms (entry-id)
   "Get idioms for ENTRY-ID."
-  (let ((adapter-id (lexdb--active-adapter-id 'oald)))
-    (or (lexdb-db-cache-get adapter-id (cons entry-id 'idioms))
+  (let* ((adapter-id (lexdb--active-adapter-id 'oald))
+         (cached (lexdb-db-cache-get adapter-id (cons entry-id 'idioms) 'not-found)))
+    (if (not (eq cached 'not-found))
+        cached
       (let* ((db (lexdb-oald--ensure-db))
              (attr-row (sqlite-select db
                         "SELECT attr_value, attr_type FROM entry_attributes

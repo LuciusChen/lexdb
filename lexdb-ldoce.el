@@ -261,22 +261,9 @@ Uses exact match only, consistent with original dictionary behavior."
 
 (defun lexdb-ldoce--get-collocations (entry-id)
   "Get collocations for ENTRY-ID."
-  (let ((adapter-id (lexdb--active-adapter-id 'ldoce)))
-    (or (lexdb-db-cache-get adapter-id (cons entry-id 'collocations))
-      (let* ((db (lexdb-ldoce--ensure-db))
-             (rows (sqlite-select db
-                    "SELECT id, category, text, gloss FROM collocations WHERE entry_id = ? ORDER BY sort_order"
-                    (list entry-id)))
-             (colls (mapcar (lambda (row)
-                              (pcase-let ((`(,coll-id ,cat ,coll ,gloss) row))
-                                (let ((ex-rows (sqlite-select db
-                                                "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
-                                                (list coll-id))))
-                                  (lexdb-collocation-create
-                                   :category cat :text coll :gloss gloss
-                                   :examples (mapcar #'car ex-rows)))))
-                            rows)))
-        (lexdb-db-cache-put adapter-id (cons entry-id 'collocations) colls)))))
+  (lexdb-ldoce--prefetch (list entry-id))
+  (lexdb-db-cache-get (lexdb--active-adapter-id 'ldoce)
+                      (cons entry-id 'collocations)))
 
 (defun lexdb-ldoce--get-relations (entry-id type)
   "Get relations of TYPE for ENTRY-ID."
@@ -293,28 +280,43 @@ Uses exact match only, consistent with original dictionary behavior."
             rows)))
 
 (defun lexdb-ldoce--prefetch (entry-ids)
-  "Prefetch data for ENTRY-IDS."
-  (when entry-ids
-    (let* ((db (lexdb-ldoce--ensure-db))
-           (ph (mapconcat (lambda (_) "?") entry-ids ","))
-           (coll-rows (sqlite-select db
-                       (format "SELECT id, entry_id, category, text, gloss FROM collocations WHERE entry_id IN (%s) ORDER BY entry_id, sort_order" ph)
-                       entry-ids))
-           (entry-colls (make-hash-table :test 'eql)))
-      (dolist (row coll-rows) (push row (gethash (nth 1 row) entry-colls)))
-      (maphash (lambda (entry-id rows)
-                 (lexdb-db-cache-put
-                  (lexdb--active-adapter-id 'ldoce)
-                  (cons entry-id 'collocations)
-                  (mapcar (lambda (row)
-                            (pcase-let ((`(,coll-id ,_ ,cat ,coll ,gloss) row))
-                              (lexdb-collocation-create
-                               :category cat :text coll :gloss gloss
-                               :examples (mapcar #'car (sqlite-select db
-                                                        "SELECT text FROM collocation_examples WHERE collocation_id = ? ORDER BY sort_order"
-                                                        (list coll-id))))))
-                          (nreverse rows))))
-               entry-colls))))
+  "Prefetch uncached collocations and examples for ENTRY-IDS.
+Use at most two queries and cache entries without collocations as nil."
+  (let* ((adapter-id (lexdb--active-adapter-id 'ldoce))
+         (missing-ids
+          (cl-remove-if
+           (lambda (id)
+             (not (eq (lexdb-db-cache-get adapter-id (cons id 'collocations)
+                                          'not-found)
+                      'not-found)))
+           (delete-dups (copy-sequence entry-ids)))))
+    (when missing-ids
+      (let* ((db (lexdb-ldoce--ensure-db))
+             (ph (mapconcat (lambda (_) "?") missing-ids ","))
+             (coll-rows (sqlite-select db
+                                       (format "SELECT id, entry_id, category, text, gloss FROM collocations WHERE entry_id IN (%s) ORDER BY entry_id, sort_order" ph)
+                                       missing-ids))
+             (example-rows
+              (when coll-rows
+                (sqlite-select db
+                               (format "SELECT e.collocation_id, e.text
+                        FROM collocation_examples e
+                        JOIN collocations c ON c.id = e.collocation_id
+                        WHERE c.entry_id IN (%s)
+                        ORDER BY e.collocation_id, e.sort_order" ph)
+                               missing-ids)))
+             (examples (make-hash-table :test 'eql))
+             (entry-colls (make-hash-table :test 'eql)))
+        (pcase-dolist (`(,coll-id ,text) example-rows)
+          (push text (gethash coll-id examples)))
+        (pcase-dolist (`(,coll-id ,entry-id ,category ,text ,gloss) coll-rows)
+          (push (lexdb-collocation-create
+                 :category category :text text :gloss gloss
+                 :examples (nreverse (gethash coll-id examples)))
+                (gethash entry-id entry-colls)))
+        (dolist (entry-id missing-ids)
+          (lexdb-db-cache-put adapter-id (cons entry-id 'collocations)
+                              (nreverse (gethash entry-id entry-colls))))))))
 
 ;;;; ============================================================
 ;;;; Lemmatization

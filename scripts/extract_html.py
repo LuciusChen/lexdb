@@ -7,17 +7,13 @@
 import sys
 from pathlib import Path
 
-try:
-    from readmdict import MDX
-except ImportError:
-    print("请先安装依赖: pip install readmdict python-lzo")
-    sys.exit(1)
+from lexdb_mdx import open_mdx
 
 
 def extract_entry_html(mdx_path, word):
     """提取指定词条的 HTML"""
     print(f"正在加载 MDX: {mdx_path}")
-    mdx = MDX(mdx_path)
+    mdx = open_mdx(mdx_path)
 
     # 获取所有词条
     items = mdx.items()

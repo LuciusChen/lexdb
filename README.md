@@ -31,12 +31,29 @@ Emacs 词典查询系统，将 MDX 词典转换为 SQLite 数据库，提供快�
 │   ├── screenshot.jpg
 │   └── screenshot1.jpg
 └── scripts/
-    ├── lexdb_common.py   # Python 通用模块
+    ├── lexdb_common.py   # Schema、公共写入操作、词条事务和文本工具
+    ├── lexdb_mdx.py      # MDX 流式读取、MDD 音频提取
     ├── mdx2db_ldoce.py   # MDX → SQLite 转换 (LDOCE)
     ├── mdx2db_oald.py    # MDX → SQLite 转换 (OALD)
     ├── mdx2db_ode.py     # MDX → SQLite 转换 (ODE)
     └── extract_html.py   # MDX html 提取工具
 ```
+
+### 解析与写入架构
+
+```text
+MDX → lexdb_mdx → 各词典 HTML 解析器 → 词典写入器 + lexdb_common → SQLite
+MDD → lexdb_mdx → audio/ 音频文件
+```
+
+- HTML 解析器返回结构化数据；仅解析 HTML 时不需要 `readmdict` 或 `python-lzo`。
+- 三个转换器逐条读取 MDX，不再额外保存整份 HTML 列表。`readmdict` 自身仍会读取词条索引和解压数据块。
+- LDOCE、ODE 共用 `DatabaseWriter` 的连接、计数、关系、搭配和属性写入；各自处理同形词、义项和特有元数据。
+- OALD 保留双语字段及旧属性格式的专用写入逻辑，并复用同一词条事务。
+- 单个词条写入失败时回滚该词条，保留当前批次内已完成的词条；写入过程不会修改解析结果。
+- 先完成 MDX 读取器初始化和所请求的音频提取，再创建或替换数据库；这些准备步骤失败时保留原数据库。整库转换尚不支持原子替换。
+
+现有命令和 Schema 2.2 保持兼容，无需重新生成词库即可继续使用现有数据库。
 
 ## 快速开始
 
@@ -44,7 +61,7 @@ Emacs 词典查询系统，将 MDX 词典转换为 SQLite 数据库，提供快�
 
 ```bash
 # 安装依赖
-pip install readmdict beautifulsoup4 lxml
+pip install -r scripts/requirements.txt
 
 # 转换 LDOCE
 python scripts/mdx2db_ldoce.py LDOCE6.mdx
@@ -147,6 +164,27 @@ python scripts/mdx2db_ldoce.py LDOCE6.mdx --extract-audio
 | ODE Living Online (mdx) | [Dropbox](https://www.dropbox.com/scl/fo/yxopdizb4ec1efpjnue6w/AL4bIrweIQ9T2EK9fMUdb7Q?rlkey=3b2ve6lsmgay2ddc0lmhkhgaa&st=xwnt5pt6&dl=0) |
 | OALD4 双解 (mdx) | [Dropbox](https://www.dropbox.com/scl/fi/fuvc12vu0j7p6zrx9vcvg/OALD4-Dual-Language-Fall-2022.rar?rlkey=o7hrwtjarwtnql8gg54i4o12z&st=tbggft44&dl=0) |
 | LDOCE 6 (mdx) | [Dropbox](https://www.dropbox.com/scl/fo/hnop12hlfqj59ye3p2v76/AMZ_49qy3r9BwyG7VaUciCw?rlkey=1qzqro950otfxahy9h2pvaxc7&st=5cga1drx&dl=0) |
+
+## 查询缓存与测试
+
+搭配、习语、短语和词源查询按词典 ID 缓存，包括空结果。
+LDOCE 在渲染前批量读取尚未缓存的搭配及例句，重复渲染时复用缓存。
+替换数据库后，可重启 Emacs，或先调用 `(lexdb-db-close 'ldoce)`
+清除对应词典的连接与缓存，再重新查询（将 `ldoce` 换成配置中的词典 ID）。
+
+Python 解析与写入测试（仅需 `beautifulsoup4`，可安装 `lxml` 加速解析）：
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+在仓库目录运行测试（需要 Emacs SQLite 支持）：
+
+```bash
+emacs -Q --batch -L . \
+  -l tests/lexdb-cache-test.el -l tests/lexdb-ui-test.el \
+  -f ert-run-tests-batch-and-exit
+```
 
 ## 依赖
 

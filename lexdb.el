@@ -268,7 +268,7 @@ Returns the database connection."
       (puthash adapter-id db lexdb--database-connections)
       ;; Initialize cache for this adapter if needed
       (unless (gethash adapter-id lexdb--query-caches)
-        (puthash adapter-id (make-hash-table :test 'eql) lexdb--query-caches)))
+        (puthash adapter-id (make-hash-table :test 'equal) lexdb--query-caches)))
     db))
 
 (defun lexdb-db-get (adapter-id)
@@ -285,15 +285,17 @@ Returns nil if not connected."
   (when-let* ((cache (gethash adapter-id lexdb--query-caches)))
     (clrhash cache)))
 
-(defun lexdb-db-cache-get (adapter-id key)
-  "Get VALUE for KEY from ADAPTER-ID's cache."
-  (when-let* ((cache (gethash adapter-id lexdb--query-caches)))
-    (gethash key cache)))
+(defun lexdb-db-cache-get (adapter-id key &optional default)
+  "Get the value for KEY from ADAPTER-ID's cache.
+Return DEFAULT if KEY is absent, distinguishing a miss from cached nil."
+  (if-let* ((cache (gethash adapter-id lexdb--query-caches)))
+      (gethash key cache default)
+    default))
 
 (defun lexdb-db-cache-put (adapter-id key value)
   "Store VALUE for KEY in ADAPTER-ID's cache."
   (let ((cache (or (gethash adapter-id lexdb--query-caches)
-                   (let ((new-cache (make-hash-table :test 'eql)))
+                   (let ((new-cache (make-hash-table :test 'equal)))
                      (puthash adapter-id new-cache lexdb--query-caches)
                      new-cache))))
     (puthash key value cache)
