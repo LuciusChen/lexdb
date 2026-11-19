@@ -47,25 +47,38 @@
                        "n. 2 used to say that an action will not work (good²)"))))))
 
 (ert-deftest lexdb-ui-custom-id-jumps-to-rendered-sense ()
-  "Render namespaced metadata and follow a sense link in both display modes."
+  "Follow a numbered homograph link in both dictionary display modes."
   (let* ((lexdb-adapters (make-hash-table :test 'eq))
+         (lexdb-dictionaries '((:id longman :type ldoce)))
          (lexdb-enabled-adapters '(longman))
          (lexdb--history nil)
          (lexdb--history-position -1)
-         (entry (lexdb-ui-test--entry "aid" "noun"
-                                      '(("1" nil "help") ("3" nil "in aid of"))))
+         (source (lexdb-ui-test--entry "abet" "verb" '(("1" nil "help"))))
+         (targets (list (lexdb-ui-test--entry "aid1" "noun" '(("3" nil "charity")))
+                        (lexdb-ui-test--entry "aid2" "verb" '(("3" nil "illegal")))))
          (adapter (lexdb-adapter-create
-                   :id 'longman :type 'ldoce :name "Longman"
-                   :capabilities '(pos) :lookup-fn (lambda (_) (list entry)))))
+                   :id 'longman :name "Longman" :capabilities '(pos cross-refs)
+                   :lookup-fn (lambda (word)
+                                (pcase word ("abet" (list source)) ("aid" targets))))))
     (lexdb-register-adapter adapter)
-    (save-window-excursion
-      (dolist (multi '(nil t))
-        (let ((lexdb-multi-dict-mode multi))
-          (when multi (lexdb-ui-display-multi "aid"))
-          (lexdb-search-and-goto-sense "aid" "3" 'longman)
-          (should (looking-at "3 in aid of"))
-          (goto-char (point-min))
-          (should (search-forward "noun" nil t)))))))
+    (let ((ref (lexdb-relation-create :type 'cross_ref :clickable "at aid2"
+                                      :suffix "(3)" :target-word "aid" :target-sense "3"
+                                      :metadata '((target-headword . "aid2")))))
+      (save-window-excursion
+        (dolist (multi '(nil t))
+          (let ((lexdb-multi-dict-mode multi))
+            (dolist (level '(entry sense))
+              (setf (lexdb-entry-relations source) (and (eq level 'entry) (list ref))
+                    (lexdb-sense-relations (car (lexdb-entry-senses source)))
+                    (and (eq level 'sense) (list ref)))
+              (if multi (lexdb-ui-display-multi "abet")
+                (lexdb-ui-display "abet" (list source) adapter))
+              (goto-char (point-min))
+              (search-forward "at aid²")
+              (button-activate (button-at (1- (point))))
+              (should (looking-at "3 illegal"))
+              (goto-char (point-min))
+              (should (search-forward "noun" nil t)))))))))
 
 (ert-deftest lexdb-resolve-word-reuses-matching-entries ()
   (let* ((lexdb-adapters (make-hash-table :test 'eq))

@@ -149,6 +149,14 @@ Use DB and fragment storage format: prefix + clickable + suffix."
                (list sense-id))))
     (lexdb-ldoce--build-relations rows)))
 
+(defun lexdb-ldoce--relation-metadata (word label)
+  "Recover a numbered target headword from WORD and its clickable LABEL."
+  ;; The database stores "aid" in target_word and "at aid2" in clickable.
+  (let ((case-fold-search t))
+    (when (and (lexdb--non-empty-string-p word)
+               (string-match (concat (regexp-quote word) "\\([0-9]+\\)\\'") label))
+      (list (cons 'target-headword (concat (downcase word) (match-string 1 label)))))))
+
 (defun lexdb-ldoce--build-relations (rows)
   "Build relation objects from fragment ROWS."
   (delq nil
@@ -162,6 +170,7 @@ Use DB and fragment storage format: prefix + clickable + suffix."
                        :suffix suffix
                        :target-word target-word
                        :target-sense target-sense
+                       :metadata (lexdb-ldoce--relation-metadata target-word clickable)
                        ;; Legacy fields for compatibility
                        :target (concat (or prefix "") clickable (or suffix ""))))))
                 rows)))
@@ -334,7 +343,6 @@ Called by `lexdb-init' for unified configuration."
     (lexdb-register-adapter
      (lexdb-adapter-create
       :id id
-      :type 'ldoce
       :name name
       :version "6th Edition"
       :capabilities '(lookup definition pronunciation audio-uk audio-us audio-example

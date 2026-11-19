@@ -1143,6 +1143,7 @@ Optional ADAPTER adds semantic properties for navigation."
     (when (lexdb--non-empty-string-p formatted)
       (insert (propertize formatted
                           'face 'lexdb-headword-face
+                          'lexdb-entry-location (list (downcase (lexdb-entry-headword entry)))
                           'lexdb-entry-headword formatted
                           'lexdb-entry-pos pos)))))
 
@@ -1296,9 +1297,16 @@ This includes tense, plural, and comparative/superlative forms."
 ;;;; Sense Rendering Helper Functions
 ;;;; ============================================================
 
-(defun lexdb-ui--render-sense-subsenses (sense _adapter entry caps audio-dir ns)
+(defun lexdb-ui--insert-sense-number (num entry)
+  "Insert NUM with navigation properties for ENTRY."
+  (insert (propertize num 'face 'lexdb-sense-num-face
+                      'lexdb-sense-number num
+                      'lexdb-entry-location (cons (and entry (downcase (lexdb-entry-headword entry))) num))
+          " "))
+
+(defun lexdb-ui--render-sense-subsenses (sense adapter entry caps audio-dir ns)
   "Render subsenses for SENSE.
-ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
+ADAPTER, ENTRY, CAPS, AUDIO-DIR and NS come from the enclosing sense."
   (let ((subsenses (lexdb-meta-get (lexdb-sense-metadata sense) ns "subsenses")))
     (when subsenses
       (let ((sub-list (if (vectorp subsenses) (append subsenses nil) subsenses)))
@@ -1316,7 +1324,7 @@ ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
             ;; Subsense number
             (insert "  ")
             (when sub-num
-              (insert (propertize sub-num 'face 'lexdb-sense-num-face) " "))
+              (lexdb-ui--insert-sense-number sub-num entry))
             ;; Translation indicator - after subsense number
             (when (memq 'chinese-definition caps)
               (lexdb-ui--insert-translation-indicator sub-def-zh))
@@ -1425,8 +1433,8 @@ ENTRY, CAPS, AUDIO-DIR, NS are passed from the parent context."
                                                 (insert-text-button word-text
                                                                     'face 'lexdb-link-face
                                                                     'action (lambda (_)
-                                                                              (lexdb-search-and-goto-sense word-text nil 'ode))
-                                                                    'help-echo (format "Look up: %s [ode]" word-text))
+                                                                              (lexdb-search-and-goto-sense word-text nil (lexdb-adapter-id adapter)))
+                                                                    'help-echo (format "Look up: %s [%s]" word-text (lexdb-adapter-id adapter)))
                                               (insert (propertize word-text 'face 'default))))))
                                       (insert "\n"))))
                                 (buffer-string)))
@@ -1558,6 +1566,13 @@ ADAPTER, AUDIO-DIR, NS, SENSE-NUM-STR are from parent context."
                           (lexdb-ui--insert-highlighted-text ex-text 'lexdb-example-face)
                           (insert "\n"))))))))))))))
 
+(defun lexdb-ui--relation-word (relation headword)
+  "Return the lookup key for RELATION, optionally targeting an exact HEADWORD."
+  (if headword
+      (lexdb-relation-target-word relation)
+    (lexdb-ui--normalize-search-word
+     (or (lexdb-relation-target-word relation) (lexdb-relation-clickable relation)))))
+
 (defun lexdb-ui--render-sense-crossrefs (sense adapter)
   "Render sense-level cross references for SENSE using ADAPTER."
   (let ((sense-relations (lexdb-sense-relations sense))
@@ -1573,14 +1588,13 @@ ADAPTER, AUDIO-DIR, NS, SENSE-NUM-STR are from parent context."
               (let* ((prefix (lexdb-relation-prefix ref))
                      (clickable (lexdb-relation-clickable ref))
                      (suffix (lexdb-relation-suffix ref))
-                     (target-word (lexdb-relation-target-word ref))
+                     (headword (alist-get 'target-headword (lexdb-relation-metadata ref)))
                      (target-sense (lexdb-relation-target-sense ref))
                      (target (lexdb-relation-target ref))
                      (jump-adapter adapter-id))
                 (if clickable
                     ;; New fragment format
-                    (let* ((search-word (lexdb-ui--normalize-search-word
-                                         (or target-word clickable)))
+                    (let* ((search-word (lexdb-ui--relation-word ref headword))
                            (display-clickable (lexdb-ui--number-to-superscript clickable)))
                       (when (and prefix (not (string-empty-p prefix)))
                         (insert (propertize prefix 'face 'lexdb-definition-face)))
@@ -1588,7 +1602,7 @@ ADAPTER, AUDIO-DIR, NS, SENSE-NUM-STR are from parent context."
                                           'face 'lexdb-crossref-face
                                           'action (lambda (_)
                                                     (lexdb-search-and-goto-sense
-                                                     search-word target-sense jump-adapter))
+                                                     search-word target-sense jump-adapter headword))
                                           'help-echo (format "Look up: %s%s [%s]"
                                                              search-word
                                                              (if target-sense (format " sense %s" target-sense) "")
@@ -1762,8 +1776,8 @@ ENTRY, ADAPTER, SENSE, SENSE-INDEX are from parent context."
                                         (insert-text-button word-text
                                                             'face 'lexdb-link-face
                                                             'action (lambda (_)
-                                                                      (lexdb-search-and-goto-sense word-text nil 'ode))
-                                                            'help-echo (format "Look up: %s [ode]" word-text))
+                                                                      (lexdb-search-and-goto-sense word-text nil (lexdb-adapter-id adapter)))
+                                                            'help-echo (format "Look up: %s [%s]" word-text (lexdb-adapter-id adapter)))
                                       (insert (propertize word-text 'face 'default))))))
                               (insert "\n"))))
                         (buffer-string)))
@@ -1804,7 +1818,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     ;; Sense number
     (when-let* ((num (lexdb-sense-number sense)))
       (when (lexdb--non-empty-string-p num)
-        (insert (propertize num 'face 'lexdb-sense-num-face 'lexdb-sense-number num) " ")))
+        (lexdb-ui--insert-sense-number num entry)))
     ;; Translation indicator (🌐) - right after sense number
     (when (memq 'chinese-definition caps)
       (lexdb-ui--insert-translation-indicator def-zh))
@@ -2110,7 +2124,7 @@ Returns a string with text properties preserved for insertion."
   "Insert RELATIONS with clickable links using FACE.
 Uses fragment storage format: prefix + clickable + suffix.
 If ADAPTER-ID is provided, links will jump within the same dictionary.
-No regex matching needed - data is pre-parsed."
+The clickable label can include a homograph number."
   (let ((first t))
     (dolist (rel relations)
       (unless first (insert ", "))
@@ -2119,7 +2133,7 @@ No regex matching needed - data is pre-parsed."
       (let ((prefix (lexdb-relation-prefix rel))
             (clickable (lexdb-relation-clickable rel))
             (suffix (lexdb-relation-suffix rel))
-            (target-word (lexdb-relation-target-word rel))
+            (headword (alist-get 'target-headword (lexdb-relation-metadata rel)))
             (target-sense (lexdb-relation-target-sense rel))
             ;; Capture adapter-id in closure for intra-dictionary jump
             (jump-adapter adapter-id))
@@ -2130,9 +2144,7 @@ No regex matching needed - data is pre-parsed."
               (when (and prefix (not (string-empty-p prefix)))
                 (insert (propertize prefix 'face 'lexdb-definition-face)))
               ;; Insert clickable part as button
-              ;; Normalize search word: remove superscripts/numbers, lowercase
-              (let ((search-word (lexdb-ui--normalize-search-word
-                                  (or target-word clickable)))
+              (let ((search-word (lexdb-ui--relation-word rel headword))
                     ;; Convert trailing numbers to superscript for display
                     (display-clickable (lexdb-ui--number-to-superscript clickable))
                     ;; Include suffix in clickable area
@@ -2142,9 +2154,7 @@ No regex matching needed - data is pre-parsed."
                                     'face face
                                     'action (lambda (_)
                                               (lexdb-search-and-goto-sense
-                                               search-word
-                                               target-sense
-                                               jump-adapter))
+                                               search-word target-sense jump-adapter headword))
                                     'help-echo (format "Look up: %s%s%s"
                                                        search-word
                                                        (if target-sense (format " sense %s" target-sense) "")
@@ -2154,9 +2164,10 @@ No regex matching needed - data is pre-parsed."
             (when target
               (insert (propertize target 'face 'lexdb-definition-face)))))))))
 
-(defun lexdb-search-and-goto-sense (word &optional sense-num adapter-id)
+(defun lexdb-search-and-goto-sense (word &optional sense-num adapter-id headword)
   "Search for WORD and optionally scroll to SENSE-NUM.
 If ADAPTER-ID is provided, search within that dictionary only.
+HEADWORD, when supplied, selects the exact homograph within the results.
 In multi-dict mode, updates current buffer and switches to the target dict tab.
 Otherwise, fall back to global search."
   (if adapter-id
@@ -2179,8 +2190,8 @@ Otherwise, fall back to global search."
           (lexdb-search word)))
     ;; No adapter specified: global search (which handles history)
     (lexdb-search word))
-  (when sense-num
-    (lexdb-goto-sense sense-num)))
+  (when (or sense-num headword)
+    (lexdb-goto-sense sense-num headword)))
 
 (defun lexdb-ui--jump-in-multi-buffer (word adapter-id entries)
   "Show ENTRIES for WORD in the ADAPTER-ID tab and refresh other dictionaries."
@@ -3153,8 +3164,8 @@ Examples include derived forms such as `relevantly adverb'."
                   (insert " " (propertize gram 'face 'lexdb-grammar-face)))
                 (insert "\n")))))))))
 
-(defun lexdb-ui--render-ode-phrases (entry phrases)
-  "Render ODE PHRASES section for ENTRY."
+(defun lexdb-ui--render-ode-phrases (entry phrases adapter-id)
+  "Render ODE PHRASES for ENTRY with links to ADAPTER-ID."
   (when (and phrases (> (length phrases) 0))
     (let ((section-start (point))
           (phrase-list (if (vectorp phrases) (append phrases nil) phrases))
@@ -3205,7 +3216,7 @@ Examples include derived forms such as `relevantly adverb'."
                     (dolist (xref xref-list)
                       (unless first (insert ", "))
                       (setq first nil)
-                      (lexdb-ui--insert-crossref-fragments xref 'ode)))
+                      (lexdb-ui--insert-crossref-fragments xref adapter-id)))
                   (insert "\n")))
               ;; Example sentences and SYNONYMS tabs
               (let ((tabs nil)
@@ -3241,8 +3252,8 @@ Examples include derived forms such as `relevantly adverb'."
           (overlay-put ov 'face 'lexdb-grambox-background-face)
           (overlay-put ov 'lexdb-ode-phrases t))))))
 
-(defun lexdb-ui--render-ode-phrasal-verbs (entry phrasal-verbs)
-  "Render ODE PHRASAL-VERBS section for ENTRY."
+(defun lexdb-ui--render-ode-phrasal-verbs (entry phrasal-verbs adapter-id)
+  "Render ODE PHRASAL-VERBS for ENTRY with links to ADAPTER-ID."
   (when (and phrasal-verbs (> (length phrasal-verbs) 0))
     (let ((section-start (point))
           (pv-list (if (vectorp phrasal-verbs) (append phrasal-verbs nil) phrasal-verbs))
@@ -3293,7 +3304,7 @@ Examples include derived forms such as `relevantly adverb'."
                     (dolist (xref xref-list)
                       (unless first (insert ", "))
                       (setq first nil)
-                      (lexdb-ui--insert-crossref-fragments xref 'ode)))
+                      (lexdb-ui--insert-crossref-fragments xref adapter-id)))
                   (insert "\n")))
               ;; Example sentences and SYNONYMS tabs
               (let ((tabs nil)
@@ -3438,8 +3449,8 @@ Examples include derived forms such as `relevantly adverb'."
            (enc-note (lexdb-meta-get (lexdb-entry-metadata entry) ns "encyclopedic_note"))
            (usage-text (lexdb-meta-get (lexdb-entry-metadata entry) ns "usage"))
            (origin-alist (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin")))
-      (lexdb-ui--render-ode-phrases entry phrases)
-      (lexdb-ui--render-ode-phrasal-verbs entry phrasal-verbs)
+      (lexdb-ui--render-ode-phrases entry phrases (lexdb-adapter-id adapter))
+      (lexdb-ui--render-ode-phrasal-verbs entry phrasal-verbs (lexdb-adapter-id adapter))
       (lexdb-ui--render-ode-derivatives entry derivatives)
       (lexdb-ui--render-ode-encyclopedic enc-note)
       (lexdb-ui--render-ode-usage usage-text)
@@ -3640,11 +3651,15 @@ The translation disappears on the next command."
       (goto-char (point-min))
       (message "At first entry"))))
 
-(defun lexdb-goto-sense (num)
-  "Jump to the rendered heading for sense number NUM."
+(defun lexdb-goto-sense (num &optional headword)
+  "Jump to sense NUM, optionally within the exact HEADWORD.
+With HEADWORD and nil NUM, jump to the headword itself."
   (if-let* ((match (save-excursion
                      (goto-char (point-min))
-                     (text-property-search-forward 'lexdb-sense-number num #'equal))))
+                     (if headword
+                         (text-property-search-forward 'lexdb-entry-location
+                                                       (cons (downcase headword) num) #'equal)
+                       (text-property-search-forward 'lexdb-sense-number num #'equal)))))
       (progn
         (goto-char (prop-match-beginning match))
         (beginning-of-line)

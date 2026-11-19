@@ -251,7 +251,6 @@ Called by `lexdb-init' for unified configuration."
     (lexdb-register-adapter
      (lexdb-adapter-create
       :id id
-      :type 'oald
       :name name
       :version "4th Edition (双解)"
       :capabilities '(lookup definition pronunciation

@@ -206,10 +206,11 @@
     (lexdb-ldoce-register)
     (sqlite-execute db "CREATE TABLE relations
       (entry_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)")
-    (sqlite-execute db "INSERT INTO relations VALUES (1, 'cross_ref', 'at ', 'aid', '(3)', 'aid', '3', 0)")
+    (sqlite-execute db "INSERT INTO relations VALUES (1, 'cross_ref', 'see ', 'at aid2', '(3)', 'aid', '3', 0)")
     (let ((rel (car (lexdb-get-relations 1 'cross_ref 'ldoce))))
-      (should (equal (lexdb-relation-target rel) "at aid(3)"))
+      (should (equal (lexdb-relation-target rel) "see at aid2(3)"))
       (should (equal (lexdb-relation-target-sense rel) "3"))
+      (should (equal (alist-get 'target-headword (lexdb-relation-metadata rel)) "aid2"))
       (should-not (lexdb-get-relations 1 'synonym 'ldoce)))))
 
 (ert-deftest lexdb-ldoce-normalizes-typographic-apostrophes ()

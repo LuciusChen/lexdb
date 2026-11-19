@@ -292,7 +292,6 @@ Called by `lexdb-init' for unified configuration."
     (lexdb-register-adapter
      (lexdb-adapter-create
       :id id
-      :type 'ode
       :name name
       :version "Living Online"
       :capabilities '(lookup definition pronunciation

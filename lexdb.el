@@ -575,7 +575,6 @@ Does not mutate original metadata."
   "Dictionary adapter - bridges specific dictionary to universal interface."
   ;; Identity
   (id nil :type symbol :documentation "Unique identifier (e.g., ldoce, oxford)")
-  (type nil :type symbol :documentation "Dictionary format and metadata namespace")
   (name nil :type string :documentation "Human-readable name")
   (version nil :type (or string null))
 
@@ -706,7 +705,8 @@ When NO-LEMMA-HINT is non-nil, skip lemma suggestions."
 
 (defun lexdb--dictionary-type (adapter)
   "Return the dictionary format of ADAPTER."
-  (or (lexdb-adapter-type adapter) (lexdb-adapter-id adapter)))
+  (let ((id (lexdb-adapter-id adapter)))
+    (or (plist-get (lexdb-get-dict-config id) :type) id)))
 
 (defun lexdb-register-adapter (adapter)
   "Register ADAPTER in the global registry."
