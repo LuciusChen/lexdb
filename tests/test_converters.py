@@ -174,6 +174,27 @@ class MdxTests(unittest.TestCase):
                 self.assertIsNone(extract_mdd_audio(Path(directory) / 'sample.mdx'))
 
 
+class LdocePronunciationTests(unittest.TestCase):
+    def test_strong_forms_in_entry_and_runon(self):
+        from mdx2db_ldoce import LDOCEParser
+
+        html = """
+        <div class="entryhead"><span class="proncodes">/<span class="pron">wə</span><span
+          class="pronstrong">; strong</span><span class="pron"> wɜː</span><span
+          class="amevarpron"> $ wər</span><span class="pronstrong"> strong</span><span
+          class="pron"> wɜːr</span>/</span></div>
+        <div class="tail"><div class="runon"><span class="deriv">derived</span>
+          <span class="proncodes">/<span class="pron">ə</span><span
+          class="pronstrong">; strong</span><span class="pron"> eɪ</span>/</span>
+        </div></div>"""
+        entry, = LDOCEParser().parse(html, 'were')
+        self.assertEqual([(p['variant'], p['ipa']) for p in entry['pronunciations']],
+                         [('uk', 'wə; strong wɜː'), ('us', 'wər strong wɜːr')])
+        runon, = entry['attributes']['runons']
+        self.assertEqual(runon['pron_uk'], 'ə; strong eɪ')
+        self.assertNotIn('pron_us', runon)
+
+
 class ConversionTests(unittest.TestCase):
     def test_missing_mdx_dependency_leaves_output_untouched(self):
         code = """
