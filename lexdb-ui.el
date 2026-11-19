@@ -99,9 +99,6 @@ Returns adapter-specific template or default template."
 (defvar-local lexdb-ui--fold-counter 0
   "Buffer-local counter for generating unique fold IDs.")
 
-(defvar-local lexdb-ui--pending-sense-num nil
-  "Pending sense number to jump to after rendering.")
-
 (defcustom lexdb-enabled-adapters nil
   "List of adapter IDs to query.
 If nil, query all registered adapters."
@@ -120,23 +117,16 @@ If nil, query all registered adapters."
   (or lexdb-enabled-adapters
       (mapcar #'car (lexdb-list-adapters))))
 
-(defun lexdb-ui--lookup-with-lemma (word adapter-id adapter)
-  "Lookup WORD in ADAPTER-ID, trying lemmatization if no results.
-ADAPTER is the adapter struct.  Returns entries list or nil."
-  (or (lexdb-lookup word adapter-id)
-      (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-        (when-let* ((lemma (lexdb-find-lemma word adapter-id))
-                    ((not (equal lemma (downcase word)))))
-          (lexdb-lookup lemma adapter-id)))))
-
-(defun lexdb-ui--query-all-dicts (word)
+(defun lexdb-ui--query-all-dicts (word &optional known-id known-entries)
   "Query WORD in all enabled dictionaries.
+Reuse KNOWN-ENTRIES for KNOWN-ID when supplied.
 Returns alist of (adapter-id . (entries . adapter))."
   (let ((results nil))
     (dolist (adapter-id (lexdb-ui--get-enabled-adapters))
       (when-let* ((adapter (lexdb-get-adapter adapter-id)))
         (push (cons adapter-id
-                    (cons (lexdb-ui--lookup-with-lemma word adapter-id adapter)
+                    (cons (if (eq adapter-id known-id) known-entries
+                            (cdr (lexdb--resolve-word word adapter)))
                           adapter))
               results)))
     (nreverse results)))
@@ -243,18 +233,6 @@ Returns alist of (adapter-id . (entries . adapter))."
       (when (and (>= n 1) (<= n (length ids)))
         (lexdb-ui-switch-dict (nth (1- n) ids))))))
 
-(defun lexdb-ui--buffer-for-search (&optional adapter-id)
-  "Return the target display buffer for ADAPTER-ID or current search mode."
-  (if lexdb-multi-dict-mode
-      (lexdb-ui--get-multi-buffer)
-    (lexdb-ui--get-buffer (or adapter-id (lexdb--ensure-adapter)))))
-
-(defun lexdb-ui--set-pending-sense (buffer sense-num)
-  "Record SENSE-NUM as pending in BUFFER."
-  (when buffer
-    (with-current-buffer buffer
-      (setq-local lexdb-ui--pending-sense-num sense-num))))
-
 (defun lexdb-ui--refresh-display ()
   "Refresh the buffer with current dictionary's entries."
   (when (and lexdb-ui--dict-results lexdb-ui--active-dict)
@@ -278,22 +256,7 @@ Returns alist of (adapter-id . (entries . adapter))."
         (when (eq lexdb-dict-tab-position 'inline)
           (lexdb-ui--render-inline-tabs))
         (insert (propertize (format "No entries found for: %s" lexdb-ui--current-word)
-                            'face 'lexdb-definition-face))
-        ;; Lemma suggestion
-        (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let* ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
-            (let ((lemma (lexdb--call-with-adapter
-                          adapter lemma-fn lexdb-ui--current-word))
-                  (jump-adapter (lexdb-adapter-id adapter)))
-              (unless (equal lemma (downcase lexdb-ui--current-word))
-                (insert "\n\n")
-                (insert (propertize (format "Did you mean: %s?" lemma)
-                                    'face 'lexdb-crossref-face))
-                (insert "\n")
-                (insert-text-button (format "[Look up '%s']" lemma)
-                                    'face 'lexdb-button-face
-                                    'action (lambda (_)
-                                              (lexdb-search-and-goto-sense lemma nil jump-adapter))))))))
+                            'face 'lexdb-definition-face)))
       (goto-char (min pos (point-max))))))
 
 ;;;; ============================================================
@@ -1174,7 +1137,7 @@ Optional ADAPTER adds semantic properties for navigation."
   (let* ((display (or (lexdb-entry-headword-display entry)
                       (lexdb-entry-headword entry)))
          (formatted (lexdb-ui--number-to-superscript display))
-         (ns (when adapter (symbol-name (lexdb-adapter-id adapter))))
+         (ns (when adapter (symbol-name (lexdb--dictionary-type adapter))))
          (pos (when ns
                 (lexdb-meta-get (lexdb-entry-metadata entry) ns "pos"))))
     (when (lexdb--non-empty-string-p formatted)
@@ -1212,7 +1175,7 @@ Optional ADAPTER adds semantic properties for navigation."
 (defun lexdb-ui--render-frequency (entry adapter)
   "Render frequency information for ENTRY using ADAPTER."
   (let* ((caps (lexdb-adapter-capabilities adapter))
-         (ns (symbol-name (lexdb-adapter-id adapter)))
+         (ns (symbol-name (lexdb--dictionary-type adapter)))
          (meta (lexdb-entry-metadata entry)))
     ;; Frequency dots (●●● etc)
     (when (memq 'frequency-band caps)
@@ -1236,12 +1199,12 @@ Optional ADAPTER adds semantic properties for navigation."
 (defun lexdb-ui--render-pos (entry adapter)
   "Render part of speech for ENTRY using ADAPTER."
   (when (lexdb-adapter-has-capability-p adapter 'pos)
-    (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+    (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
            (pos (lexdb-meta-get (lexdb-entry-metadata entry) ns "pos")))
       (when (lexdb--non-empty-string-p pos)
         (insert " " (propertize pos 'face 'lexdb-pos-face))
         ;; ODE: Add transitivity after POS (e.g., "[with object]")
-        (when (eq (lexdb-adapter-id adapter) 'ode)
+        (when (eq (lexdb--dictionary-type adapter) 'ode)
           (let* ((transitivity-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_transitivity"))
                  ;; Get transitivity for first sense (sort_order = 0)
                  (transitivity (when transitivity-map
@@ -1254,7 +1217,7 @@ Optional ADAPTER adds semantic properties for navigation."
 Supports both local audio (with audio-dir) and online audio (path only)."
   (let* ((caps (lexdb-adapter-capabilities adapter))
          (audio-dir (lexdb-adapter-audio-dir adapter))
-         (ns (symbol-name (lexdb-adapter-id adapter)))
+         (ns (symbol-name (lexdb--dictionary-type adapter)))
          (meta (lexdb-entry-metadata entry))
          (has-audio nil))
     ;; UK audio - render if path exists (audio-dir can be nil for online)
@@ -1283,7 +1246,7 @@ Supports both local audio (with audio-dir) and online audio (path only)."
 (defun lexdb-ui--render-inflections (entry adapter)
   "Render inflections for ENTRY using ADAPTER.
 This includes tense, plural, and comparative/superlative forms."
-  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+  (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
          (adapter-id (lexdb-adapter-id adapter))
          (meta (lexdb-entry-metadata entry))
          (infl-text (lexdb-meta-get meta ns "inflections"))
@@ -1495,8 +1458,8 @@ ADAPTER, CAPS, AUDIO-DIR, NS, IS-SUBSENSE are from parent context."
             (when (and (lexdb-ui--valid-string-p display-text) (= ex-position position))
               ;; ODE: 2-space for main senses, 4-space for subsenses
               (let ((indent (cond
-                             ((and (eq (lexdb-adapter-id adapter) 'ode) is-subsense) "    ")
-                             ((eq (lexdb-adapter-id adapter) 'ode) "  ")
+                             ((and (eq (lexdb--dictionary-type adapter) 'ode) is-subsense) "    ")
+                             ((eq (lexdb--dictionary-type adapter) 'ode) "  ")
                              (t "    "))))
                 (cond
                  ((and has-audio show-translation)
@@ -1527,8 +1490,8 @@ ADAPTER, CAPS, AUDIO-DIR, NS, IS-SUBSENSE are from parent context."
 (defun lexdb-ui--render-sense-grammar-patterns (sense adapter audio-dir)
   "Render grammar patterns for SENSE using ADAPTER.
 AUDIO-DIR is used for audio playback."
-  (let ((adapter-id (lexdb-adapter-id adapter)))
-    (unless (eq adapter-id 'oald)  ; Skip for OALD - codes shown inline
+  (let ((type (lexdb--dictionary-type adapter)))
+    (unless (eq type 'oald)  ; Skip for OALD - codes shown inline
       (dolist (gp (lexdb-sense-grammar-patterns sense))
         (let ((pattern (lexdb-grammar-pattern-pattern gp))
               (gloss (lexdb-grammar-pattern-gloss gp)))
@@ -1757,7 +1720,7 @@ NS is the adapter namespace."
 (defun lexdb-ui--render-sense-ode-tabs (entry adapter sense sense-index)
   "Render ODE sense-level tabs (SYNONYMS, Example sentences).
 ENTRY, ADAPTER, SENSE, SENSE-INDEX are from parent context."
-  (when (and entry (eq (lexdb-adapter-id adapter) 'ode))
+  (when (and entry (eq (lexdb--dictionary-type adapter) 'ode))
     (let* ((ode-sense-key (intern (if sense-index (number-to-string sense-index) "0")))
            (sense-synonyms (lexdb-meta-get (lexdb-entry-metadata entry) "ode" "sense_synonyms"))
            (synonyms (when sense-synonyms
@@ -1828,12 +1791,12 @@ Optional ENTRY provides access to entry-level metadata for lexunits/grambox.
 Optional SENSE-INDEX is the 0-based index of this sense in the entry."
   (let* ((caps (lexdb-adapter-capabilities adapter))
          (audio-dir (lexdb-adapter-audio-dir adapter))
-         (ns (symbol-name (lexdb-adapter-id adapter)))
+         (ns (symbol-name (lexdb--dictionary-type adapter)))
          (def-zh (when (memq 'chinese-definition caps)
                    (lexdb-meta-get (lexdb-sense-metadata sense) ns "definition-zh")))
          (sense-num-str (or (lexdb-sense-number sense) "0"))
          ;; Check if this is a subsense (contains ".") for ODE
-         (is-subsense (and (eq (lexdb-adapter-id adapter) 'ode)
+         (is-subsense (and (eq (lexdb--dictionary-type adapter) 'ode)
                            (string-match-p "\\." sense-num-str))))
     ;; Subsense indentation for ODE
     (when is-subsense
@@ -1841,7 +1804,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     ;; Sense number
     (when-let* ((num (lexdb-sense-number sense)))
       (when (lexdb--non-empty-string-p num)
-        (insert (propertize num 'face 'lexdb-sense-num-face) " ")))
+        (insert (propertize num 'face 'lexdb-sense-num-face 'lexdb-sense-number num) " ")))
     ;; Translation indicator (🌐) - right after sense number
     (when (memq 'chinese-definition caps)
       (lexdb-ui--insert-translation-indicator def-zh))
@@ -1858,16 +1821,16 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                                   "abbreviation" "contraction" "symbol"))
               (formatted (upcase signpost)))
           ;; Skip POS signpost for ODE (already shown as section header)
-          (unless (and (eq (lexdb-adapter-id adapter) 'ode)
+          (unless (and (eq (lexdb--dictionary-type adapter) 'ode)
                        (member (downcase signpost) ode-pos-keywords))
             ;; Fix spacing: "CALL (OUT)" -> "CALL(OUT)" for OALD style
-            (when (eq (lexdb-adapter-id adapter) 'oald)
+            (when (eq (lexdb--dictionary-type adapter) 'oald)
               (setq formatted (replace-regexp-in-string " +(" "(" formatted))
               (setq formatted (replace-regexp-in-string ") +" ")" formatted)))
             (insert (propertize formatted 'face 'lexdb-signpost-face) " ")))))
     ;; ODE: Section-level register (e.g., "informal") - on its own line before definition
     ;; Uses sense-index (sort_order) as key
-    (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
+    (when (and entry sense-index (eq (lexdb--dictionary-type adapter) 'ode))
       (let* ((section-registers-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_section_registers"))
              (sort-key (number-to-string sense-index))
              (section-register (when section-registers-map
@@ -1876,7 +1839,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
           (insert (propertize section-register 'face 'lexdb-register-face) "\n"))))
     ;; ODE: Form groups (e.g., "also days") - after sense number, before definition
     ;; Uses sense-index (sort_order) as key, not sense number (which can repeat across POS)
-    (when (and entry sense-index (eq (lexdb-adapter-id adapter) 'ode))
+    (when (and entry sense-index (eq (lexdb--dictionary-type adapter) 'ode))
       (let* ((form-groups-map (lexdb-meta-get (lexdb-entry-metadata entry) ns "sense_form_groups"))
              (sort-key (number-to-string sense-index))
              (form-groups (when form-groups-map
@@ -1884,7 +1847,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
         (when (lexdb--non-empty-string-p form-groups)
           (insert (propertize (concat "(" form-groups ")") 'face 'lexdb-grammar-face) " "))))
     ;; OALD grammar codes inline (e.g., "[Tn] [I]", "[sing or pl v]") - before definition
-    (when (eq (lexdb-adapter-id adapter) 'oald)
+    (when (eq (lexdb--dictionary-type adapter) 'oald)
       (let ((gps (lexdb-sense-grammar-patterns sense)))
         (when gps
           (let ((codes (delq nil
@@ -1952,7 +1915,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     ;; Grammar label (for non-OALD/ODE adapters) - after lexunit prefix
     ;; ODE handles grammar labels separately with [ATTRIBUTIVE] format
     (when (and (memq 'grammar caps)
-               (not (eq (lexdb-adapter-id adapter) 'ode)))
+               (not (eq (lexdb--dictionary-type adapter) 'ode)))
       (when-let* ((gram (lexdb-sense-grammar sense)))
         (when (lexdb--non-empty-string-p gram)
           (insert (propertize gram 'face 'lexdb-grammar-face) " "))))
@@ -1965,7 +1928,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
                 (lvalue (lexdb-label-value label)))
             (cond
              ;; Grammar labels for ODE: format as [ATTRIBUTIVE]
-             ((and lvalue (eq ltype 'grammar) (eq (lexdb-adapter-id adapter) 'ode))
+             ((and lvalue (eq ltype 'grammar) (eq (lexdb--dictionary-type adapter) 'ode))
               (insert (propertize (format "[%s]" (upcase lvalue)) 'face 'lexdb-grammar-face) " "))
              ;; Register, geo, domain labels
              ((and lvalue (member ltype '(register geo domain)))
@@ -1973,7 +1936,7 @@ Optional SENSE-INDEX is the 0-based index of this sense in the entry."
     ;; OALD plural forms (e.g., "(pl manifestos or manifestoes)") - before definition
     ;; Uses <<l>>...<</l>> for plural words (blue), <<gram>>...<</gram>> for "pl" (gray)
     ;; Default face is definition-face so "or" and parentheses are plain text
-    (when (eq (lexdb-adapter-id adapter) 'oald)
+    (when (eq (lexdb--dictionary-type adapter) 'oald)
       (when-let* ((plural (lexdb-meta-get (lexdb-sense-metadata sense) ns "plural")))
         (when (lexdb--non-empty-string-p plural)
           (lexdb-ui--insert-formatted-definition plural 'lexdb-definition-face)
@@ -2196,25 +2159,11 @@ No regex matching needed - data is pre-parsed."
 If ADAPTER-ID is provided, search within that dictionary only.
 In multi-dict mode, updates current buffer and switches to the target dict tab.
 Otherwise, fall back to global search."
-  (lexdb-ui--set-pending-sense
-   (if (and adapter-id
-            lexdb-multi-dict-mode
-            (eq (current-buffer) (lexdb-ui--get-multi-buffer)))
-       (current-buffer)
-     (lexdb-ui--buffer-for-search adapter-id))
-   sense-num)
   (if adapter-id
-      ;; Intra-dictionary jump
       (let* ((adapter (lexdb-get-adapter adapter-id))
-             (entries (lexdb-lookup word adapter-id)))
-        ;; Try lemmatization if no direct match
-        (unless entries
-          (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-            (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
-              (unless (equal lemma (downcase word))
-                (setq entries (lexdb-lookup lemma adapter-id))
-                (when entries
-                  (setq word lemma))))))
+             (match (lexdb--resolve-word word adapter))
+             (entries (cdr match)))
+        (when match (setq word (car match)))
         (if entries
             ;; Found in same dictionary - add to history manually since we're not calling lexdb-search
             (progn
@@ -2222,53 +2171,28 @@ Otherwise, fall back to global search."
               (if (and lexdb-multi-dict-mode
                        (eq (current-buffer) (get-buffer "*Lexdb*")))
                   ;; Multi-dict mode: update results and switch tab in current buffer
-                  (lexdb-ui--jump-in-multi-buffer word adapter-id)
+                  (lexdb-ui--jump-in-multi-buffer word adapter-id entries)
                 ;; Single dict mode or not in multi buffer: update current buffer
                 (lexdb-ui-display word entries adapter t)))
           ;; Not found in same dictionary - fallback to global search (which handles history)
           (message "Not found in %s, searching all dictionaries..." adapter-id)
           (lexdb-search word)))
     ;; No adapter specified: global search (which handles history)
-    (lexdb-search word)))
+    (lexdb-search word))
+  (when sense-num
+    (lexdb-goto-sense sense-num)))
 
-(defun lexdb-ui--jump-in-multi-buffer (word adapter-id)
-  "Update multi-dict buffer with WORD lookup results, switch to ADAPTER-ID tab."
+(defun lexdb-ui--jump-in-multi-buffer (word adapter-id entries)
+  "Show ENTRIES for WORD in the ADAPTER-ID tab and refresh other dictionaries."
   (let ((inhibit-read-only t))
     ;; Update the word
     (setq lexdb-ui--current-word word)
     ;; Re-query all dictionaries for the new word
-    (setq lexdb-ui--dict-results (lexdb-ui--query-all-dicts word))
+    (setq lexdb-ui--dict-results (lexdb-ui--query-all-dicts word adapter-id entries))
     ;; Switch to the target dictionary
     (setq lexdb-ui--active-dict adapter-id)
     ;; Refresh display
-    (lexdb-ui--refresh-display)
-    (lexdb-ui--goto-pending-sense)))
-
-(defun lexdb-ui--goto-pending-sense ()
-  "Jump to pending sense number if set; call this after rendering."
-  (when lexdb-ui--pending-sense-num
-    (let ((sense-num lexdb-ui--pending-sense-num))
-      (setq lexdb-ui--pending-sense-num nil)
-      (goto-char (point-min))
-      ;; Try multiple patterns to find the sense
-      (let ((found nil))
-        ;; Pattern 1: "N " at beginning of line (义项编号)
-        (unless found
-          (when (re-search-forward
-                 (concat "^" (regexp-quote sense-num) " ")
-                 nil t)
-            (setq found t)))
-        ;; Pattern 2: "N " with leading spaces
-        (unless found
-          (goto-char (point-min))
-          (when (re-search-forward
-                 (concat "^[[:space:]]*" (regexp-quote sense-num) " ")
-                 nil t)
-            (setq found t)))
-        (when found
-          (beginning-of-line)
-          (set-window-point (selected-window) (point))
-          (recenter))))))
+    (lexdb-ui--refresh-display)))
 
 (defun lexdb-ui--build-verb-table-content (verb-table)
   "Build content string for VERB TABLE tab.
@@ -2789,7 +2713,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 (defun lexdb-ui--slot-header (entry adapter)
   "Render header slot for ENTRY using ADAPTER."
   (let ((caps (lexdb-adapter-capabilities adapter))
-        (ns (symbol-name (lexdb-adapter-id adapter)))
+        (ns (symbol-name (lexdb--dictionary-type adapter)))
         (meta (lexdb-entry-metadata entry)))
     (if-let* ((header-hook (lexdb-adapter-render-entry-header-fn adapter)))
         (lexdb--call-with-adapter adapter header-hook entry (current-buffer))
@@ -2813,7 +2737,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
   (let ((tabs nil)
         (entry-id (lexdb-entry-id entry))
         (tab-group (format "lexdb-tabs-%d-%d" (lexdb-entry-id entry) (random 10000)))
-        (ns (symbol-name (lexdb-adapter-id adapter)))
+        (ns (symbol-name (lexdb--dictionary-type adapter)))
         (caps (lexdb-adapter-capabilities adapter)))
     ;; ENTRY MENU tab
     (let ((entry-menu (lexdb-meta-get (lexdb-entry-metadata entry) ns "entry_menu")))
@@ -2823,7 +2747,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
               tabs)))
     ;; WORD ORIGIN tab (skip for ODE - rendered inline via ode-phrases-origin slot)
     (when (and (lexdb-adapter-has-capability-p adapter 'origin)
-               (not (eq (lexdb-adapter-id adapter) 'ode)))
+               (not (eq (lexdb--dictionary-type adapter) 'ode)))
       (let* ((origin-full (lexdb-meta-get (lexdb-entry-metadata entry) ns "origin_full"))
              (origin-text origin-full))
         (when (lexdb--non-empty-string-p origin-text)
@@ -2865,7 +2789,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
           (when (not (string-empty-p content))
             (push (list 'collocations "COLLOCATIONS" content) tabs)))))
     ;; PHRASES tab (skip for ODE - rendered inline via ode-phrases-origin slot)
-    (unless (eq (lexdb-adapter-id adapter) 'ode)
+    (unless (eq (lexdb--dictionary-type adapter) 'ode)
       (let ((popup-phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "popup_phrases")))
         (when (and popup-phrases (> (length popup-phrases) 0))
           (push (list 'phrases "PHRASES"
@@ -2898,7 +2822,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
       (dolist (sense (lexdb-entry-senses entry))
         ;; For ODE: Show POS section header when signpost contains a part of speech
         ;; but only if there are multiple POS sections (to avoid duplication with header)
-        (when (and (eq (lexdb-adapter-id adapter) 'ode)
+        (when (and (eq (lexdb--dictionary-type adapter) 'ode)
                    (> pos-count 1))
           (when-let* ((signpost (lexdb-sense-signpost sense)))
             (when (and (member (downcase signpost) ode-pos-keywords)
@@ -2920,7 +2844,7 @@ PHRASAL-VERBS is a list or vector of alists with headword, pos, and senses."
 
 (defun lexdb-ui--slot-entry-grammar-box (entry adapter)
   "Render entry grammar box slot for ENTRY using ADAPTER."
-  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+  (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
          (entry-grammar-boxes (lexdb-meta-get (lexdb-entry-metadata entry) ns "entry_grammar_boxes")))
     (when (and entry-grammar-boxes (> (length entry-grammar-boxes) 0))
       (let ((grambox-list (if (vectorp entry-grammar-boxes) (append entry-grammar-boxes nil) entry-grammar-boxes)))
@@ -3098,7 +3022,7 @@ ADAPTER-ID is used for crossref navigation."
 
 (defun lexdb-ui--slot-idioms (entry adapter)
   "Render idioms slot for ENTRY using ADAPTER."
-  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+  (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
          (adapter-id (lexdb-adapter-id adapter))
          (idiom-list (lexdb-ui--ensure-list
                       (lexdb-meta-get (lexdb-entry-metadata entry) ns "idioms"))))
@@ -3118,7 +3042,7 @@ ADAPTER-ID is used for crossref navigation."
 
 (defun lexdb-ui--slot-usage (entry adapter)
   "Render usage slot for ENTRY using ADAPTER."
-  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+  (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
          (usage-list (lexdb-ui--ensure-list
                       (lexdb-meta-get (lexdb-entry-metadata entry) ns "usage"))))
     (when usage-list
@@ -3172,7 +3096,7 @@ ADAPTER-ID is used for crossref navigation."
 
 (defun lexdb-ui--slot-phrasal-verbs (entry adapter)
   "Render phrasal verbs slot for ENTRY using ADAPTER."
-  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+  (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
          (phrasal-verbs (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrasal-verbs")))
     (when (and phrasal-verbs (> (length phrasal-verbs) 0))
       (insert "\n")
@@ -3194,7 +3118,7 @@ ADAPTER-ID is used for crossref navigation."
 (defun lexdb-ui--slot-runons (entry adapter)
   "Render run-on slot for ENTRY using ADAPTER.
 Examples include derived forms such as `relevantly adverb'."
-  (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+  (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
          (runons (lexdb-meta-get (lexdb-entry-metadata entry) ns "runons")))
     (when (and runons (> (length runons) 0))
       (let ((runon-list (cond ((vectorp runons) (append runons nil))
@@ -3506,8 +3430,8 @@ Examples include derived forms such as `relevantly adverb'."
 
 (defun lexdb-ui--slot-ode-phrases-origin (entry adapter)
   "Render ODE phrases/origin slot for ENTRY using ADAPTER."
-  (when (eq (lexdb-adapter-id adapter) 'ode)
-    (let* ((ns (symbol-name (lexdb-adapter-id adapter)))
+  (when (eq (lexdb--dictionary-type adapter) 'ode)
+    (let* ((ns (symbol-name (lexdb--dictionary-type adapter)))
            (phrases (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrases"))
            (phrasal-verbs (lexdb-meta-get (lexdb-entry-metadata entry) ns "phrasal_verbs"))
            (derivatives (lexdb-meta-get (lexdb-entry-metadata entry) ns "derivatives"))
@@ -3717,15 +3641,15 @@ The translation disappears on the next command."
       (message "At first entry"))))
 
 (defun lexdb-goto-sense (num)
-  "Jump to sense number NUM."
-  (let ((found nil))
-    (save-excursion
-      (goto-char (point-min))
-      (when (re-search-forward (format "^%s " (regexp-quote num)) nil t)
-        (setq found (match-beginning 0))))
-    (if found
-        (progn (goto-char found) (recenter))
-      (message "Sense %s not found" num))))
+  "Jump to the rendered heading for sense number NUM."
+  (if-let* ((match (save-excursion
+                     (goto-char (point-min))
+                     (text-property-search-forward 'lexdb-sense-number num #'equal))))
+      (progn
+        (goto-char (prop-match-beginning match))
+        (beginning-of-line)
+        (recenter))
+    (message "Sense %s not found" num)))
 
 (defun lexdb-goto-sense-prompt ()
   "Prompt for sense number and jump to it."
@@ -4004,8 +3928,7 @@ Dictionary switching (multi-dict mode):
           (setq header-line-format '(:eval (lexdb-ui--render-dict-tabs))))
         ;; Render initial content
         (lexdb-ui--refresh-display)
-        (goto-char (point-min))
-        (lexdb-ui--goto-pending-sense)))
+        (goto-char (point-min))))
     (pop-to-buffer buf)))
 
 (defun lexdb-ui-display (word entries adapter &optional no-lemma-hint)
@@ -4025,20 +3948,18 @@ If NO-LEMMA-HINT is nil and no entries found, offer lemma suggestion."
           ;; Lemma suggestion
           (unless no-lemma-hint
             (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-              (when-let* ((lemma-fn (lexdb-adapter-lemma-fn adapter)))
-                (let ((lemma (lexdb--call-with-adapter adapter lemma-fn word))
-                      (jump-adapter (lexdb-adapter-id adapter)))
-                  (unless (equal lemma (downcase word))
-                    (insert "\n\n")
-                    (insert (propertize (format "Did you mean: %s?" lemma)
-                                        'face 'lexdb-crossref-face))
-                    (insert "\n")
-                    (insert-text-button (format "[Look up '%s']" lemma)
-                                        'face 'lexdb-button-face
-                                        'action (lambda (_)
-                                                  (lexdb-search-and-goto-sense lemma nil jump-adapter)))))))))
-        (goto-char (point-min))
-        (lexdb-ui--goto-pending-sense)))
+              (when-let* ((lemma (lexdb-find-lemma word (lexdb-adapter-id adapter)))
+                          ((not (equal lemma (downcase word)))))
+                (let ((jump-adapter (lexdb-adapter-id adapter)))
+                  (insert "\n\n")
+                  (insert (propertize (format "Did you mean: %s?" lemma)
+                                      'face 'lexdb-crossref-face))
+                  (insert "\n")
+                  (insert-text-button (format "[Look up '%s']" lemma)
+                                      'face 'lexdb-button-face
+                                      'action (lambda (_)
+                                                (lexdb-search-and-goto-sense lemma nil jump-adapter))))))))
+        (goto-char (point-min))))
     ;; Display and select the buffer
     (pop-to-buffer buf)))
 

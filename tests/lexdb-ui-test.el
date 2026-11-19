@@ -46,5 +46,38 @@
                        "n. 1 no good/not much good/not any good (good²)"
                        "n. 2 used to say that an action will not work (good²)"))))))
 
+(ert-deftest lexdb-ui-custom-id-jumps-to-rendered-sense ()
+  "Render namespaced metadata and follow a sense link in both display modes."
+  (let* ((lexdb-adapters (make-hash-table :test 'eq))
+         (lexdb-enabled-adapters '(longman))
+         (lexdb--history nil)
+         (lexdb--history-position -1)
+         (entry (lexdb-ui-test--entry "aid" "noun"
+                                      '(("1" nil "help") ("3" nil "in aid of"))))
+         (adapter (lexdb-adapter-create
+                   :id 'longman :type 'ldoce :name "Longman"
+                   :capabilities '(pos) :lookup-fn (lambda (_) (list entry)))))
+    (lexdb-register-adapter adapter)
+    (save-window-excursion
+      (dolist (multi '(nil t))
+        (let ((lexdb-multi-dict-mode multi))
+          (when multi (lexdb-ui-display-multi "aid"))
+          (lexdb-search-and-goto-sense "aid" "3" 'longman)
+          (should (looking-at "3 in aid of"))
+          (goto-char (point-min))
+          (should (search-forward "noun" nil t)))))))
+
+(ert-deftest lexdb-resolve-word-reuses-matching-entries ()
+  (let* ((lexdb-adapters (make-hash-table :test 'eq))
+         calls
+         (adapter (lexdb-adapter-create
+                   :id 'test :name "Test" :capabilities '(lemmatization)
+                   :lookup-fn (lambda (word)
+                                (push word calls)
+                                (when (equal word "run") '(found))))))
+    (lexdb-register-adapter adapter)
+    (should (equal (lexdb--resolve-word "runs" adapter) '("run" found)))
+    (should (equal (nreverse calls) '("runs" "run")))))
+
 (provide 'lexdb-ui-test)
 ;;; lexdb-ui-test.el ends here

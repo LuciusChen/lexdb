@@ -234,14 +234,6 @@ Uses exact match and follows @@@LINK= aliases to find target entries."
         (lexdb-db-cache-put adapter-id (cons entry-id 'idioms) idioms)))))
 
 ;;;; ============================================================
-;;;; Lemmatization
-;;;; ============================================================
-
-(defun lexdb-oald--find-lemma (word)
-  "Find base form of WORD using common lemmatization rules."
-  (lexdb--find-lemma-with-lookup word #'lexdb-oald--lookup))
-
-;;;; ============================================================
 ;;;; Registration
 ;;;; ============================================================
 
@@ -259,6 +251,7 @@ Called by `lexdb-init' for unified configuration."
     (lexdb-register-adapter
      (lexdb-adapter-create
       :id id
+      :type 'oald
       :name name
       :version "4th Edition (双解)"
       :capabilities '(lookup definition pronunciation
@@ -266,8 +259,7 @@ Called by `lexdb-init' for unified configuration."
                       chinese-definition chinese-example)
       :db-file expanded-db-file
       :lookup-fn #'lexdb-oald--lookup
-      :close-fn #'lexdb-oald--close
-      :lemma-fn #'lexdb-oald--find-lemma))))
+      :close-fn #'lexdb-oald--close))))
 
 ;;;###autoload
 (defun lexdb-oald-register ()
