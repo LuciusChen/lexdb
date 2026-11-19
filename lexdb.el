@@ -314,6 +314,13 @@ Return DEFAULT if KEY is absent, distinguishing a miss from cached nil."
 ;;;; Shared Data Processing Functions
 ;;;; ============================================================
 
+(defun lexdb--parse-json (text)
+  "Parse dictionary JSON TEXT using the shapes expected by the adapters."
+  (if (json-available-p)
+      (json-parse-string text :object-type 'alist :array-type 'array
+                         :null-object nil :false-object :json-false)
+    (json-read-from-string text)))
+
 (defun lexdb--decompress-json-value (compressed-data)
   "Decompress zlib-compressed JSON COMPRESSED-DATA and parse it.
 Returns nil on error or if data is empty."
@@ -325,7 +332,7 @@ Returns nil on error or if data is empty."
                  (insert compressed-data)
                  (zlib-decompress-region (point-min) (point-max))
                  (buffer-string))))
-          (json-read-from-string (decode-coding-string decompressed 'utf-8)))
+          (lexdb--parse-json (decode-coding-string decompressed 'utf-8)))
       (error nil))))
 
 (defun lexdb--build-pronunciations-from-db (entry-id db)
@@ -395,29 +402,6 @@ Returns pronunciations that have either IPA or audio path."
     ("'s" . ""))        ; John's -> John
   "Common English lemmatization rules.
 Each element is (SUFFIX . REPLACEMENT) pair.")
-
-(defun lexdb--try-lemma (word suffix replacement lookup-fn)
-  "Try removing SUFFIX from WORD and adding REPLACEMENT.
-LOOKUP-FN is called to check if the candidate exists in dictionary.
-Returns the candidate if found, nil otherwise."
-  (when (and (> (length word) (length suffix))
-             (string-suffix-p suffix word))
-    (let ((candidate (concat (substring word 0 (- (length word) (length suffix)))
-                             replacement)))
-      (when (and (> (length candidate) 1)
-                 (funcall lookup-fn candidate))
-        candidate))))
-
-(defun lexdb--find-lemma-with-lookup (word lookup-fn)
-  "Find base form of WORD using LOOKUP-FN to check candidates.
-LOOKUP-FN should be a function that returns non-nil if a word exists.
-Returns the lemma if found, WORD otherwise."
-  (let ((w (downcase word)))
-    (if (funcall lookup-fn w)
-        w
-      (or (cl-loop for (suffix . replacement) in lexdb-lemma-rules
-                   thereis (lexdb--try-lemma w suffix replacement lookup-fn))
-          w))))
 
 ;;;; ============================================================
 ;;;; Core Data Structures
@@ -719,6 +703,11 @@ When NO-LEMMA-HINT is non-nil, skip lemma suggestions."
     (user-error "No lexdb UI registered; load `lexdb-ui' before playing audio"))
   (funcall lexdb-play-audio-function path audio-dir))
 
+(defun lexdb--dictionary-type (adapter)
+  "Return the dictionary format of ADAPTER."
+  (let ((id (lexdb-adapter-id adapter)))
+    (or (plist-get (lexdb-get-dict-config id) :type) id)))
+
 (defun lexdb-register-adapter (adapter)
   "Register ADAPTER in the global registry."
   (unless (lexdb-adapter-p adapter)
@@ -803,14 +792,37 @@ Returns list of lexdb-entry structs."
                                 (lexdb-adapter-relations-fn adapter)
                                 entry-id type))))
 
+(defun lexdb--resolve-word (word adapter)
+  "Return (matched spelling . entries) for WORD in ADAPTER, or nil."
+  (let* ((id (lexdb-adapter-id adapter))
+         (direct (lexdb-lookup word id))
+         (lower (downcase word)))
+    (cond
+     (direct (cons word direct))
+     ((not (lexdb-adapter-has-capability-p adapter 'lemmatization)) nil)
+     ((lexdb-adapter-lemma-fn adapter)
+      (when-let* ((lemma (lexdb-find-lemma word id))
+                  ((not (equal lemma lower)))
+                  (entries (lexdb-lookup lemma id)))
+        (cons lemma entries)))
+     (t
+      (cl-loop for (suffix . replacement) in lexdb-lemma-rules
+               thereis
+               (when (and (> (length lower) (length suffix))
+                          (string-suffix-p suffix lower))
+                 (let ((candidate (concat (substring lower 0 (- (length suffix)))
+                                          replacement)))
+                   (when-let* (((> (length candidate) 1))
+                               (entries (lexdb-lookup candidate id)))
+                     (cons candidate entries)))))))))
+
 (defun lexdb-find-lemma (word &optional adapter-id)
   "Find lemma/base form of WORD using ADAPTER-ID or current adapter."
-  (let* ((id (or adapter-id lexdb-current-adapter))
-         (adapter (lexdb-get-adapter id)))
-    (when (and adapter
-               (lexdb-adapter-has-capability-p adapter 'lemmatization)
-               (lexdb-adapter-lemma-fn adapter))
-      (lexdb--call-with-adapter adapter (lexdb-adapter-lemma-fn adapter) word))))
+  (when-let* ((adapter (lexdb-get-adapter (or adapter-id lexdb-current-adapter)))
+              ((lexdb-adapter-has-capability-p adapter 'lemmatization)))
+    (if-let* ((fn (lexdb-adapter-lemma-fn adapter)))
+        (lexdb--call-with-adapter adapter fn word)
+      (downcase (or (car (lexdb--resolve-word word adapter)) word)))))
 
 (defun lexdb-prefetch (entry-ids &optional adapter-id)
   "Prefetch data for ENTRY-IDS using ADAPTER-ID or current adapter."
@@ -836,7 +848,10 @@ Returns list of lexdb-entry structs."
 (defun lexdb-entry-pos (entry)
   "Get part of speech from ENTRY metadata or labels."
   (or (lexdb-meta-get (lexdb-entry-metadata entry)
-                      (symbol-name lexdb-current-adapter) "pos")
+                      (if-let* ((adapter (lexdb-get-adapter lexdb-current-adapter)))
+                          (lexdb--dictionary-type adapter)
+                        lexdb-current-adapter)
+                      "pos")
       (when-let* ((label (lexdb-entry-get-label entry 'pos)))
         (lexdb-label-value label))))
 
@@ -916,16 +931,13 @@ Respects `lexdb-multi-dict-mode' setting."
   (if lexdb-multi-dict-mode
       ;; Multi-dictionary mode: use the same buffer, update all dicts
       (lexdb--display-multi word)
-    ;; Single dictionary mode
-    (let* ((adapter-id (lexdb--ensure-adapter))
-           (adapter (lexdb-get-adapter adapter-id))
-           (entries (lexdb-lookup word adapter-id)))
-      (unless entries
-        (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
-            (unless (equal lemma (downcase word))
-              (setq entries (lexdb-lookup lemma adapter-id))))))
-      (lexdb--display-entry word entries adapter))))
+    (lexdb--search-single word)))
+
+(defun lexdb--search-single (word)
+  "Resolve WORD in the selected dictionary and display its entries."
+  (let* ((adapter (lexdb-get-adapter (lexdb--ensure-adapter)))
+         (match (lexdb--resolve-word word adapter)))
+    (lexdb--display-entry (or (car match) word) (cdr match) adapter t)))
 
 (defun lexdb--ensure-adapter ()
   "Ensure an adapter is selected, return its ID."
@@ -957,19 +969,7 @@ Otherwise, search only the current/default dictionary."
   (if lexdb-multi-dict-mode
       ;; Multi-dictionary mode
       (lexdb--display-multi word)
-    ;; Single dictionary mode
-    (let* ((adapter-id (lexdb--ensure-adapter))
-           (adapter (lexdb-get-adapter adapter-id))
-           (entries (lexdb-lookup word adapter-id)))
-      ;; Try lemmatization if no results
-      (unless entries
-        (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-          (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
-            (unless (equal lemma (downcase word))
-              (setq entries (lexdb-lookup lemma adapter-id))
-              (when entries
-                (setq word lemma))))))
-      (lexdb--display-entry word entries adapter))))
+    (lexdb--search-single word)))
 
 ;;;###autoload
 (defun lexdb-search-single (word)
@@ -984,17 +984,7 @@ Otherwise, search only the current/default dictionary."
     (user-error "No word specified"))
   (setq lexdb--last-word word)
   (lexdb--history-push word)
-  (let* ((adapter-id (lexdb--ensure-adapter))
-         (adapter (lexdb-get-adapter adapter-id))
-         (entries (lexdb-lookup word adapter-id)))
-    (unless entries
-      (when (lexdb-adapter-has-capability-p adapter 'lemmatization)
-        (when-let* ((lemma (lexdb-find-lemma word adapter-id)))
-          (unless (equal lemma (downcase word))
-            (setq entries (lexdb-lookup lemma adapter-id))
-            (when entries
-              (setq word lemma))))))
-    (lexdb--display-entry word entries adapter)))
+  (lexdb--search-single word))
 
 ;;;###autoload
 (defun lexdb-search-at-point ()

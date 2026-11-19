@@ -46,5 +46,51 @@
                        "n. 1 no good/not much good/not any good (good²)"
                        "n. 2 used to say that an action will not work (good²)"))))))
 
+(ert-deftest lexdb-ui-custom-id-jumps-to-rendered-sense ()
+  "Follow a numbered homograph link in both dictionary display modes."
+  (let* ((lexdb-adapters (make-hash-table :test 'eq))
+         (lexdb-dictionaries '((:id longman :type ldoce)))
+         (lexdb-enabled-adapters '(longman))
+         (lexdb--history nil)
+         (lexdb--history-position -1)
+         (source (lexdb-ui-test--entry "abet" "verb" '(("1" nil "help"))))
+         (targets (list (lexdb-ui-test--entry "aid1" "noun" '(("3" nil "charity")))
+                        (lexdb-ui-test--entry "aid2" "verb" '(("3" nil "illegal")))))
+         (adapter (lexdb-adapter-create
+                   :id 'longman :name "Longman" :capabilities '(pos cross-refs)
+                   :lookup-fn (lambda (word)
+                                (pcase word ("abet" (list source)) ("aid" targets))))))
+    (lexdb-register-adapter adapter)
+    (let ((ref (lexdb-relation-create :type 'cross_ref :clickable "at aid2"
+                                      :suffix "(3)" :target-word "aid" :target-sense "3"
+                                      :metadata '((target-headword . "aid2")))))
+      (save-window-excursion
+        (dolist (multi '(nil t))
+          (let ((lexdb-multi-dict-mode multi))
+            (dolist (level '(entry sense))
+              (setf (lexdb-entry-relations source) (and (eq level 'entry) (list ref))
+                    (lexdb-sense-relations (car (lexdb-entry-senses source)))
+                    (and (eq level 'sense) (list ref)))
+              (if multi (lexdb-ui-display-multi "abet")
+                (lexdb-ui-display "abet" (list source) adapter))
+              (goto-char (point-min))
+              (search-forward "at aid²")
+              (button-activate (button-at (1- (point))))
+              (should (looking-at "3 illegal"))
+              (goto-char (point-min))
+              (should (search-forward "noun" nil t)))))))))
+
+(ert-deftest lexdb-resolve-word-reuses-matching-entries ()
+  (let* ((lexdb-adapters (make-hash-table :test 'eq))
+         calls
+         (adapter (lexdb-adapter-create
+                   :id 'test :name "Test" :capabilities '(lemmatization)
+                   :lookup-fn (lambda (word)
+                                (push word calls)
+                                (when (equal word "run") '(found))))))
+    (lexdb-register-adapter adapter)
+    (should (equal (lexdb--resolve-word "runs" adapter) '("run" found)))
+    (should (equal (nreverse calls) '("runs" "run")))))
+
 (provide 'lexdb-ui-test)
 ;;; lexdb-ui-test.el ends here

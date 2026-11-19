@@ -139,20 +139,7 @@ Uses fragment storage format: prefix + clickable + suffix."
   (let ((rows (sqlite-select db
                "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE entry_id = ? AND sense_id IS NULL ORDER BY sort_order"
                (list entry-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
-                      (when (lexdb--non-empty-string-p clickable)
-                        (lexdb-relation-create
-                         :type (intern rel-type)
-                         :prefix prefix
-                         :clickable clickable
-                         :suffix suffix
-                         :target-word target-word
-                         :target-sense target-sense
-                         ;; Legacy fields for compatibility
-                         :target (concat (or prefix "") clickable (or suffix ""))))))
-                  rows))))
+    (lexdb-ldoce--build-relations rows)))
 
 (defun lexdb-ldoce--v2-fetch-sense-relations (sense-id db)
   "Fetch sense-level relations for SENSE-ID from V2 schema.
@@ -160,20 +147,33 @@ Use DB and fragment storage format: prefix + clickable + suffix."
   (let ((rows (sqlite-select db
                "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense FROM relations WHERE sense_id = ? ORDER BY sort_order"
                (list sense-id))))
-    (delq nil
-          (mapcar (lambda (row)
-                    (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
-                      (when (lexdb--non-empty-string-p clickable)
-                        (lexdb-relation-create
-                         :type (intern rel-type)
-                         :prefix prefix
-                         :clickable clickable
-                         :suffix suffix
-                         :target-word target-word
-                         :target-sense target-sense
-                         ;; Legacy fields for compatibility
-                         :target (concat (or prefix "") clickable (or suffix ""))))))
-                  rows))))
+    (lexdb-ldoce--build-relations rows)))
+
+(defun lexdb-ldoce--relation-metadata (word label)
+  "Recover a numbered target headword from WORD and its clickable LABEL."
+  ;; The database stores "aid" in target_word and "at aid2" in clickable.
+  (let ((case-fold-search t))
+    (when (and (lexdb--non-empty-string-p word)
+               (string-match (concat (regexp-quote word) "\\([0-9]+\\)\\'") label))
+      (list (cons 'target-headword (concat (downcase word) (match-string 1 label)))))))
+
+(defun lexdb-ldoce--build-relations (rows)
+  "Build relation objects from fragment ROWS."
+  (delq nil
+        (mapcar (lambda (row)
+                  (pcase-let ((`(,rel-type ,prefix ,clickable ,suffix ,target-word ,target-sense) row))
+                    (when (lexdb--non-empty-string-p clickable)
+                      (lexdb-relation-create
+                       :type (intern rel-type)
+                       :prefix prefix
+                       :clickable clickable
+                       :suffix suffix
+                       :target-word target-word
+                       :target-sense target-sense
+                       :metadata (lexdb-ldoce--relation-metadata target-word clickable)
+                       ;; Legacy fields for compatibility
+                       :target (concat (or prefix "") clickable (or suffix ""))))))
+                rows)))
 
 (defalias 'lexdb-ldoce--decompress-json #'lexdb--decompress-json-value
   "Decompress zlib-compressed JSON data.")
@@ -187,7 +187,7 @@ Use DB and fragment storage format: prefix + clickable + suffix."
               (pcase-let ((`(,key ,value ,type) row))
                 (cons (intern key)
                       (pcase type
-                        ("json" (json-read-from-string value))
+                        ("json" (lexdb--parse-json value))
                         ("json.gz" (lexdb-ldoce--decompress-json value))
                         ("integer" (string-to-number value))
                         ("boolean" (not (equal value "0")))
@@ -244,7 +244,7 @@ Use DB and fragment storage format: prefix + clickable + suffix."
   "Normalize various apostrophe characters in STR to standard ASCII apostrophe."
   (when str
     ;; Replace curly/smart apostrophes with straight apostrophe
-    (replace-regexp-in-string "[''ʼ′`]" "'" str)))
+    (replace-regexp-in-string "[‘’ʼ′`]" "'" str)))
 
 (defun lexdb-ldoce--lookup (word)
   "Look up WORD in LDOCE database.
@@ -269,15 +269,10 @@ Uses exact match only, consistent with original dictionary behavior."
   "Get relations of TYPE for ENTRY-ID."
   (let* ((db (lexdb-ldoce--ensure-db))
          (rows (sqlite-select db
-                "SELECT target_text, target_link FROM relations WHERE entry_id = ? AND relation_type = ? ORDER BY sort_order"
+                "SELECT relation_type, prefix, clickable, suffix, target_word, target_sense
+                 FROM relations WHERE entry_id = ? AND relation_type = ? ORDER BY sort_order"
                 (list entry-id (symbol-name type)))))
-    (mapcar (lambda (row)
-              (pcase-let ((`(,target ,link) row))
-                (lexdb-relation-create
-                 :type type
-                 :target target
-                 :target-link (when (lexdb--non-empty-string-p link) link))))
-            rows)))
+    (lexdb-ldoce--build-relations rows)))
 
 (defun lexdb-ldoce--prefetch (entry-ids)
   "Prefetch uncached collocations and examples for ENTRY-IDS.
@@ -317,14 +312,6 @@ Use at most two queries and cache entries without collocations as nil."
         (dolist (entry-id missing-ids)
           (lexdb-db-cache-put adapter-id (cons entry-id 'collocations)
                               (nreverse (gethash entry-id entry-colls))))))))
-
-;;;; ============================================================
-;;;; Lemmatization
-;;;; ============================================================
-
-(defun lexdb-ldoce--find-lemma (word)
-  "Find base form of WORD using common lemmatization rules."
-  (lexdb--find-lemma-with-lookup word #'lexdb-ldoce--lookup))
 
 ;;;; ============================================================
 ;;;; Frequency Rendering
@@ -367,7 +354,6 @@ Called by `lexdb-init' for unified configuration."
       :close-fn #'lexdb-ldoce--close
       :collocations-fn #'lexdb-ldoce--get-collocations
       :relations-fn #'lexdb-ldoce--get-relations
-      :lemma-fn #'lexdb-ldoce--find-lemma
       :prefetch-fn #'lexdb-ldoce--prefetch
       :render-frequency-fn #'lexdb-ldoce--render-frequency))))
 

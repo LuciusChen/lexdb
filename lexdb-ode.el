@@ -159,8 +159,7 @@
                                     (lexdb-ode--decompress-json value))
                                    ((equal type "json")
                                     (condition-case nil
-                                        ;; Use json-read-from-string for symbol keys
-                                        (json-read-from-string value)
+                                        (lexdb--parse-json value)
                                       (error value)))
                                    ((equal type "integer")
                                     (string-to-number value))
@@ -276,14 +275,6 @@ Uses exact match, suffix match (with hyphen prefix), and @@@LINK= aliases."
         (lexdb-db-cache-put adapter-id (cons entry-id 'origin) origin)))))
 
 ;;;; ============================================================
-;;;; Lemmatization
-;;;; ============================================================
-
-(defun lexdb-ode--find-lemma (word)
-  "Find base form of WORD using common lemmatization rules."
-  (lexdb--find-lemma-with-lookup word #'lexdb-ode--lookup))
-
-;;;; ============================================================
 ;;;; Registration
 ;;;; ============================================================
 
@@ -309,8 +300,7 @@ Called by `lexdb-init' for unified configuration."
                       audio-uk audio-us)
       :db-file expanded-db-file
       :lookup-fn #'lexdb-ode--lookup
-      :close-fn #'lexdb-ode--close
-      :lemma-fn #'lexdb-ode--find-lemma))))
+      :close-fn #'lexdb-ode--close))))
 
 ;;;###autoload
 (defun lexdb-ode-register ()

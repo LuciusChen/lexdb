@@ -88,7 +88,8 @@ LDOCE 转换器会保留强读和弱读音标。已有数据库需重新转换�
 (require 'lexdb-oald)
 (require 'lexdb-ode)
 
-;; 配置词典
+;; :id 区分词典实例；:type 决定数据库格式和词条显示方式。
+;; 例如，两份朗文词库可以使用不同的 :id，并都设置 :type ldoce。
 (setq lexdb-dictionaries
       '((:id ldoce
          :type ldoce

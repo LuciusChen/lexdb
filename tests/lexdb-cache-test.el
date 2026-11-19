@@ -201,5 +201,25 @@
                   (lambda ()
                     (should (= 3 (length (lexdb-get-collocations 1 'second))))))))))
 
+(ert-deftest lexdb-ldoce-relations-read-fragment-columns ()
+  (lexdb-cache-test--with-db
+    (lexdb-ldoce-register)
+    (sqlite-execute db "CREATE TABLE relations
+      (entry_id, relation_type, prefix, clickable, suffix, target_word, target_sense, sort_order)")
+    (sqlite-execute db "INSERT INTO relations VALUES (1, 'cross_ref', 'see ', 'at aid2', '(3)', 'aid', '3', 0)")
+    (let ((rel (car (lexdb-get-relations 1 'cross_ref 'ldoce))))
+      (should (equal (lexdb-relation-target rel) "see at aid2(3)"))
+      (should (equal (lexdb-relation-target-sense rel) "3"))
+      (should (equal (alist-get 'target-headword (lexdb-relation-metadata rel)) "aid2"))
+      (should-not (lexdb-get-relations 1 'synonym 'ldoce)))))
+
+(ert-deftest lexdb-ldoce-normalizes-typographic-apostrophes ()
+  (dolist (word '("don't" "don’t" "don‘t"))
+    (should (equal (lexdb-ldoce--normalize-apostrophe word) "don't"))))
+
+(ert-deftest lexdb-parsed-json-preserves-metadata-shapes ()
+  (should (equal (lexdb--parse-json "{\"values\":[null,false,true,\"字\"]}")
+                 '((values . [nil :json-false t "字"])))))
+
 (provide 'lexdb-cache-test)
 ;;; lexdb-cache-test.el ends here
