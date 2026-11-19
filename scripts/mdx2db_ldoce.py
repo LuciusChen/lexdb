@@ -37,6 +37,24 @@ from lexdb_common import (
 # LDOCE-specific Utility Functions
 # ============================================================
 
+def parse_pronunciations(proncodes):
+    """Return the British and American transcriptions from an LDOCE pronunciation block."""
+    if not proncodes:
+        return '', ''
+
+    if proncodes.find(class_='pronstrong'):
+        # Labels and their IPA are siblings. The first $ starts the US forms;
+        # some entries (e.g. "of") repeat it before the US strong form.
+        text = proncodes.get_text().strip().strip('/')
+        british, _, american = text.partition('$')
+        return clean_text(british), clean_text(american.replace('$', ' '))
+
+    british = proncodes.find(class_='pron')
+    american = proncodes.find(class_='amevarpron')
+    return (clean_text(british.get_text()) if british else '',
+            clean_text(american.get_text().replace('$', ' ')) if american else '')
+
+
 def extract_highlighted_text(element):
     """Extract text with highlight markers for nodeword and colloinexa.
 
@@ -210,28 +228,14 @@ class LDOCEParser:
                 entry['attributes']['pos'] = pos
 
             # Pronunciation
-            pron_codes = entryhead.find(class_='proncodes')
-            if pron_codes:
-                # British
-                pron = pron_codes.find(class_='pron')
-                if pron:
+            pron_uk, pron_us = parse_pronunciations(entryhead.find(class_='proncodes'))
+            for variant, ipa in (('uk', pron_uk), ('us', pron_us)):
+                if ipa:
                     entry['pronunciations'].append({
-                        'variant': 'uk',
-                        'ipa': clean_text(pron.get_text()),
+                        'variant': variant,
+                        'ipa': ipa,
                         'audio_path': ''
                     })
-
-                # American
-                amevarpron = pron_codes.find(class_='amevarpron')
-                if amevarpron:
-                    us_text = clean_text(amevarpron.get_text())
-                    us_text = us_text.replace('$', '').strip()
-                    if us_text:
-                        entry['pronunciations'].append({
-                            'variant': 'us',
-                            'ipa': us_text,
-                            'audio_path': ''
-                        })
 
             # Frequency - dots and level are separate
             freq_dots = ''
@@ -1362,7 +1366,6 @@ class LDOCEParser:
                 deriv = runon.find(class_='deriv')
                 pos = runon.find(class_='pos')
                 gram = runon.find(class_='gram')
-                proncodes = runon.find(class_='proncodes')
                 if deriv:
                     deriv_text = clean_text(deriv.get_text())
                     # Remove leading dash if present
@@ -1370,19 +1373,7 @@ class LDOCEParser:
                         deriv_text = deriv_text[1:].strip()
                     pos_text = clean_text(pos.get_text()) if pos else ''
                     gram_text = clean_text(gram.get_text()) if gram else ''
-                    # Extract pronunciation (UK and US)
-                    pron_uk = ''
-                    pron_us = ''
-                    if proncodes:
-                        pron_elem = proncodes.find(class_='pron')
-                        amevarpron = proncodes.find(class_='amevarpron')
-                        if pron_elem:
-                            pron_uk = clean_text(pron_elem.get_text())
-                        if amevarpron:
-                            pron_us = clean_text(amevarpron.get_text())
-                            # Remove leading "$ " if present
-                            if pron_us.startswith('$'):
-                                pron_us = pron_us[1:].strip()
+                    pron_uk, pron_us = parse_pronunciations(runon.find(class_='proncodes'))
                     if deriv_text:
                         runon_data = {
                             'word': deriv_text,

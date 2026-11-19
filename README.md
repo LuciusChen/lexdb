@@ -73,6 +73,8 @@ python scripts/mdx2db_oald.py OALD4.mdx
 python scripts/mdx2db_ldoce.py LDOCE6.mdx --extract-audio
 ```
 
+LDOCE 转换器会保留强读和弱读音标。已有数据库需重新转换才能显示完整音标。
+
 ### 2. 配置 Emacs
 
 ```elisp
@@ -153,6 +155,14 @@ python scripts/mdx2db_ldoce.py LDOCE6.mdx --extract-audio
 | LDOCE 6 | scripts/mdx2db_ldoce.py | 朗文当代英语词典第6版，学习型词典，词频标注、搭配丰富 |
 | OALD 4 | scripts/mdx2db_oald.py | 牛津高阶英汉双解词典第4版，英汉双解 |
 | ODE | scripts/mdx2db_ode.py | 牛津英语词典在线版，数据来自 [Oxford Dictionaries Premium](https://premium.oxforddictionaries.com/)（现需付费），含词源信息 |
+
+### LDOCE 6 的 MDX 版本
+
+`scripts/mdx2db_ldoce.py` 按以下英英版 MDX 的词条 HTML 编写和验证。同为第六版的双语合成版或网页打包版可能使用不同的 HTML 结构，转换结果也可能不同。
+
+| 文件名 | MDX 文件头中的创建日期 | SHA-256 |
+|---|---|---|
+| `Longman Dictionary of Contemporary English 6th Edition.mdx` | 2024-02-02 | `0027ab148d19df72bbb632f082a449ea6e26fabd7672f63984487f3716baa548` |
 
 ## 下载
 
